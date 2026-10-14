@@ -305,7 +305,7 @@ export class EmotionalHead {
     const { analyzePortrait } = await import('./photo-avatar.js');
     const portrait = src?.isPortrait ? src : await analyzePortrait(src, o);
     this._portrait = portrait;
-    this._photoOpts = { caricature: o.caricature ?? 1.5, texture: o.texture ?? 0.9 };
+    this._photoOpts = { caricature: o.caricature ?? 1.5, texture: o.texture ?? 0.9, realism: o.realism ?? 0.65 };
     if (o.gender) this.gender = o.gender;
     this._rebuildRig();
     const report = portrait.report;
@@ -328,6 +328,41 @@ export class EmotionalHead {
     return this;
   }
   get portrait() { return this._portrait || null; }
+
+  /**
+   * Экспорт аватара: пол, настройки шаржа и слепок лица (точки, меры, цвета, текстура кожи).
+   * Исходного фото внутри нет. Обычно 5–15 КБ JSON — помещается в сообщение, QR-цепочку, localStorage.
+   * @param {object} [o] { size=320 — макс. сторона текстуры (0 — без неё, ~5 КБ), quality=0.8, format='object'|'json' }
+   * @returns {Promise<object|string>}
+   */
+  async exportAvatar(o = {}) {
+    const d = { format: 'anima-avatar', v: 1, gender: this.gender, photo: this._portrait ? { ...this._photoOpts } : null, portrait: null };
+    if (this._portrait) d.portrait = await this._portrait.toData(o);
+    return o.format === 'json' ? JSON.stringify(d) : d;
+  }
+  /**
+   * Импорт аватара из exportAvatar(): объект, JSON-строка, File/Blob или URL. MediaPipe не нужен.
+   * @param {object} [o] переопределить { caricature, texture, realism, gender }
+   * @returns {Promise<object|null>} отчёт как у fromPhoto (null — аватар без фото)
+   */
+  async importAvatar(src, o = {}) {
+    let d = src;
+    if (src instanceof Blob) d = await src.text();
+    else if (typeof src === 'string' && !/^\s*\{/.test(src)) d = await (await fetch(src)).text();
+    if (typeof d === 'string') d = JSON.parse(d);
+    if (!d || d.format !== 'anima-avatar') throw new Error('Не похоже на файл аватара (format anima-avatar)');
+    const gender = o.gender || d.gender;
+    if (!d.portrait) {
+      this._portrait = null;
+      this._customModel = true;
+      this.setGender(gender === 'male' ? 'male' : 'female');
+      this._emit('photoAvatar', null);
+      return null;
+    }
+    const { Portrait } = await import('./photo-avatar.js');
+    const portrait = await Portrait.fromData(d.portrait);
+    return this.fromPhoto(portrait, { ...d.photo, ...o, gender });
+  }
 
   /**
    * Направление взгляда. x, y в диапазоне -1..1 (x>0 — вправо на экране, y>0 — вверх).

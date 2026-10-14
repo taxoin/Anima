@@ -36,7 +36,7 @@
     const ALLOWED = q.get('origin') || '*';
     const ALLOWED_METHODS = new Set(['setEmotion', 'addEmotion', 'micro', 'gesture', 'express', 'speak', 'stopSpeaking', 'setGender',
       'lookAt', 'setIdle', 'setChannels', 'clearChannels', 'setLighting', 'setBackground', 'setFraming', 'getEmotion', 'getState',
-      'fromPhoto', 'setPhotoOptions', 'clearPhoto']);   // fromPhoto принимает File/Blob (structured clone) или URL
+      'fromPhoto', 'setPhotoOptions', 'clearPhoto', 'exportAvatar', 'importAvatar']);   // fromPhoto/importAvatar принимают File/Blob (structured clone) или URL
     window.addEventListener('message', async (e) => {
       if (ALLOWED !== '*' && e.origin !== ALLOWED) return;
       const m = e.data;

@@ -36,6 +36,7 @@ const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: ((a.z || 0) 
 const hex = (c) => '#' + c.map((v) => clamp(Math.round(v * 255), 0, 255).toString(16).padStart(2, '0')).join('');
 const lum = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
 const EY = LAYOUT.eyeY, MY = LAYOUT.mouthY;
+const TEX_MAX = 1.25;             // запас яркости текстуры при экспорте (после выравнивания света бывает > 1)
 const TEX_GAIN = 0.86;            // студийный свет сцены ярче, чем «плоская» текстура: компенсируем
 
 // «Среднее лицо» MediaPipe (canonical_face_model.obj, 468 точек) в координатах головы
@@ -101,6 +102,8 @@ async function loadTasks(A) {
   return _tasks;
 }
 
+function b64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s); }
+function ub64(s) { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
 function makeCanvas(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
 
 async function toCanvas(src, max = 1280) {
@@ -317,8 +320,20 @@ export class Portrait {
     const W = img.width, H = img.height;
     this.pix = img.getContext('2d').getImageData(0, 0, W, H).data;
     this.px = L.map((p) => ({ x: p.x * W, y: p.y * H, z: p.z * W }));
-    const px = this.px;
+    this._initFrame();
+    this.warnings = [];
+    if (Math.abs(this.yaw) > 0.12) this.warnings.push('Лицо заметно повёрнуто — сходство будет хуже. Лучше фото анфас.');
 
+    this._measure();
+    this._colors();
+    this._hair();
+    this._texture();
+    this._fits = new Map();
+  }
+
+  /** Система координат головы по точкам this.px (общая для анализа и импорта). */
+  _initFrame() {
+    const px = this.px;
     // система координат головы: середина глаз → (0, EY), рот → y = MY, наклон головы снят
     const eR = mid(px[33], px[133]), eL = mid(px[362], px[263]);
     const c = mid(eR, eL), roll = Math.atan2(eL.y - eR.y, eL.x - eR.x);
@@ -335,14 +350,6 @@ export class Portrait {
     // поворот лица (по асимметрии): сильный поворот портит сходство
     const dl = Math.hypot(P[263].x - P[4].x, P[263].y - P[4].y), dr = Math.hypot(P[33].x - P[4].x, P[33].y - P[4].y);
     this.yaw = (dl - dr) / (dl + dr);
-    this.warnings = [];
-    if (Math.abs(this.yaw) > 0.12) this.warnings.push('Лицо заметно повёрнуто — сходство будет хуже. Лучше фото анфас.');
-
-    this._measure();
-    this._colors();
-    this._hair();
-    this._texture();
-    this._fits = new Map();
   }
 
   toHead(p) {
@@ -718,7 +725,7 @@ export class Portrait {
       ov.ears = this.hairStyle !== 'long';
       if (this.hairlineY !== null) ov.hairline = clamp(this.hairlineY - (this.hairStyle === 'long' ? 0.6 : 0.64), -0.2, 0.22);
     }
-    if (tex > 0) ov.photo = this._photoMapping(ov, this._textureCanvas(tex));
+    if (tex > 0 && this.tex) ov.photo = this._photoMapping(ov, this._textureCanvas(tex));
     this._fits.set(key, ov);
     return ov;
   }
@@ -799,6 +806,80 @@ export class Portrait {
         out[1] = 1 - clamp(((tmp.y - y0) * ck) / TH, 0, 1);
       },
     };
+  }
+
+  /**
+   * Компактный слепок анализа: точки лица, меры, цвета и текстура кожи (WebP/JPEG).
+   * Самого фото в нём нет — только то, из чего собирается голова. Восстановление — Portrait.fromData (без MediaPipe).
+   * @param {object} [o] { size=320 — макс. сторона текстуры, px (0 — без текстуры); quality=0.8 }
+   */
+  async toData(o = {}) {
+    const size = o.size ?? 320, quality = o.quality ?? 0.8;
+    const r4 = (v) => (v === null || v === undefined ? null : Math.round(v * 1e4) / 1e4);
+    const rc = (c) => (c ? c.map(r4) : null);
+    // точки: int16, 1/8 пикселя, относительно центра глаз
+    const c = this.frame.c, lm = new Int16Array(this.px.length * 3);
+    this.px.forEach((p, i) => { lm[i * 3] = Math.round((p.x - c.x) * 8); lm[i * 3 + 1] = Math.round((p.y - c.y) * 8); lm[i * 3 + 2] = Math.round(p.z * 8); });
+    const meas = {};
+    for (const [k, v] of Object.entries(this.meas)) meas[k] = Array.isArray(v) ? v.map(r4) : r4(v);
+    const d = {
+      format: 'anima-portrait', v: 1,
+      origin: [r4(c.x), r4(c.y)], lm: b64(new Uint8Array(lm.buffer)),
+      meas, warnings: this.warnings, expression: Object.fromEntries(Object.entries(this.expression).map(([k, v]) => [k, r4(v)])),
+      colors: { skinPhoto: rc(this.skinPhoto), skin: rc(this.skinTex), lip: rc(this.lipColor), brow: rc(this.browColor), iris: rc(this.irisColor), hair: rc(this.hairColor), cloth: rc(this.clothColor) },
+      lidTex: rc(this.lidTex), beard: r4(this.beard), grayscale: !!this.grayscale,
+      hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY) },
+      tex: null,
+    };
+    if (size > 0 && this.tex) {
+      const { x0, y0, k, TW, TH } = this.crop, { R, G, B } = this.tex;
+      const full = makeCanvas(TW, TH), g = full.getContext('2d'), im = g.createImageData(TW, TH), px = im.data;
+      for (let i = 0; i < TW * TH; i++) {           // значения после выравнивания света бывают > 1: храним /TEX_MAX
+        px[i * 4] = clamp(R[i] / TEX_MAX, 0, 1) * 255; px[i * 4 + 1] = clamp(G[i] / TEX_MAX, 0, 1) * 255;
+        px[i * 4 + 2] = clamp(B[i] / TEX_MAX, 0, 1) * 255; px[i * 4 + 3] = 255;
+      }
+      g.putImageData(im, 0, 0);
+      const s = Math.min(1, size / Math.max(TW, TH)), w = Math.max(8, Math.round(TW * s)), h = Math.max(8, Math.round(TH * s));
+      const small = makeCanvas(w, h), sg = small.getContext('2d');
+      sg.imageSmoothingQuality = 'high';
+      sg.drawImage(full, 0, 0, w, h);
+      let url = small.toDataURL('image/webp', quality);
+      if (!url.startsWith('data:image/webp')) url = small.toDataURL('image/jpeg', quality);   // Safari < 14
+      d.tex = { x0: r4(x0), y0: r4(y0), k: r4((k * w) / TW), w, h, S: rc(this.tex.S), img: url };
+    }
+    return d;
+  }
+
+  /** Восстановить портрет из toData() без распознавания. */
+  static async fromData(d) {
+    if (typeof d === 'string') d = JSON.parse(d);
+    if (!d || d.format !== 'anima-portrait') throw new Error('Не похоже на слепок аватара (format anima-portrait)');
+    if (d.v > 1) throw new Error(`Слепок новой версии (v${d.v}), обновите библиотеку`);
+    const p = Object.create(Portrait.prototype);
+    p.isPortrait = true;
+    const raw = ub64(d.lm), lm = new Int16Array(raw.buffer, raw.byteOffset, raw.byteLength >> 1), [ox, oy] = d.origin;
+    p.px = [];
+    for (let i = 0; i < lm.length; i += 3) p.px.push({ x: ox + lm[i] / 8, y: oy + lm[i + 1] / 8, z: lm[i + 2] / 8 });
+    p._initFrame();
+    p.meas = d.meas; p.warnings = d.warnings || []; p.expression = d.expression || {};
+    const C = d.colors || {};
+    p.skinPhoto = C.skinPhoto || C.skin || [0.85, 0.68, 0.58]; p.skinTex = C.skin || p.skinPhoto;
+    p.lipColor = C.lip; p.browColor = C.brow; p.irisColor = C.iris; p.hairColor = C.hair; p.clothColor = C.cloth;
+    p.lidTex = d.lidTex; p.beard = d.beard || 0; p.grayscale = !!d.grayscale;
+    p.hairStyle = d.hair?.style ?? null; p.hairBottom = d.hair?.bottom ?? null; p.hairlineY = d.hair?.line ?? null;
+    p.tex = null;
+    if (d.tex?.img) {
+      const t = d.tex, bmp = await createImageBitmap(await (await fetch(t.img)).blob());
+      const c = makeCanvas(t.w, t.h), g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(bmp, 0, 0, t.w, t.h);
+      const px = g.getImageData(0, 0, t.w, t.h).data, n = t.w * t.h;
+      const R = new Float32Array(n), G = new Float32Array(n), B = new Float32Array(n);
+      for (let i = 0; i < n; i++) { R[i] = (px[i * 4] / 255) * TEX_MAX; G[i] = (px[i * 4 + 1] / 255) * TEX_MAX; B[i] = (px[i * 4 + 2] / 255) * TEX_MAX; }
+      p.crop = { x0: t.x0, y0: t.y0, k: t.k, TW: t.w, TH: t.h };
+      p.tex = { R, G, B, S: t.S || p.skinTex };
+    }
+    p._fits = new Map();
+    return p;
   }
 
   /** Сводка для UI/отладки. */

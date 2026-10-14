@@ -106,6 +106,8 @@
       <div class="row"><label style="width:84px" for="photoTex">кожа с фото</label><input type="range" id="photoTex" min="0" max="1" step="0.05" value="0.9"><span class="val" id="photoTexV">0.9</span></div>
       <div class="row"><label style="width:84px" for="realism">реализм</label><input type="range" id="realism" min="0" max="1" step="0.05" value="0.65"><span class="val" id="realismV">0.65</span></div>
       <div class="row"><button id="photoClear" disabled>Стандартная голова</button><span class="hint" id="photoStatus"></span></div>
+      <div class="row"><button id="avatarSave" disabled>Сохранить аватар</button><label class="filebtn" for="avatarFile">Открыть аватар</label><input type="file" id="avatarFile" accept=".json,application/json" hidden></div>
+      <div class="hint">Файл аватара весит около 10 КБ: точки лица, цвета и кожа, без исходного фото. Его можно переслать на другой телефон и открыть там, распознавание не нужно.</div>
     </details>
 
     <details open>
@@ -298,7 +300,7 @@ async function usePhoto(src, label) {
       + ['skin', 'hair', 'iris', 'lip'].filter((k) => c[k]).map((k) => `<span title="${k}" style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;background:${c[k]}"></span>`).join(' ')
       + rep.warnings.map((w) => `<div class="warn">${w}</div>`).join('');
     status(`Готово за ${((performance.now() - t0) / 1000).toFixed(1)} с`);
-    $('#photoClear').disabled = false;
+    $('#photoClear').disabled = $('#avatarSave').disabled = false;
     log(`⟵ photoAvatar ${fmt(rep.measures)}`);
     head.stopSpeaking();
     head.speak('[e:curious] Ну, здравствуй. [e:smirk*0.8] Узнаёшь? [g:tilt] Теперь я говорю твоим лицом.', { tts: WebSpeech.available() ? $('#ttsMode').value : 'none', revert: true });
@@ -309,7 +311,33 @@ async function usePhoto(src, label) {
 }
 $('#photoFile').onchange = (e) => { const f = e.target.files[0]; if (f) usePhoto(f, f.name); e.target.value = ''; };
 document.querySelectorAll('[data-sample]').forEach((b) => b.onclick = () => usePhoto(b.dataset.sample, b.textContent));
-$('#photoClear').onclick = () => { api('head.clearPhoto()', () => head.clearPhoto()); $('#photoBox').hidden = true; $('#photoClear').disabled = true; status(''); };
+$('#photoClear').onclick = () => { api('head.clearPhoto()', () => head.clearPhoto()); $('#photoBox').hidden = true; $('#photoClear').disabled = $('#avatarSave').disabled = true; status(''); };
+$('#avatarSave').onclick = async () => {
+  const json = await api("await head.exportAvatar({ format: 'json' })", () => head.exportAvatar({ format: 'json' }));
+  const file = new File([json], 'avatar.anima.json', { type: 'application/json' });
+  status(`Аватар: ${(file.size / 1024).toFixed(1)} КБ`);
+  log(`⟵ ${file.size} байт`, 'ev');
+  if (navigator.canShare?.({ files: [file] }) && matchMedia('(pointer: coarse)').matches) {   // телефон: «Поделиться» → мессенджер, Bluetooth, AirDrop
+    try { await navigator.share({ files: [file], title: 'Аватар Anima' }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = file.name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+async function openAvatar(f) {
+  try {
+    const rep = await api('await head.importAvatar(file)', () => head.importAvatar(f));
+    $('#photoBox').hidden = true;
+    $('#photoClear').disabled = $('#avatarSave').disabled = !rep;
+    const o = head._photoOpts || {};
+    for (const [id, k] of [['caric', 'caricature'], ['photoTex', 'texture'], ['realism', 'realism']]) if (o[k] !== undefined) { $('#' + id).value = o[k]; $('#' + id + 'V').textContent = o[k]; }
+    document.querySelectorAll('[data-gender]').forEach((b) => b.classList.toggle('on', b.dataset.gender === head.gender));
+    status(`Аватар открыт: ${f.name}`);
+    head.stopSpeaking();
+    head.speak('[e:curious] Я снова здесь. [e:smirk*0.8] Скучали?', { tts: WebSpeech.available() ? $('#ttsMode').value : 'none', revert: true });
+  } catch (e) { status(''); log('✕ ' + (e.message || e), 'err'); }
+}
+$('#avatarFile').onchange = (e) => { const f = e.target.files[0]; if (f) openAvatar(f); e.target.value = ''; };
 let photoT = 0;
 for (const id of ['caric', 'photoTex', 'realism']) {
   $('#' + id).addEventListener('input', (e) => {
@@ -323,7 +351,10 @@ stage.addEventListener('dragover', (e) => { e.preventDefault(); stage.classList.
 stage.addEventListener('dragleave', () => stage.classList.remove('drop'));
 stage.addEventListener('drop', (e) => {
   e.preventDefault(); stage.classList.remove('drop');
-  const f = [...(e.dataTransfer?.files || [])].find((x) => x.type.startsWith('image/'));
+  const files = [...(e.dataTransfer?.files || [])];
+  const j = files.find((x) => /\.json$/i.test(x.name) || x.type === 'application/json');
+  if (j) return openAvatar(j);
+  const f = files.find((x) => x.type.startsWith('image/'));
   if (f) usePhoto(f, f.name);
 });
 
