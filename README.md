@@ -6,7 +6,7 @@
 
 [![Живое демо: кликните, чтобы открыть говорящую 3D-голову](docs/preview.png)](https://taxoin.github.io/Anima/)
 
-Демо работает прямо в браузере: эмоции, смеси, микро-выражения, жесты, разбор текста агента и речь с lip-sync. Примеры встраивания: [minimal](https://taxoin.github.io/Anima/examples/minimal.html) · [web component](https://taxoin.github.io/Anima/examples/web-component.html) · [iframe](https://taxoin.github.io/Anima/examples/iframe-host.html).
+Голова начинает говорить сразу при открытии: это беззвучный lip-sync с субтитрами, потому что браузеры не дают включить синтез речи до первого клика. Кнопка «🔊 Повторить со звуком» повторяет приветствие вслух. Отключить автоприветствие можно параметром `?autoplay=0`. Демо работает прямо в браузере: эмоции, смеси, микро-выражения, жесты, разбор текста агента и речь с lip-sync. Примеры встраивания: [minimal](https://taxoin.github.io/Anima/examples/minimal.html) · [web component](https://taxoin.github.io/Anima/examples/web-component.html) · [iframe](https://taxoin.github.io/Anima/examples/iframe-host.html).
 
 - **Без сборщика**: ES-модули и `importmap`, three.js берётся с CDN.
 - **Размер собственного кода**: ~84 KB minified / **~31 KB gzip** (плюс three.js ≈ 170 KB gzip).
