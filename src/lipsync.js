@@ -376,7 +376,12 @@ export class SpeechController {
         if (st.clock > 0.25 && est > 0.25) st.speed = clamp(st.speed * 0.6 + (est / st.clock) * st.speed * 0.4, 0.5, 2);
         st.clock = est;
       };
-      u.onend = u.onerror = () => { if (st.abandoned) return; st.ended = true; st.running = false; done(); };
+      u.onend = u.onerror = () => {
+        if (st.abandoned) return;
+        // синтез «закончил», так и не начав (нет голосов, ошибка движка) → доигрываем беззвучно, губы всё равно двигаются
+        if (!started && token === this._token) { st.abandoned = true; st.mode = 'silent'; st.clock = 0; st.running = true; return; }
+        st.ended = true; st.running = false; done();
+      };
       speechSynthesis.speak(u);
       // нет голосов / заблокировано автоплеем → беззвучный режим, чтобы губы всё равно двигались
       setTimeout(() => { if (!started && !st.ended && token === this._token) { st.abandoned = true; speechSynthesis.cancel(); st.mode = 'silent'; st.clock = 0; st.running = true; } }, 1500);

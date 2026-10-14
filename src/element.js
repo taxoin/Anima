@@ -14,8 +14,8 @@ import { EmotionalHead } from './emotional-head.js';
 
 const METHODS = ['setEmotion', 'addEmotion', 'getEmotion', 'getState', 'micro', 'gesture', 'express', 'speak', 'speakAudio', 'listenStream',
   'stopSpeaking', 'setGender', 'lookAt', 'followPointer', 'setIdle', 'setChannels', 'clearChannels', 'setLighting', 'setBackground',
-  'setFraming', 'loadModel', 'useProcedural', 'snapshot'];
-const EVENTS = ['emotionChange', 'speakStart', 'speakEnd', 'word', 'cue', 'gesture', 'micro', 'express', 'genderChange', 'blink', 'modelLoaded'];
+  'setFraming', 'loadModel', 'useProcedural', 'snapshot', 'fromPhoto', 'setPhotoOptions', 'clearPhoto'];
+const EVENTS = ['emotionChange', 'speakStart', 'speakEnd', 'word', 'cue', 'gesture', 'micro', 'express', 'genderChange', 'blink', 'modelLoaded', 'photoAvatar'];
 
 export class EmotionalHeadElement extends HTMLElement {
   static get observedAttributes() { return ['gender', 'emotion', 'intensity', 'restraint', 'background', 'lighting', 'framing', 'idle', 'follow-pointer']; }

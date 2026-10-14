@@ -42,13 +42,21 @@
   select { padding:5px 8px; } input[type=text] { padding:6px 8px; width:100%; }
   textarea { width:100%; padding:8px; resize:vertical; min-height:84px; }
   input[type=range] { flex:1; accent-color:var(--acc); }
+  .filebtn { display:inline-block; padding:5px 10px; border-radius:8px; border:1px solid #3b5db0; background:#2b4a8f; cursor:pointer; }
+  .filebtn:hover { background:#3357a6; } .filebtn:focus-within, button:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
+  .photo-box { display:flex; gap:10px; align-items:flex-start; margin:6px 0; } .photo-box[hidden] { display:none; }
+  button:disabled { opacity:.45; cursor:default; }
+  .photo-box img { width:64px; height:80px; object-fit:cover; border-radius:6px; border:1px solid var(--line); }
+  #photoInfo { font-size:12px; color:var(--dim); line-height:1.5; }
+  #photoInfo .warn { color:var(--acc2); }
+  #stage.drop::after { content:"Отпустите фото, чтобы построить голову"; position:absolute; inset:12px; display:grid; place-items:center; border:2px dashed var(--acc); border-radius:14px; background:rgba(14,16,21,.7); color:#fff; font-size:16px; z-index:3; }
   .val { width:34px; text-align:right; font-variant-numeric:tabular-nums; color:var(--dim); font-size:12px; }
   .bars { display:grid; grid-template-columns:repeat(2, 1fr); gap:2px 12px; font-size:10.5px; color:var(--dim); }
   .bar { display:grid; grid-template-columns: 118px 1fr; align-items:center; gap:6px; }
   .bar i { display:block; height:5px; background:#232836; border-radius:3px; overflow:hidden; position:relative; }
   .bar i::after { content:""; position:absolute; inset:0; width:var(--w,0%); background:linear-gradient(90deg,var(--acc),var(--acc2)); }
   #log { font:11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color:#aeb6c8; background:#11141b; border:1px solid var(--line); border-radius:8px; padding:8px; height:150px; overflow:auto; white-space:pre-wrap; }
-  #log .api { color:#9fc1ff; } #log .ev { color:#8a91a3; }
+  #log .api { color:#9fc1ff; } #log .ev { color:#8a91a3; } #log .err { color:var(--acc2); }
   .hint { color:var(--dim); font-size:12px; }
   code { background:#11141b; padding:1px 5px; border-radius:4px; font-size:12px; }
   @media (max-width: 900px) { .app { grid-template-columns: 1fr; height:auto; } #stage { height:62vh; } aside { border-left:0; border-top:1px solid var(--line); } }
@@ -84,6 +92,20 @@
         <label><input type="checkbox" id="idle" checked> idle</label>
         <label><input type="checkbox" id="follow"> взгляд за курсором</label>
       </div>
+    </details>
+
+    <details open>
+      <summary>Аватар по фото</summary>
+      <div class="hint">Загрузите портрет анфас: голова станет шаржем на этого человека, с его чертами и кожей, и будет говорить с теми же эмоциями. Фото обрабатывается прямо в браузере и никуда не отправляется.</div>
+      <div class="row">
+        <label class="filebtn primary" for="photoFile">Загрузить фото</label><input type="file" id="photoFile" accept="image/*" hidden>
+        <button data-sample="docs/samples/monalisa.jpg">Мона Лиза</button><button data-sample="docs/samples/lincoln.jpg">Линкольн</button>
+      </div>
+      <div class="photo-box" id="photoBox" hidden><img id="photoThumb" alt="Загруженный портрет"><div id="photoInfo"></div></div>
+      <div class="row"><label style="width:84px" for="caric">шарж</label><input type="range" id="caric" min="0" max="3" step="0.1" value="1.5"><span class="val" id="caricV">1.5</span></div>
+      <div class="row"><label style="width:84px" for="photoTex">кожа с фото</label><input type="range" id="photoTex" min="0" max="1" step="0.05" value="0.9"><span class="val" id="photoTexV">0.9</span></div>
+      <div class="row"><label style="width:84px" for="realism">реализм</label><input type="range" id="realism" min="0" max="1" step="0.05" value="0.65"><span class="val" id="realismV">0.65</span></div>
+      <div class="row"><button id="photoClear" disabled>Стандартная голова</button><span class="hint" id="photoStatus"></span></div>
     </details>
 
     <details open>
@@ -257,6 +279,53 @@ async function greet(tts) {
 }
 tap.onclick = () => greet($('#ttsMode').value === 'none' ? 'webspeech' : $('#ttsMode').value);
 if (new URLSearchParams(location.search).get('autoplay') !== '0') setTimeout(() => greet('none'), 900);
+
+// ---- аватар по фото
+const photoOpts = () => ({ caricature: +$('#caric').value, texture: +$('#photoTex').value, realism: +$('#realism').value });
+const status = (t) => { $('#photoStatus').textContent = t; };
+let photoBusy = false;
+async function usePhoto(src, label) {
+  if (photoBusy) return;
+  photoBusy = true;
+  status('Готовлю…');
+  try {
+    const url = typeof src === 'string' ? src : URL.createObjectURL(src);
+    $('#photoThumb').src = url; $('#photoBox').hidden = false; $('#photoInfo').textContent = label;
+    const t0 = performance.now();
+    const rep = await api(`await head.fromPhoto(${typeof src === 'string' ? `'${src}'` : 'file'}, ${fmt(photoOpts())})`, () => head.fromPhoto(src, { ...photoOpts(), onProgress: status }));
+    const c = rep.colors;
+    $('#photoInfo').innerHTML = `${label}<br>причёска: ${({ short: 'короткая', long: 'длинная', none: 'без волос' })[rep.hairStyle] || '—'}<br>`
+      + ['skin', 'hair', 'iris', 'lip'].filter((k) => c[k]).map((k) => `<span title="${k}" style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;background:${c[k]}"></span>`).join(' ')
+      + rep.warnings.map((w) => `<div class="warn">${w}</div>`).join('');
+    status(`Готово за ${((performance.now() - t0) / 1000).toFixed(1)} с`);
+    $('#photoClear').disabled = false;
+    log(`⟵ photoAvatar ${fmt(rep.measures)}`);
+    head.stopSpeaking();
+    head.speak('[e:curious] Ну, здравствуй. [e:smirk*0.8] Узнаёшь? [g:tilt] Теперь я говорю твоим лицом.', { tts: WebSpeech.available() ? $('#ttsMode').value : 'none', revert: true });
+  } catch (e) {
+    status(''); $('#photoInfo').innerHTML = `<span class="warn">${e.message || e}</span>`;
+    log('✕ ' + (e.message || e), 'err');
+  } finally { photoBusy = false; }
+}
+$('#photoFile').onchange = (e) => { const f = e.target.files[0]; if (f) usePhoto(f, f.name); e.target.value = ''; };
+document.querySelectorAll('[data-sample]').forEach((b) => b.onclick = () => usePhoto(b.dataset.sample, b.textContent));
+$('#photoClear').onclick = () => { api('head.clearPhoto()', () => head.clearPhoto()); $('#photoBox').hidden = true; $('#photoClear').disabled = true; status(''); };
+let photoT = 0;
+for (const id of ['caric', 'photoTex', 'realism']) {
+  $('#' + id).addEventListener('input', (e) => {
+    $('#' + id + 'V').textContent = e.target.value;
+    clearTimeout(photoT);
+    photoT = setTimeout(() => head.portrait && api(`head.setPhotoOptions(${fmt(photoOpts())})`, () => head.setPhotoOptions(photoOpts())), 250);
+  });
+}
+const stage = $('#stage');
+stage.addEventListener('dragover', (e) => { e.preventDefault(); stage.classList.add('drop'); });
+stage.addEventListener('dragleave', () => stage.classList.remove('drop'));
+stage.addEventListener('drop', (e) => {
+  e.preventDefault(); stage.classList.remove('drop');
+  const f = [...(e.dataTransfer?.files || [])].find((x) => x.type.startsWith('image/'));
+  if (f) usePhoto(f, f.name);
+});
 
 log('Готово. Попробуйте "Сложные состояния" или нарратив.', 'ev');
 </script>

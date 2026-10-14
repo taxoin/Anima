@@ -8,6 +8,8 @@
 
 Голова начинает говорить сразу при открытии: это беззвучный lip-sync с субтитрами, потому что браузеры не дают включить синтез речи до первого клика. Кнопка «🔊 Повторить со звуком» повторяет приветствие вслух. Отключить автоприветствие можно параметром `?autoplay=0`. Демо работает прямо в браузере: эмоции, смеси, микро-выражения, жесты, разбор текста агента и речь с lip-sync. Примеры встраивания: [minimal](https://taxoin.github.io/Anima/examples/minimal.html) · [web component](https://taxoin.github.io/Anima/examples/web-component.html) · [iframe](https://taxoin.github.io/Anima/examples/iframe-host.html).
 
+**Новое: аватар по фото.** Загрузите портрет, и голова станет шаржем на этого человека: его пропорции, брови, нос, губы, кожа, цвет глаз и волос. Эмоции, жесты и речь остаются прежними. Фото обрабатывается в браузере и никуда не отправляется. [Подробнее](#аватар-по-фото).
+
 - **Без сборщика**: ES-модули и `importmap`, three.js берётся с CDN.
 - **Размер собственного кода**: ~84 KB minified / **~31 KB gzip** (плюс three.js ≈ 170 KB gzip).
 - **Без ассетов**: головы, глаза, зубы и волосы генерируются процедурно. При желании их можно заменить на glTF с ARKit-морфами.
@@ -59,8 +61,10 @@ src/emotions.js          52 канала, пресеты эмоций, микр�
 src/lipsync.js           виземы, разметка речи, таймлайн, Web Speech / аудио / внешний TTS
 src/head-model.js        процедурная голова (male/female): morph targets, глаза, веки, брови, губы, рот
 src/gltf-head.js         адаптер внешних glTF/GLB с ARKit-морфами (ленивая загрузка)
+src/photo-avatar.js      голова по фотографии: MediaPipe, шарж, кожа со снимка (ленивая загрузка)
 src/element.js           Web Component <emotional-head>
 examples/                minimal.html, web-component.html, embed.html + iframe-host.html
+docs/samples/            портреты для демо: «Мона Лиза» (скан C2RMF) и Линкольн (А. Гарднер, 1863) — общественное достояние, Wikimedia Commons
 ```
 
 ---
@@ -94,9 +98,11 @@ head.followPointer(true)
 head.setIdle(false)
 head.setChannels({ jawOpen: 0.3, browInnerUp: 0.5 }) // ручное управление (null — снять)
 head.setLighting('noir'); head.setBackground('light'); head.setFraming('close')
-head.on('emotionChange' | 'speakStart' | 'speakEnd' | 'word' | 'cue' | 'gesture' | 'micro' | 'express' | 'blink', cb)
+head.on('emotionChange' | 'speakStart' | 'speakEnd' | 'word' | 'cue' | 'gesture' | 'micro' | 'express' | 'blink' | 'photoAvatar', cb)
 head.getState()                                   // { emotion, mix, channels, pose, speaking }
 await head.loadModel(url, { mapping })            // заменить голову на glTF
+await head.fromPhoto(fileOrUrl, { caricature: 1.5, texture: 0.9, realism: 0.65 })  // голова по фото
+head.setPhotoOptions({ caricature: 2.2 }); head.clearPhoto()
 head.snapshot(); head.dispose()
 ```
 
@@ -342,6 +348,51 @@ const stop = head.listenStream(await navigator.mediaDevices.getUserMedia({ audio
 ```
 
 ---
+
+## Аватар по фото
+
+![Портрет → говорящая голова: Линкольн (скепсис) и Мона Лиза (усмешка)](docs/photo-avatar.jpg)
+
+```js
+const input = document.querySelector('input[type=file]');
+input.onchange = async () => {
+  const report = await head.fromPhoto(input.files[0], {
+    caricature: 1.5,   // 0 — стандартные пропорции, 1 — как на фото, 1.5–2.5 — шарж
+    texture: 0.9,      // сила кожи со снимка: 0 — ровный тон, 1 — полностью фото
+    realism: 0.65,     // 0 — стилизованная основа (большой череп, крупные глаза), 1 — реальные пропорции
+    gender: 'male',    // основа: шея, плечи (по умолчанию — текущая)
+    onProgress: (t) => console.log(t),
+  });
+  console.log(report.warnings, report.colors, report.measures);
+  head.speak('[e:smirk] Похож?');
+};
+head.setPhotoOptions({ caricature: 2.4 });   // перестроить без повторного распознавания
+head.clearPhoto();                           // вернуть стандартную голову
+```
+
+`fromPhoto` принимает `File`, `Blob`, URL, `<img>` или `<canvas>`. В Web Component это `el.fromPhoto(file)`. В iframe-встраивании файл передаётся через `postMessage`: `{ method: 'fromPhoto', args: [file] }`.
+
+**Как это работает.** Всё происходит в браузере, сервер не нужен.
+
+1. **Разметка.** [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker) находит 478 точек лица и оценивает выражение на снимке (52 blendshapes). [Hair Segmenter](https://ai.google.dev/edge/mediapipe/solutions/vision/image_segmenter) строит маску волос.
+2. **Нормировка.** Точки переводятся в координаты головы. Наклон снимается, левая и правая половины усредняются. Выражение на фото компенсируется: улыбка расширяет рот и нос, прищур уменьшает глаза, открытый рот опускает подбородок.
+3. **Шарж.** Около двадцати мер лица сравниваются со «средним лицом»:
+   - ширина овала на пяти высотах;
+   - длина подбородка;
+   - размер, посадка, раскрытие и наклон глаз;
+   - высота, изгиб, хвост и толщина бровей;
+   - длина, ширина и выступ носа;
+   - ширина рта и толщина губ.
+
+   Отличие человека от среднего умножается на `caricature`. «Среднее лицо» взято из модели MediaPipe и откалибровано по реальным портретам: у canonical-модели прищуренные глаза и слишком широкий овал.
+4. **Кожа.** Снимок проецируется на лицо тонкопластинчатым сплайном (TPS) по 70 опорным точкам: глаза, брови, нос, рот, овал. Крупномасштабный свет со снимка вычитается квадратичной моделью, так что борода, макияж и родинки остаются. Глаза, брови и губы со снимка закрашиваются кожей, потому что их рисуют подвижные 3D-части, иначе получились бы двойные брови. Края плавно переходят в тон кожи.
+5. **Цвета и причёска.** Цвета кожи, губ, бровей, радужки, волос и одежды берутся с фото. По маске волос определяется линия роста, длина (короткие, длинные с нижним краем по маске, лысина) и чёлка. Борода определяется по контрасту подбородка и щёк. Чёрно-белые снимки раскрашиваются в тон кожи.
+
+**Какое фото подходит.** Портрет анфас, лицо крупно (от 200 px), ровный свет, без очков и шапки, нейтральное или слегка улыбающееся выражение. При повороте лица больше примерно 15° появляется предупреждение в `report.warnings`.
+
+**Ограничения.** Сходство здесь шаржевое, а не фотографическое. Форма головы описывается примерно двадцатью параметрами, поэтому мелкую анатомию (форму ушей, кончика носа, разрез век) модель не передаёт. Причёска выбирается из готовых форм и окрашивается в цвет волос со снимка. Сильная улыбка на фото оставляет следы в текстуре возле рта.
+
+**Модели MediaPipe** (около 4,5 МБ) загружаются при первом вызове: wasm с jsDelivr, сами модели с `storage.googleapis.com`. Для своего хостинга или офлайна передайте `fromPhoto(src, { assets: { module, wasm, face, hair } })` (см. `PHOTO_ASSETS` в `photo-avatar.js`). Основное ядро от этого модуля не зависит, он подгружается лениво.
 
 ## Модели: процедурные и glTF
 

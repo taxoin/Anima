@@ -72,22 +72,28 @@ function shapeHead(px, py, pz, P, out) {
   let z = pz * lerp(prof(P.gzB, py), prof(P.gzF, py), s);
   const F = smoothstep(0.15, 0.55, pz);
   if (F > 0) z += F * featureDz(x, y, P);
-  out[0] = x; out[1] = y; out[2] = z;
+  // длина подбородка: всё ниже линии рта растягивается/сжимается (рот остаётся на месте)
+  const cs = P.chinScale ?? 1, yM = LAYOUT.mouthY;
+  out[0] = x; out[1] = y < yM ? yM + (y - yM) * cs : y; out[2] = z;
   return out;
 }
 
+/** Нос по вертикали: y головы → y "эталонного" носа (кончик на -0.21). */
+const noseY = (y, P) => LAYOUT.eyeY + (y - LAYOUT.eyeY) * (0.24 / (LAYOUT.eyeY - (P.noseTipY ?? -0.21)));
+
 function featureDz(x, y, P) {
-  const ax = Math.abs(x);
+  const ax = Math.abs(x), ex = P.eyeX ?? LAYOUT.eyeX, nw = (P.noseW ?? 0.07) / 0.07;
   let dz = 0;
-  dz -= 0.05 * G(ax, y, 0.3, 0.02, 0.13, 0.1);                     // мягкая глазница
-  dz += P.browRidge * G(ax, y, 0.27, 0.2, 0.16, 0.05);              // надбровье
-  const ny = smoothstep(0.2, -0.23, y);                              // спинка носа растёт к кончику
-  const below = y < -0.26 ? Math.exp(-(((y + 0.26) / 0.03) ** 2)) : 1;
-  const nsx = 0.036 + 0.03 * smoothstep(0.1, -0.26, y);
+  dz -= 0.05 * G(ax, y, ex, 0.02, 0.13, 0.1);                       // мягкая глазница
+  dz += P.browRidge * G(ax, y, ex - 0.03, 0.2, 0.16, 0.05);         // надбровье
+  const yn = noseY(y, P);
+  const ny = smoothstep(0.2, -0.23, yn);                             // спинка носа растёт к кончику
+  const below = yn < -0.26 ? Math.exp(-(((yn + 0.26) / 0.03) ** 2)) : 1;
+  const nsx = (0.036 + 0.03 * smoothstep(0.1, -0.26, yn)) * lerp(1, nw, smoothstep(0.05, -0.2, yn));
   dz += P.nose * ny * below * Math.exp(-(x * x) / (2 * nsx * nsx));
-  dz += 0.025 * G(ax, y, 0, 0.12, 0.05, 0.08);                       // переносица
-  dz += 0.035 * G(x, y, 0, -0.21, 0.05, 0.05);                       // кончик носа
-  dz += 0.042 * G(ax, y, 0.07, -0.245, 0.032, 0.028);                // крылья носа
+  dz += 0.025 * G(ax, yn, 0, 0.12, 0.05, 0.08);                      // переносица
+  dz += 0.035 * G(x, yn, 0, -0.21, 0.05 * nw, 0.05);                 // кончик носа
+  dz += 0.042 * G(ax, yn, 0.07 * nw, -0.245, 0.032 * nw, 0.028);     // крылья носа
   dz += 0.05 * G(x, y, 0, -0.5, 0.2, 0.14);                          // зона рта
   dz -= 0.02 * G(x, y, 0, -0.635, 0.12, 0.025);                      // ямка под губой
   dz += P.chin * G(x, y, 0, -0.78, P.chinSX, 0.07);                  // подбородок
@@ -434,7 +440,8 @@ export class ProceduralHead {
     // проход 2: глазницы облегают глазное яблоко
     const hm0 = new HeightMap(geo);
     const eyeR = P.eyeR, rs = eyeR * 1.08;
-    this.eye = { r: eyeR, rs, rl: eyeR * 1.03, x: LAYOUT.eyeX, y: LAYOUT.eyeY, z: hm0.get(LAYOUT.eyeX, LAYOUT.eyeY) - 0.078 };
+    const ex = P.eyeX ?? LAYOUT.eyeX;
+    this.eye = { r: eyeR, rs, rl: eyeR * 1.03, x: ex, y: LAYOUT.eyeY, z: hm0.get(ex, LAYOUT.eyeY) - 0.078 };
     const E = this.eye;
     const pos = geo.attributes.position.array;
     this._eyeRing = new Float32Array(pos.length / 3);
@@ -492,19 +499,20 @@ export class ProceduralHead {
     const blush = [1, 0.74, 0.74];
     for (let k = 0; k < pos.length; k += 3) {
       const x = pos[k], y = pos[k + 1], z = pos[k + 2], ax = Math.abs(x);
+      const yn = noseY(y, P), nw = (P.noseW ?? 0.07) / 0.07;
       let r = 1, g = 1, b = 1;
       if (z > 0) {
         let ao = 0;
-        ao += 0.22 * G(ax, y, 0.19, 0.03, 0.03, 0.035);                       // внутренний угол глаза
+        ao += 0.22 * G(ax, y, E.x - E.r * 0.95, 0.03, 0.03, 0.035);          // внутренний угол глаза
         ao += 0.26 * this._eyeRing[k / 3];                                     // глазница / складка века
-        ao += 0.65 * G(ax, y, 0.05, -0.272, 0.017, 0.011);                    // ноздри
-        ao += 0.16 * G(x, y, 0, -0.285, 0.07, 0.016);                          // под носом
+        ao += 0.65 * G(ax, yn, 0.05 * nw, -0.272, 0.017 * nw, 0.011);         // ноздри
+        ao += 0.16 * G(x, yn, 0, -0.285, 0.07 * nw, 0.016);                    // под носом
         ao += 0.3 * G(ax, y, 0.205, -0.52, 0.022, 0.02);                       // уголки рта
         ao += 0.12 * G(x, y, 0, -0.63, 0.1, 0.02);                             // под губой
         ao += 0.25 * smoothstep(-0.82, -0.98, y);                              // под подбородком
         ao += 0.1 * G(ax, y, 0.14, -0.36, 0.035, 0.08);                        // носогубка
         r *= 1 - ao; g *= 1 - ao * 1.1; b *= 1 - ao * 1.1;
-        const bl = P.blush * (G(ax, y, 0.4, -0.2, 0.11, 0.1) + 0.4 * G(x, y, 0, -0.21, 0.05, 0.04) + 0.25 * G(x, y, 0, -0.78, 0.1, 0.06));
+        const bl = P.blush * (G(ax, y, 0.4, -0.2, 0.11, 0.1) + 0.4 * G(x, yn, 0, -0.21, 0.05, 0.04) + 0.25 * G(x, y, 0, -0.78, 0.1, 0.06));
         r = lerp(r, r * blush[0], bl); g = lerp(g, g * blush[1], bl); b = lerp(b, b * blush[2], bl);
         if (P.stubble) {
           const line = -0.3 + 0.28 * smoothstep(0.3, 0.72, ax);
@@ -512,12 +520,30 @@ export class ProceduralHead {
           m = Math.max(m, G(x, y, 0, -0.42, 0.16, 0.045));                    // усы
           m *= 1 - 0.85 * G(ax, y, 0.38, -0.32, 0.1, 0.09);                    // чистые щёки
           const s = P.stubble * m;
-          r *= 1 - 0.3 * s; g *= 1 - 0.3 * s; b *= 1 - 0.24 * s;
+          r *= Math.max(0.2, 1 - 0.3 * s); g *= Math.max(0.2, 1 - 0.3 * s); b *= Math.max(0.22, 1 - 0.24 * s);
         }
       }
       col[k] = r; col[k + 1] = g; col[k + 2] = b;
     }
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+
+    // текстура кожи с фотографии (photo-avatar.js): UV = проекция лица на снимок
+    if (P.photo) {
+      P.photo.prepare?.({ pos, hm: this.hm, eye: this.eye, P });
+      const uv = geo.attributes.uv.array, t = [0, 0];
+      for (let k = 0, i = 0; k < pos.length; k += 3, i += 2) {
+        P.photo.uv(pos[k], pos[k + 1], pos[k + 2], t);
+        uv[i] = t[0]; uv[i + 1] = t[1];
+      }
+      geo.attributes.uv.needsUpdate = true;
+      const tex = this._track(new THREE.CanvasTexture(P.photo.canvas));
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 4;
+      this.mat.skin.map = tex;
+      this.mat.skin.color.set('#ffffff');
+      this.mat.skin.sheenColor = new THREE.Color(P.skin).multiplyScalar(0.8);
+      this.mat.skin.needsUpdate = true;
+    }
 
     const mesh = new THREE.Mesh(geo, this.mat.skin);
     mesh.name = 'skin';
@@ -613,8 +639,8 @@ export class ProceduralHead {
       const inner = ch.browInnerUp || 0, down = ch['browDown' + S] || 0, outer = ch['browOuterUp' + S] || 0;
       for (let i = 0; i < 5; i++) {
         const s = i / 4;
-        let x = lerp(0.085, 0.45, s);
-        let y = B.y + B.arch * Math.sin(Math.PI * Math.min(1, s * 1.12)) ** 0.9 - 0.025 * s * s;
+        let x = lerp(B.x0 ?? 0.085, B.x1 ?? 0.45, s);
+        let y = B.y + B.arch * Math.sin(Math.PI * Math.min(1, s * 1.12)) ** 0.9 + (B.tail ?? -0.025) * s * s;
         y += inner * (0.06 * (1 - s) ** 1.3 + 0.012) - inner * 0.014 * s * (1 - outer);
         y += outer * 0.055 * s ** 1.1;
         y -= down * (0.068 * (1 - s) ** 1.2 + 0.012);       // "V": внутренние концы вниз сильнее
@@ -821,9 +847,11 @@ export class ProceduralHead {
   // ---------------- волосы
   _buildHair() {
     const P = this.P;
+    if (P.hairStyle === 'none') return;
     const long = P.hairStyle === 'long';
     // линия роста волос как функция долготы (0 = лоб, π = затылок)
-    const lineF = long ? [0.6, 0.52, 0.34, 0.16, 0.0, -0.3, -0.5, -0.55] : [0.64, 0.57, 0.4, 0.24, 0.08, -0.2, -0.36, -0.4];
+    const lineF = (long ? [0.6, 0.52, 0.34, 0.16, 0.0, -0.3, -0.5, -0.55] : [0.64, 0.57, 0.4, 0.24, 0.08, -0.2, -0.36, -0.4])
+      .map((v, i) => v + (P.hairline || 0) * Math.max(0, 1 - i / 4));   // сдвиг линии у лба (по фото)
     const hairline = (a) => {
       const u = clamp(Math.abs(a) / Math.PI * (lineF.length - 1), 0, lineF.length - 1.001);
       const i = Math.floor(u);
@@ -854,17 +882,17 @@ export class ProceduralHead {
 
     if (long) {
       // "занавес" длинных волос сзади и по бокам
-      const cols = 64, rows = 30, a0 = 1.0;
+      const cols = 64, rows = 30, a0 = 1.0, wk = prof(P.gx, 0) / 0.755;   // занавес по ширине головы
       const g = this._track(dynamicGrid(cols, rows, true));
       const pos = g.attributes.position.array, c = g.attributes.color.array;
       for (let r = 0; r <= rows; r++) for (let i = 0; i <= cols; i++) {
         const a = a0 + (i / cols) * (Math.PI * 2 - 2 * a0);
-        const bottom = -1.55 + 0.07 * Math.sin(a * 5) + 0.05 * Math.sin(a * 13);
+        const bottom = (P.hairBottom ?? -1.55) + 0.07 * Math.sin(a * 5) + 0.05 * Math.sin(a * 13);
         const y = lerp(0.42, bottom, r / rows);
         const flare = smoothstep(-0.2, -1.5, y);
         const front = Math.cos(a) > 0 ? Math.cos(a) : 0;
         const jaw = smoothstep(0.1, -0.7, y) * (1 - smoothstep(-0.9, -1.3, y)) * front;   // у лица пряди ближе к щекам
-        const rx = 0.84 + 0.1 * flare + 0.012 * Math.sin(a * 9 + y * 3) - 0.1 * jaw;
+        const rx = (0.84 + 0.1 * flare + 0.012 * Math.sin(a * 9 + y * 3) - 0.1 * jaw) * wk;
         const rz = 0.86 + 0.06 * flare + 0.012 * Math.sin(a * 7 - y * 2) - 0.12 * jaw;
         const k = (r * (cols + 1) + i) * 3;
         pos[k] = rx * Math.sin(a); pos[k + 1] = y; pos[k + 2] = -0.08 + rz * Math.cos(a);
@@ -879,15 +907,16 @@ export class ProceduralHead {
   }
 
   _buildEars() {
-    if (this.P.hairStyle === 'long') return;
+    if (this.P.hairStyle === 'long' && !this.P.ears) return;
     const geo = this._track(new THREE.SphereGeometry(1, 24, 16));
     const inGeo = this._track(new THREE.SphereGeometry(1, 16, 12));
     const inMat = this._track(this.mat.neck.clone());
     inMat.color = new THREE.Color(this.P.skin).multiplyScalar(0.6);
+    const w = prof(this.P.gx, -0.06) * 0.998, es = clamp(w / 0.785, 0.85, 1.1);   // уши на силуэте головы
     for (const sg of [1, -1]) {
       const ear = new THREE.Mesh(geo, this.mat.neck);
-      ear.position.set(sg * 0.79, -0.06, -0.06);
-      ear.scale.set(0.06, 0.17, 0.11);
+      ear.position.set(sg * (w + 0.02), -0.06, -0.06);
+      ear.scale.set(0.06 * es, 0.17 * es, 0.11 * es);
       ear.rotation.y = sg * -0.35;
       const inner = new THREE.Mesh(inGeo, inMat);
       inner.position.set(sg * 0.25, -0.05, 0.1);

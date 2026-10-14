@@ -278,13 +278,56 @@ export class EmotionalHead {
     if (gender !== 'male' && gender !== 'female') throw new Error('gender must be male|female');
     if (gender === this.gender && this.rig && !this._customModel) return this;
     this.gender = gender;
-    this._customModel = false;
-    if (this.rig) this.rig.dispose();
-    this.rig = this._makeRig(gender);
-    this.scene.add(this.rig.object3D);
+    this._rebuildRig();
     this._emit('genderChange', { gender });
     return this;
   }
+
+  _rebuildRig() {
+    this._customModel = false;
+    if (this.rig) this.rig.dispose();
+    this.rig = this._makeRig(this.gender);
+    this.scene.add(this.rig.object3D);
+  }
+
+  /**
+   * Голова по фотографии: шаржевое портретное сходство + кожа со снимка; эмоции, речь и жесты — те же.
+   * Распознавание локальное (MediaPipe в браузере), фото никуда не отправляется. См. photo-avatar.js.
+   * @param {File|Blob|string|HTMLImageElement|HTMLCanvasElement} src  файл, URL или изображение
+   * @param {object} [o]
+   * @param {number} [o.caricature=1.5]  0 — стандартные пропорции, 1 — как на фото, 1.5–2.5 — шарж
+   * @param {number} [o.texture=0.9]     сила фото-текстуры кожи (0 — ровный тон)
+   * @param {'female'|'male'} [o.gender] основа (шея, плечи, причёска по умолчанию)
+   * @param {function} [o.onProgress]    (text) => void
+   * @returns {Promise<object>} отчёт: предупреждения, цвета, меры лица относительно среднего
+   */
+  async fromPhoto(src, o = {}) {
+    const { analyzePortrait } = await import('./photo-avatar.js');
+    const portrait = src?.isPortrait ? src : await analyzePortrait(src, o);
+    this._portrait = portrait;
+    this._photoOpts = { caricature: o.caricature ?? 1.5, texture: o.texture ?? 0.9 };
+    if (o.gender) this.gender = o.gender;
+    this._rebuildRig();
+    const report = portrait.report;
+    this._emit('photoAvatar', report);
+    return report;
+  }
+  /** Изменить шарж/текстуру без повторного распознавания. */
+  setPhotoOptions(o = {}) {
+    if (!this._portrait) return this;
+    Object.assign(this._photoOpts, o);
+    this._rebuildRig();
+    return this;
+  }
+  /** Вернуть стандартную голову. */
+  clearPhoto() {
+    if (!this._portrait) return this;
+    this._portrait = null;
+    this._rebuildRig();
+    this._emit('photoAvatar', null);
+    return this;
+  }
+  get portrait() { return this._portrait || null; }
 
   /**
    * Направление взгляда. x, y в диапазоне -1..1 (x>0 — вправо на экране, y>0 — вверх).
@@ -375,7 +418,7 @@ export class EmotionalHead {
     return rig;
   }
   /** Вернуться к процедурной голове. */
-  useProcedural(gender = this.gender) { this._customModel = true; return this.setGender(gender); }
+  useProcedural(gender = this.gender) { this._customModel = true; this._portrait = null; return this.setGender(gender); }
 
   /** Скриншот текущего кадра (data URL). */
   snapshot(type = 'image/png') { this._render(); return this.renderer.domElement.toDataURL(type); }
@@ -455,7 +498,8 @@ export class EmotionalHead {
 
   _makeRig(gender) {
     const look = this.options.look || {};
-    const overrides = look.female || look.male ? look[gender] || {} : look;   // { skin, hair } или { female: {...}, male: {...} }
+    let overrides = look.female || look.male ? look[gender] || {} : look;   // { skin, hair } или { female: {...}, male: {...} }
+    if (this._portrait) overrides = { ...this._portrait.fit({ ...this._photoOpts, gender }), ...overrides };
     return new ProceduralHead({ gender, shadows: this.options.shadows, overrides });
   }
 

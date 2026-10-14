@@ -35,7 +35,8 @@
     // Ограничьте источник в продакшене: const ALLOWED = 'https://your-site.example';
     const ALLOWED = q.get('origin') || '*';
     const ALLOWED_METHODS = new Set(['setEmotion', 'addEmotion', 'micro', 'gesture', 'express', 'speak', 'stopSpeaking', 'setGender',
-      'lookAt', 'setIdle', 'setChannels', 'clearChannels', 'setLighting', 'setBackground', 'setFraming', 'getEmotion', 'getState']);
+      'lookAt', 'setIdle', 'setChannels', 'clearChannels', 'setLighting', 'setBackground', 'setFraming', 'getEmotion', 'getState',
+      'fromPhoto', 'setPhotoOptions', 'clearPhoto']);   // fromPhoto принимает File/Blob (structured clone) или URL
     window.addEventListener('message', async (e) => {
       if (ALLOWED !== '*' && e.origin !== ALLOWED) return;
       const m = e.data;
@@ -45,7 +46,7 @@
       if (result === head) result = true;
       if (m.id !== undefined) e.source?.postMessage({ type: 'emotional-head:result', id: m.id, result: JSON.parse(JSON.stringify(result ?? null)) }, e.origin === 'null' ? '*' : e.origin);
     });
-    for (const ev of ['emotionChange', 'speakStart', 'speakEnd', 'word', 'cue', 'gesture']) {
+    for (const ev of ['emotionChange', 'speakStart', 'speakEnd', 'word', 'cue', 'gesture', 'photoAvatar']) {
       head.on(ev, (data) => parent !== window && parent.postMessage({ type: 'emotional-head:event', event: ev, data: JSON.parse(JSON.stringify(data ?? null)) }, ALLOWED));
     }
   </script>
