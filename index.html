@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Emotional Head — демо</title>
+<!-- three.js без сборщика: importmap. "three/addons/" нужен только для loadModel() (glTF) -->
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<style>
+  :root { --bg:#0e1015; --panel:#161922; --line:#262b38; --text:#e6e8ee; --dim:#8a91a3; --acc:#7aa2ff; --acc2:#ff8f7a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .app { display:grid; grid-template-columns: minmax(0,1fr) 420px; height:100vh; }
+  #stage { position:relative; min-height:420px; }
+  .hud { position:absolute; left:16px; bottom:14px; right:16px; display:flex; gap:8px; flex-wrap:wrap; pointer-events:none; }
+  .pill { background:rgba(10,12,18,.6); backdrop-filter:blur(6px); border:1px solid rgba(255,255,255,.08); padding:4px 10px; border-radius:999px; font-size:12px; color:#cfd5e4; }
+  .pill b { color:#fff; font-weight:600; }
+  .speaking { color:var(--acc2) !important; }
+  aside { background:var(--panel); border-left:1px solid var(--line); overflow:auto; padding:14px 16px 40px; }
+  h1 { font-size:16px; margin:2px 0 2px; } .sub { color:var(--dim); font-size:12px; margin-bottom:10px; }
+  details { border-top:1px solid var(--line); padding:10px 0; } details[open] summary { margin-bottom:8px; }
+  summary { cursor:pointer; font-weight:600; font-size:13px; letter-spacing:.02em; color:#cfd5e4; list-style:none; }
+  summary::before { content:"▸ "; color:var(--dim); } details[open] summary::before { content:"▾ "; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
+  label { color:var(--dim); font-size:12px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  button, select, input[type=text], textarea { font:inherit; color:var(--text); background:#1d212c; border:1px solid var(--line); border-radius:8px; }
+  button { padding:5px 10px; cursor:pointer; transition:background .15s, border-color .15s; }
+  button:hover { border-color:#3a4256; background:#232836; }
+  button.on { border-color:var(--acc); background:#1f2a45; }
+  button.primary { background:#2b4a8f; border-color:#3b5db0; } button.primary:hover { background:#3357a6; }
+  select { padding:5px 8px; } input[type=text] { padding:6px 8px; width:100%; }
+  textarea { width:100%; padding:8px; resize:vertical; min-height:84px; }
+  input[type=range] { flex:1; accent-color:var(--acc); }
+  .val { width:34px; text-align:right; font-variant-numeric:tabular-nums; color:var(--dim); font-size:12px; }
+  .bars { display:grid; grid-template-columns:repeat(2, 1fr); gap:2px 12px; font-size:10.5px; color:var(--dim); }
+  .bar { display:grid; grid-template-columns: 118px 1fr; align-items:center; gap:6px; }
+  .bar i { display:block; height:5px; background:#232836; border-radius:3px; overflow:hidden; position:relative; }
+  .bar i::after { content:""; position:absolute; inset:0; width:var(--w,0%); background:linear-gradient(90deg,var(--acc),var(--acc2)); }
+  #log { font:11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color:#aeb6c8; background:#11141b; border:1px solid var(--line); border-radius:8px; padding:8px; height:150px; overflow:auto; white-space:pre-wrap; }
+  #log .api { color:#9fc1ff; } #log .ev { color:#8a91a3; }
+  .hint { color:var(--dim); font-size:12px; }
+  code { background:#11141b; padding:1px 5px; border-radius:4px; font-size:12px; }
+  @media (max-width: 900px) { .app { grid-template-columns: 1fr; height:auto; } #stage { height:62vh; } aside { border-left:0; border-top:1px solid var(--line); } }
+</style>
+</head>
+<body>
+<div class="app">
+  <main id="stage">
+    <div class="hud">
+      <span class="pill">эмоция: <b id="hudEmotion">neutral</b></span>
+      <span class="pill" id="hudSpeak">тишина</span>
+    </div>
+  </main>
+  <aside>
+    <h1>Emotional Head</h1>
+    <div class="sub">Three.js · 52 ARKit-канала · слои эмоций, микро-выражений, жестов и речи</div>
+
+    <details open>
+      <summary>Голова и сцена</summary>
+      <div class="row">
+        <button data-gender="female" class="on">Женская</button><button data-gender="male">Мужская</button>
+        <button id="bgBtn">Светлый фон</button>
+      </div>
+      <div class="row">
+        <label>Свет</label>
+        <select id="lighting"><option>studio</option><option>warm</option><option>cool</option><option>noir</option><option>soft</option></select>
+        <label>Кадр</label>
+        <select id="framing"><option>portrait</option><option>close</option><option>bust</option></select>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="idle" checked> idle</label>
+        <label><input type="checkbox" id="follow"> взгляд за курсором</label>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Эмоции</summary>
+      <div class="hint">Базовые</div>
+      <div class="chips" id="basic"></div>
+      <div class="hint" style="margin-top:8px">Сложные состояния</div>
+      <div class="chips" id="complex"></div>
+      <div class="row" style="margin-top:10px"><input type="text" id="mix" value="contempt + slight_amusement + boredom*0.5"></div>
+      <div class="row"><label style="width:84px">интенсивность</label><input type="range" id="intensity" min="0" max="1.2" step="0.05" value="1"><span class="val" id="intensityV">1</span></div>
+      <div class="row"><label style="width:84px">сдержанность</label><input type="range" id="restraint" min="0" max="1" step="0.05" value="0"><span class="val" id="restraintV">0</span></div>
+      <div class="row"><label style="width:84px">переход, с</label><input type="range" id="duration" min="0" max="3" step="0.1" value="0.8"><span class="val" id="durationV">0.8</span></div>
+      <div class="row"><button class="primary" id="applyMix">Применить смесь</button><label><input type="checkbox" id="mirror"> зеркально</label></div>
+    </details>
+
+    <details open>
+      <summary>Микро-выражения и жесты</summary>
+      <div class="chips" id="micro"></div>
+      <div class="chips" id="gestures" style="margin-top:8px"></div>
+    </details>
+
+    <details open>
+      <summary>Нарратив LLM-агента → эмоция</summary>
+      <select id="examples" style="width:100%;margin-bottom:6px"></select>
+      <textarea id="narrative"></textarea>
+      <div class="row"><button class="primary" id="express">Сыграть (express)</button><button id="speakNarr">Произнести с emotion:'auto'</button></div>
+      <div class="hint" id="parsed"></div>
+    </details>
+
+    <details open>
+      <summary>Речь (TTS + lip-sync)</summary>
+      <textarea id="speech">[e:jaded] Привет. Как дела? [pause:500] Это слишком банально... слишком *человечно* в своей простоте. [g:creakyLaugh] [e:coldIrony] Хорошо. Я принял это как **условие**, а не как извинение.</textarea>
+      <div class="row">
+        <select id="voice" style="flex:1;min-width:0"><option value="">голос: авто</option></select>
+        <select id="ttsMode"><option value="webspeech">Web Speech</option><option value="none">без звука</option></select>
+      </div>
+      <div class="row"><label style="width:84px">темп</label><input type="range" id="rate" min="0.6" max="1.6" step="0.05" value="1"><span class="val" id="rateV">1</span></div>
+      <div class="row"><button class="primary" id="speak">Говорить</button><button id="stop">Стоп</button></div>
+      <div class="hint">Разметка: <code>[e:эмоция]</code> <code>[g:жест]</code> <code>[m:микро]</code> <code>[pause:мс]</code> <code>*акцент*</code> <code>*ремарка из 3+ слов*</code></div>
+    </details>
+
+    <details>
+      <summary>Каналы (live)</summary>
+      <div class="bars" id="bars"></div>
+    </details>
+
+    <details open>
+      <summary>Журнал API и событий</summary>
+      <div id="log"></div>
+    </details>
+  </aside>
+</div>
+
+<script type="module">
+import { EmotionalHead, EMOTIONS, MICRO, GESTURES, CHANNELS, WebSpeech, parseNarrative } from './src/emotional-head.js';
+
+const head = new EmotionalHead('#stage', { gender: 'female', background: 'dark', emotion: 'neutral', framing: 'portrait' });
+window.head = head; // для экспериментов в консоли
+
+const $ = (s) => document.querySelector(s);
+const logEl = $('#log');
+const log = (msg, cls = 'ev') => {
+  const d = document.createElement('div'); d.className = cls; d.textContent = msg;
+  logEl.prepend(d);
+  while (logEl.childNodes.length > 80) logEl.lastChild.remove();
+};
+const api = (code, fn) => { log(code, 'api'); return fn(); };
+const fmt = (v) => JSON.stringify(v);
+
+// ---- события
+head.on('emotionChange', (e) => { $('#hudEmotion').textContent = typeof e.emotion === 'string' ? e.emotion : Object.entries(e.mix).map(([k, v]) => `${k} ${(+v).toFixed(2)}`).join(' + ') || 'custom'; log(`⟵ emotionChange ${typeof e.emotion === 'string' ? e.emotion : fmt(e.mix)} i=${(+e.intensity).toFixed(2)}${e.restraint ? ' restraint=' + e.restraint : ''}`); });
+head.on('speakStart', (e) => { $('#hudSpeak').textContent = 'говорит…'; $('#hudSpeak').classList.add('speaking'); log('⟵ speakStart'); });
+head.on('speakEnd', () => { $('#hudSpeak').textContent = 'тишина'; $('#hudSpeak').classList.remove('speaking'); log('⟵ speakEnd'); });
+head.on('cue', (c) => log(`⟵ cue ${c.type}: ${c.value}`));
+head.on('gesture', (g) => log(`⟵ gesture ${g.name}`));
+
+// ---- сцена
+document.querySelectorAll('[data-gender]').forEach((b) => b.onclick = () => {
+  document.querySelectorAll('[data-gender]').forEach((x) => x.classList.toggle('on', x === b));
+  api(`head.setGender('${b.dataset.gender}')`, () => head.setGender(b.dataset.gender));
+});
+let light = false;
+$('#bgBtn').onclick = () => {
+  light = !light;
+  $('#bgBtn').textContent = light ? 'Тёмный фон' : 'Светлый фон';
+  api(`head.setBackground('${light ? 'light' : 'dark'}')`, () => head.setBackground(light ? 'light' : 'dark'));
+};
+$('#lighting').onchange = (e) => api(`head.setLighting('${e.target.value}')`, () => head.setLighting(e.target.value));
+$('#framing').onchange = (e) => api(`head.setFraming('${e.target.value}')`, () => head.setFraming(e.target.value));
+$('#idle').onchange = (e) => api(`head.setIdle(${e.target.checked})`, () => head.setIdle(e.target.checked));
+$('#follow').onchange = (e) => api(`head.followPointer(${e.target.checked})`, () => head.followPointer(e.target.checked));
+
+// ---- эмоции
+const BASIC = ['neutral', 'happy', 'sad', 'angry', 'surprised', 'fear', 'disgust', 'contempt'];
+const sliders = ['intensity', 'restraint', 'duration', 'rate'];
+for (const s of sliders) { const el = $('#' + s); el.oninput = () => $('#' + s + 'V').textContent = el.value; }
+const opts = () => ({ i: +$('#intensity').value, d: +$('#duration').value, r: +$('#restraint').value, m: $('#mirror').checked });
+const setEmo = (emo) => {
+  const o = opts();
+  const extra = o.r || o.m ? `, { restraint: ${o.r}${o.m ? ', mirror: true' : ''} }` : '';
+  api(`head.setEmotion(${fmt(emo)}, ${o.i}, ${o.d}${extra})`, () => head.setEmotion(emo, o.i, o.d, { restraint: o.r, mirror: o.m }));
+};
+for (const [name, def] of Object.entries(EMOTIONS)) {
+  const b = document.createElement('button');
+  b.textContent = def.label || name; b.title = name;
+  b.onclick = () => setEmo(name);
+  (BASIC.includes(name) ? $('#basic') : $('#complex')).appendChild(b);
+}
+$('#applyMix').onclick = () => setEmo($('#mix').value);
+
+for (const m of Object.keys(MICRO)) { const b = document.createElement('button'); b.textContent = m; b.onclick = () => api(`head.micro('${m}')`, () => head.micro(m)); $('#micro').appendChild(b); }
+for (const g of Object.keys(GESTURES)) { const b = document.createElement('button'); b.textContent = '↻ ' + g; b.onclick = () => api(`head.gesture('${g}')`, () => head.gesture(g)); $('#gestures').appendChild(b); }
+
+// ---- нарратив
+const EXAMPLES = [
+  'Я даже не вздрагиваю. Меня не задевает ни приветствие, ни вопрос о моём самочувствии. Это слишком банально, слишком... *человечно* в своей простоте. Я смотрю на тебя, и в моих глазах читается такая степень пресыщенности, что это почти физически ощутимо.',
+  'Я усмехаюсь, и это не весёлый звук. Это скорее скрип старого, плохо смазанного механизма.',
+  'Я хмурюсь, как будто эта просьба — очередная, нелепая попытка приручить сложного зверя. Я не люблю, когда меня ограничивают...',
+  'Я делаю паузу, чтобы убедиться, что ты понял, что я принял это как **условие**, а не как извинение.',
+  'Я медленно поднимаю бровь и закатываю глаза. Сдерживаю раздражение, но челюсть напряжена.',
+  'I sigh, tired, and look away — this is the third time you ask.',
+];
+EXAMPLES.forEach((t, i) => { const o = document.createElement('option'); o.value = i; o.textContent = `${i + 1}. ${t.slice(0, 60)}…`; $('#examples').appendChild(o); });
+const showParse = () => {
+  const r = parseNarrative($('#narrative').value);
+  $('#parsed').textContent = `→ mix: ${Object.entries(r.mix).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(' + ') || '—'}; жесты: ${r.gestures.join(', ') || '—'}${r.restraint ? '; сдержанность ' + r.restraint : ''}`;
+};
+$('#examples').onchange = (e) => { $('#narrative').value = EXAMPLES[e.target.value]; showParse(); };
+$('#narrative').value = EXAMPLES[0]; showParse();
+$('#narrative').oninput = showParse;
+$('#express').onclick = () => api(`head.express(text)`, () => head.express($('#narrative').value));
+$('#speakNarr').onclick = () => api(`head.speak(text, { emotion: 'auto' })`, () => head.speak($('#narrative').value, { emotion: 'auto', tts: $('#ttsMode').value, voice: $('#voice').value || undefined, rate: +$('#rate').value }));
+
+// ---- речь
+const fillVoices = () => {
+  const sel = $('#voice'), cur = sel.value;
+  sel.length = 1;
+  for (const v of WebSpeech.voices()) { const o = document.createElement('option'); o.value = v.name; o.textContent = `${v.name} (${v.lang})`; sel.appendChild(o); }
+  sel.value = cur;
+};
+if (WebSpeech.available()) { fillVoices(); speechSynthesis.onvoiceschanged = fillVoices; } else { $('#ttsMode').value = 'none'; }
+$('#speak').onclick = () => {
+  const o = { tts: $('#ttsMode').value, rate: +$('#rate').value };
+  if ($('#voice').value) o.voice = $('#voice').value;
+  api(`head.speak(text, ${fmt(o)})`, () => head.speak($('#speech').value, o));
+};
+$('#stop').onclick = () => api('head.stopSpeaking()', () => head.stopSpeaking());
+
+// ---- монитор каналов (~12 fps)
+const bars = $('#bars'), cells = {};
+for (const c of CHANNELS) { const d = document.createElement('div'); d.className = 'bar'; d.innerHTML = `<span>${c}</span><i></i>`; bars.appendChild(d); cells[c] = d.querySelector('i'); }
+setInterval(() => {
+  if (!bars.offsetParent) return;
+  const ch = head.getState().channels;
+  for (const c of CHANNELS) cells[c].style.setProperty('--w', ((ch[c] || 0) * 100).toFixed(0) + '%');
+}, 80);
+
+log('Готово. Попробуйте "Сложные состояния" или нарратив.', 'ev');
+</script>
+</body>
+</html>

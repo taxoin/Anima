@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Emotional Head — Web Component</title>
+  <script type="importmap">
+  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+  </script>
+  <script type="module" src="../src/element.js"></script>
+  <style>
+    body { margin: 0; font: 14px system-ui; background: #f3f4f7; display: grid; place-items: center; min-height: 100vh; }
+    .card { width: min(420px, 92vw); background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,.12); }
+    emotional-head { height: 440px; }
+    .bar { display: flex; gap: 8px; padding: 12px; flex-wrap: wrap; }
+    button { padding: 6px 12px; border-radius: 8px; border: 1px solid #d5d8e0; background: #fff; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <!-- атрибуты реактивны: el.setAttribute('emotion', 'sad') тоже работает -->
+    <emotional-head id="agent" gender="female" emotion="coldIrony" background="light" lighting="soft" follow-pointer></emotional-head>
+    <div class="bar">
+      <button onclick="agent.setEmotion('skeptical', 1, 0.5)">скепсис</button>
+      <button onclick="agent.setAttribute('emotion', 'irritation')">раздражение (атрибут)</button>
+      <button onclick="agent.gesture('eyeRoll')">закатить глаза</button>
+      <button onclick="agent.speak('Я принял это как **условие**, а не как извинение.', { emotion: 'emphasis' })">сказать</button>
+      <button onclick="agent.setAttribute('gender', agent.getAttribute('gender') === 'male' ? 'female' : 'male')">пол</button>
+    </div>
+  </div>
+  <script>
+    agent.addEventListener('speakStart', () => console.log('speakStart'));
+    agent.addEventListener('emotionChange', (e) => console.log('emotion', e.detail));
+  </script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Emotional Head — минимальный пример</title>
+  <script type="importmap">
+  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+  </script>
+  <style>body { margin: 0; background: #111; } #head { width: 100vw; height: 100vh; }</style>
+</head>
+<body>
+  <div id="head"></div>
+  <script type="module">
+    import { EmotionalHead } from '../src/emotional-head.js';
+
+    const head = new EmotionalHead('#head', { gender: 'male', background: 'dark', lighting: 'warm' });
+
+    head.on('speakEnd', () => console.log('договорил'));
+
+    // клик = разрешение браузера на звук; дальше — маленький сценарий
+    document.body.addEventListener('click', async () => {
+      head.setEmotion('jaded', 0.9, 1.2);
+      await head.speak('Привет. Это слишком банально... [g:creakyLaugh] Но ладно.');
+      head.setEmotion('contempt + slight_amusement', 0.8);
+      head.gesture('slowBlink');
+    }, { once: true });
+  </script>
+</body>
+</html>

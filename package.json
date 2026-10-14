@@ -1,0 +1,20 @@
+{
+  "name": "emotional-head",
+  "version": "0.1.0",
+  "description": "Lightweight emotional 3D talking head for the web (Three.js, ARKit blendshapes, layered emotions, lip-sync, micro-API)",
+  "type": "module",
+  "main": "src/emotional-head.js",
+  "exports": {
+    ".": "./src/emotional-head.js",
+    "./element": "./src/element.js",
+    "./emotions": "./src/emotions.js",
+    "./lipsync": "./src/lipsync.js"
+  },
+  "files": ["src", "README.md"],
+  "peerDependencies": { "three": ">=0.163.0" },
+  "scripts": {
+    "serve": "npx serve .",
+    "build": "npx esbuild src/element.js --bundle --minify --format=esm --external:three --external:three/addons/* --outfile=dist/emotional-head.min.js"
+  },
+  "license": "MIT"
+}

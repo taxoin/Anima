@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Emotional Head — управление iframe</title>
+  <style>body { font: 14px system-ui; margin: 24px; } iframe { width: 360px; height: 420px; border: 0; border-radius: 14px; }</style>
+</head>
+<body>
+  <iframe id="f" src="embed.html?gender=male&emotion=indifferent&bg=dark" allow="autoplay"></iframe>
+  <p>
+    <button onclick="call('setEmotion', 'jaded', 1, 1)">пресыщенность</button>
+    <button onclick="call('express', 'Я хмурюсь. Я не люблю, когда меня ограничивают...')">нарратив</button>
+    <button onclick="call('speak', 'Это слишком банально.', { emotion: 'coldIrony' })">сказать</button>
+  </p>
+  <script>
+    const f = document.getElementById('f');
+    const call = (method, ...args) => f.contentWindow.postMessage({ type: 'emotional-head', method, args }, '*');
+    window.addEventListener('message', (e) => { if (e.data?.type === 'emotional-head:event') console.log('event', e.data.event, e.data.data); });
+  </script>
+</body>
+</html>

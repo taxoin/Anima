@@ -1,0 +1,53 @@
+<!doctype html>
+<!--
+  Голова для встраивания через <iframe>. Параметры URL:
+    ?gender=female|male&emotion=jaded&intensity=0.9&bg=dark|light|transparent&lighting=studio&framing=portrait&follow=1
+  Управление из родительской страницы через postMessage:
+    iframe.contentWindow.postMessage({ type: 'emotional-head', method: 'setEmotion', args: ['contempt', 0.8] }, '*')
+  Ответы и события приходят обратно: { type: 'emotional-head:event', event: 'speakEnd', data } и
+                                     { type: 'emotional-head:result', id, result } (если передать id).
+-->
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Emotional Head — embed</title>
+  <script type="importmap">
+  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+                 "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }
+  </script>
+  <style>html, body, #head { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }</style>
+</head>
+<body>
+  <div id="head"></div>
+  <script type="module">
+    import { EmotionalHead } from '../src/emotional-head.js';
+    const q = new URLSearchParams(location.search);
+    const head = new EmotionalHead('#head', {
+      gender: q.get('gender') || 'female',
+      emotion: q.get('emotion') || 'neutral',
+      intensity: parseFloat(q.get('intensity') || '1'),
+      background: q.get('bg') || 'dark',
+      lighting: q.get('lighting') || 'studio',
+      framing: q.get('framing') || 'portrait',
+      followPointer: q.get('follow') === '1',
+    });
+    // Ограничьте источник в продакшене: const ALLOWED = 'https://your-site.example';
+    const ALLOWED = q.get('origin') || '*';
+    const ALLOWED_METHODS = new Set(['setEmotion', 'addEmotion', 'micro', 'gesture', 'express', 'speak', 'stopSpeaking', 'setGender',
+      'lookAt', 'setIdle', 'setChannels', 'clearChannels', 'setLighting', 'setBackground', 'setFraming', 'getEmotion', 'getState']);
+    window.addEventListener('message', async (e) => {
+      if (ALLOWED !== '*' && e.origin !== ALLOWED) return;
+      const m = e.data;
+      if (!m || m.type !== 'emotional-head' || !ALLOWED_METHODS.has(m.method)) return;
+      let result = head[m.method](...(m.args || []));
+      if (result instanceof Promise) result = await result;
+      if (result === head) result = true;
+      if (m.id !== undefined) e.source?.postMessage({ type: 'emotional-head:result', id: m.id, result: JSON.parse(JSON.stringify(result ?? null)) }, e.origin === 'null' ? '*' : e.origin);
+    });
+    for (const ev of ['emotionChange', 'speakStart', 'speakEnd', 'word', 'cue', 'gesture']) {
+      head.on(ev, (data) => parent !== window && parent.postMessage({ type: 'emotional-head:event', event: ev, data: JSON.parse(JSON.stringify(data ?? null)) }, ALLOWED));
+    }
+  </script>
+</body>
+</html>
