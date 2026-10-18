@@ -199,6 +199,24 @@ export function upperLipProfile(t, P) {
 
 const HAT_LINE = { beanie: 0.4, cap: 0.48, fedora: 0.5, bowler: 0.44, cloche: 0.34, headband: 0.42 };   // нижний край убора (y)
 
+/**
+ * Уровни детализации геометрии. high — как было (ПК, ~200 тыс. треугольников); medium — телефоны (~95 тыс.);
+ * low — слабые устройства (~55 тыс.). Сетки кожи и волос — основная нагрузка: у кожи ~30 морф-целей на вершину.
+ */
+export const DETAIL = {
+  high: { skin: [240, 200], hair: [220, 160], eye: [48, 32], lid: 56, teeth: [12, 10], cards: 1, beard: 1, shadowMap: 1024 },
+  medium: { skin: [168, 136], hair: [120, 88], eye: [32, 22], lid: 40, teeth: [10, 8], cards: 0.65, beard: 0.7, shadowMap: 1024 },
+  low: { skin: [128, 104], hair: [88, 64], eye: [24, 16], lid: 32, teeth: [8, 6], cards: 0.4, beard: 0.5, shadowMap: 512 },
+};
+/** 'auto' → medium на телефонах и планшетах (грубый указатель или мобильный UA), иначе high. */
+export function resolveDetail(d) {
+  if (DETAIL[d]) return d;
+  if (typeof navigator === 'undefined') return 'high';
+  const mobile = navigator.userAgentData?.mobile || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '')
+    || (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches);
+  return mobile ? 'medium' : 'high';
+}
+
 export const LAYOUT = { eyeX: 0.3, eyeY: 0.03, mouthY: -0.52, pivot: new THREE.Vector3(0, -0.72, -0.1) };
 const JAW_THETA = 0.24;                       // угол раскрытия челюсти при jawOpen = 1
 const JAW_PIVOT = { y: -0.12, z: -0.05 };
@@ -421,8 +439,8 @@ const CORNEA_H = 0.06;                         // выпуклость рого�
  * и находит точку радужки. Отсюда параллакс при взгляде сбоку и «линза» над радужкой без лишнего прохода рендера.
  * Нормали — аналитические (у полюса сферы швы и вырожденные треугольники).
  */
-function eyeballGeometry(R) {
-  const geo = new THREE.SphereGeometry(R, 48, 32);
+function eyeballGeometry(R, ws = 48, hs = 32) {
+  const geo = new THREE.SphereGeometry(R, ws, hs);
   geo.rotateX(Math.PI / 2);                                         // полюс (зрачок) → +Z
   const p = geo.attributes.position, n = geo.attributes.normal, A = CORNEA_A, H = CORNEA_H;
   for (let i = 0; i < p.count; i++) {
@@ -479,7 +497,7 @@ varying vec3 vEyeCam;`).replace('#include <map_fragment>', `
  * Координаты головы; верхняя дуга неподвижна, нижняя вращается вместе с челюстью (см. _updateMouth).
  * @returns {{teeth: THREE.BufferGeometry, gums: THREE.BufferGeometry}}
  */
-function buildDentition(P, zFront, upper) {
+function buildDentition(P, zFront, upper, seg = [12, 10]) {
   const MY = LAYOUT.mouthY, sc = (P.mouthHW / 0.185) * 0.92;
   const a = 1.25;                                                  // глубина дуги: z = zFront - a·x²
   const arch = (x) => zFront - a * x * x;
@@ -489,7 +507,7 @@ function buildDentition(P, zFront, upper) {
   const T = [0.032, 0.032, 0.04, 0.046, 0.048, 0.056].map((v) => v * sc);
   const AO = [1, 0.93, 0.82, 0.66, 0.52, 0.42];                     // задние зубы в тени полости
   const yEdge0 = upper ? MY - 0.026 : MY - 0.017;
-  const unit = new THREE.SphereGeometry(1, 12, 10), up = unit.attributes.position, un = up.count, uidx = unit.index.array;
+  const unit = new THREE.SphereGeometry(1, seg[0], seg[1]), up = unit.attributes.position, un = up.count, uidx = unit.index.array;
   const pos = [], col = [], idx = [], gum = [];
   for (const sg of [1, -1]) {
     let s = 0.0004 * sc;                                           // длина дуги от центра
@@ -704,8 +722,10 @@ export class ProceduralHead {
    * @param {boolean} o.shadows
    * @param {object} o.overrides  — переопределить параметры пресета (skin, hair, iris, cloth, ...)
    */
-  constructor({ gender = 'female', shadows = true, overrides = {} } = {}) {
+  constructor({ gender = 'female', shadows = true, overrides = {}, detail = 'high' } = {}) {
     this.gender = gender;
+    this.detail = resolveDetail(detail);
+    this.L = DETAIL[this.detail];
     this.shadows = shadows;
     this.P = { ...PRESETS[gender] || PRESETS.female, ...resolveLook(overrides) };
     this.object3D = new THREE.Group();
@@ -817,7 +837,7 @@ export class ProceduralHead {
   // ---------------- кожа + morph targets
   _buildSkin() {
     const P = this.P;
-    const geo = this._track(sphereGrid(240, 200, (px, py, pz, out) => shapeHead(px, py, pz, P, out), 0.36, 0.6));
+    const geo = this._track(sphereGrid(this.L.skin[0], this.L.skin[1], (px, py, pz, out) => shapeHead(px, py, pz, P, out), 0.36, 0.6));
     // деформация по точкам лица: UV фото и декалей считаются по несдвинутой базе — рисунок едет вместе с кожей
     let base = geo.attributes.position.array;
     if (this._warpF) {
@@ -993,15 +1013,16 @@ export class ProceduralHead {
   // ---------------- глаза и веки
   _buildEyes() {
     const P = this.P, E = this.eye;
-    const ballGeo = this._track(P.cornea === false ? new THREE.SphereGeometry(E.r, 48, 32).rotateX(Math.PI / 2) : eyeballGeometry(E.r));
+    const [ews, ehs] = this.L.eye;
+    const ballGeo = this._track(P.cornea === false ? new THREE.SphereGeometry(E.r, ews, ehs).rotateX(Math.PI / 2) : eyeballGeometry(E.r, ews, ehs));
     this._corneaU = { value: 1 };
     if (P.cornea !== false) {
       corneaShader(this.mat.eye, E.r, this._corneaU);
       if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r, this._corneaU);
     }
     const phiS = Math.PI / 2 - 1.75, phiL = 3.5;
-    const upGeo = this._track(new THREE.SphereGeometry(E.rs, 56, 14, phiS, phiL, 0, Math.PI / 2));
-    const loGeo = this._track(new THREE.SphereGeometry(E.rl, 56, 10, phiS, phiL, Math.PI / 2, Math.PI / 2));
+    const upGeo = this._track(new THREE.SphereGeometry(E.rs, this.L.lid, 14, phiS, phiL, 0, Math.PI / 2));
+    const loGeo = this._track(new THREE.SphereGeometry(E.rl, this.L.lid, 10, phiS, phiL, Math.PI / 2, Math.PI / 2));
     // веко темнеет к складке (как кожа глазницы), светлое — только у кромки
     const shadeLid = (geo, upper) => {
       const p = geo.attributes.position, c = new Float32Array(p.count * 3);
@@ -1046,7 +1067,7 @@ export class ProceduralHead {
     lashLoGeo.rotateX(Math.PI / 2);
     lashLoGeo.rotateY(-Math.PI * 0.1);
     // мягкая тень от верхнего века: полоса с альфа-градиентом прямо под кромкой
-    const shGeo = this._track(new THREE.SphereGeometry(E.r * 1.012, 48, 6, phiS + 0.2, phiL - 0.4, Math.PI / 2, 0.42));
+    const shGeo = this._track(new THREE.SphereGeometry(E.r * 1.012, ews, 6, phiS + 0.2, phiL - 0.4, Math.PI / 2, 0.42));
     const shPos = shGeo.attributes.position, shCol = new Float32Array(shPos.count * 4);
     for (let i = 0; i < shPos.count; i++) {
       const y = shPos.getY(i) / (E.r * 1.012);        // 0 на кромке, отрицательный ниже
@@ -1226,7 +1247,7 @@ export class ProceduralHead {
     M.tongue = new THREE.Mesh(this._track(dynamicGrid(16, 6, true)), tongueMat);
     // зубы и дёсны: верхние неподвижны, нижние — в группе, которая поворачивается вокруг оси челюсти
     const zFront = this.hm.get(0, LAYOUT.mouthY) - 0.012;
-    const dU = buildDentition(P, zFront, true), dL = buildDentition(P, zFront - 0.024, false);
+    const dU = buildDentition(P, zFront, true, this.L.teeth), dL = buildDentition(P, zFront - 0.024, false, this.L.teeth);
     for (const g of [dU.teeth, dU.gums, dL.teeth, dL.gums]) this._track(g);
     M.teethU = new THREE.Mesh(dU.teeth, teethMat); M.gumsU = new THREE.Mesh(dU.gums, gumMat);
     M.jaw = new THREE.Group();
@@ -1453,7 +1474,7 @@ export class ProceduralHead {
       out[0] = tmp[0] + (nx / nl) * off; out[1] = tmp[1] + (ny / nl) * off; out[2] = tmp[2] + (nz / nl) * off;
       return y - yh;                                                         // > 0 — выше линии роста
     };
-    const geo = this._track(sphereGrid(220, 160, shellAt));
+    const geo = this._track(sphereGrid(this.L.hair[0], this.L.hair[1], shellAt));
     geo.computeVertexNormals();
     // цвет: корни темнее, верх с бликом
     const p = geo.attributes.position.array, col = new Float32Array(p.length);
@@ -1508,7 +1529,7 @@ export class ProceduralHead {
    * (_updateHairSwing). Детерминированный ГПСЧ: одинаковая причёска при каждой сборке.
    */
   _buildHairCards(shellAt, curtainAt, volAt) {
-    const P = this.P, long = !!curtainAt, n = P.hairCards > 1 ? P.hairCards : long ? 420 : 300;
+    const P = this.P, long = !!curtainAt, n = P.hairCards > 1 ? P.hairCards : Math.round((long ? 420 : 300) * this.L.cards);
     let seed = 7;
     const rnd = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
     const V = THREE.Vector3, C = new V(0, 0.82, -0.57).normalize();          // макушка (завиток) — пряди расходятся от неё
@@ -1781,7 +1802,8 @@ export class ProceduralHead {
         return m * lips(x, y) * ss(-1.2, -1.05, y);
       };
       const depth = (t) => 0.006 + (0.02 + 0.06 * L) * Math.sqrt(t);
-      part('beard', -0.68, 0.68, -1.18, -0.06, 68, 56, mask, depth, true, { droop: 0.07 * L });
+      const kb = this.L.beard;                                     // сетка бороды пересчитывается на CPU каждый кадр
+      part('beard', -0.68, 0.68, -1.18, -0.06, Math.round(68 * kb), Math.round(56 * kb), mask, depth, true, { droop: 0.07 * L });
     }
     const ms = bd.moustache;
     if (ms) {
@@ -1796,7 +1818,7 @@ export class ProceduralHead {
       const mmat = this._track(mat.clone());
       mmat.depthTest = false;                                       // поверх губ (они тоже без теста глубины)
       const depth = (t, x, y) => 0.034 + (0.012 + 0.03 * L) * Math.sqrt(t) * (0.75 + 0.25 * Math.cos(Math.min(1, Math.abs(x) / (hw * wide)) * Math.PI / 2));
-      part('moustache', -hw * 1.35, hw * 1.35, lipTop - 0.09, lipTop + 0.13, 40, 20, mask, depth, false, { mat: mmat, renderOrder: 25 });
+      part('moustache', -hw * 1.35, hw * 1.35, lipTop - 0.09, lipTop + 0.13, Math.round(40 * this.L.beard), Math.round(20 * this.L.beard), mask, depth, false, { mat: mmat, renderOrder: 25 });
     }
   }
 

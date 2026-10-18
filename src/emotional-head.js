@@ -15,7 +15,7 @@
  *   6. manual   — прямые значения каналов из setChannels() (перекрывают всё)
  */
 import * as THREE from 'three';
-import { ProceduralHead, SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS } from './head-model.js';
+import { ProceduralHead, DETAIL, resolveDetail, SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS } from './head-model.js';
 import { MAKEUP } from './skin-decals.js';
 import {
   CHANNELS, STATE_DEFAULTS, EMOTIONS, MICRO, GESTURES, ALIASES,
@@ -93,6 +93,7 @@ export class EmotionalHead {
    * @param {boolean} [options.followPointer=false]  глаза следят за курсором
    * @param {boolean} [options.vignette=true]
    * @param {number}  [options.maxPixelRatio=2]
+   * @param {'auto'|'high'|'medium'|'low'} [options.detail='auto']  детализация геометрии: auto — medium на телефонах
    * @param {'webspeech'|'none'|Function} [options.tts='webspeech']  TTS по умолчанию для speak()
    * @param {object} [options.voice]  { lang, voice, rate, pitch } по умолчанию для speak()
    * @param {object} [options.look]  переопределения внешности: { skin, hair, iris:[c1,c2], cloth, lip }
@@ -102,7 +103,7 @@ export class EmotionalHead {
     if (!this.container) throw new Error('[emotional-head] container not found');
     this.options = {
       gender: 'female', background: 'dark', lighting: 'studio', framing: 'portrait', emotion: 'neutral',
-      idle: true, shadows: true, followPointer: false, vignette: true, maxPixelRatio: 2, tts: 'webspeech', voice: {}, look: {},
+      idle: true, shadows: true, followPointer: false, vignette: true, maxPixelRatio: 2, detail: 'auto', tts: 'webspeech', voice: {}, look: {},
       ...options,
     };
     this._listeners = {};
@@ -463,6 +464,18 @@ export class EmotionalHead {
   }
 
   /**
+   * Детализация геометрии: 'high' (ПК, ~200 тыс. треугольников), 'medium' (телефоны, ~95 тыс.), 'low' (~55 тыс.), 'auto' — medium на телефонах.
+   * Пересобирает голову; эмоция и речь продолжаются.
+   */
+  setDetail(detail = 'auto') {
+    this.options.detail = detail;
+    if (this.rig instanceof ProceduralHead) this._rebuildRig();
+    return this;
+  }
+  /** Текущий уровень детализации (после разрешения 'auto'). */
+  getDetail() { return this.rig?.detail || resolveDetail(this.options.detail); }
+
+  /**
    * Внешность: тон кожи, цвет глаз, волос, губ, одежды и т.д. Пересобирает голову, эмоция и речь продолжаются.
    *   head.setLook({ skin: 'olive', undertone: 'warm', iris: 'hazel', hair: '#2a1a12' })
    *   head.setLook({ female: { skin: 'tan' }, male: { skin: 'brown' } })
@@ -679,7 +692,8 @@ export class EmotionalHead {
     this.camera = new THREE.PerspectiveCamera(24, 1, 0.1, 60);
     const key = new THREE.DirectionalLight('#ffffff', 2);
     key.castShadow = !!this.options.shadows;
-    key.shadow.mapSize.set(1024, 1024);
+    const sm = DETAIL[resolveDetail(this.options.detail)].shadowMap;
+    key.shadow.mapSize.set(sm, sm);
     Object.assign(key.shadow.camera, { left: -1.6, right: 1.6, top: 1.6, bottom: -1.6, near: 1, far: 16 });
     key.shadow.bias = -0.0004;
     key.shadow.normalBias = 0.015;
@@ -718,7 +732,7 @@ export class EmotionalHead {
     const look = this.options.look || {};
     let overrides = look.female || look.male ? look[gender] || {} : look;   // { skin, hair } или { female: {...}, male: {...} }
     if (this._portrait) overrides = { ...this._portrait.fit({ ...this._photoOpts, gender }), ...overrides };
-    return new ProceduralHead({ gender, shadows: this.options.shadows, overrides });
+    return new ProceduralHead({ gender, shadows: this.options.shadows, overrides, detail: this.options.detail });
   }
 
   _initState() {

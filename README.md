@@ -113,6 +113,7 @@ await head.likeness()                             // метрика сходст
 await head.refinePhoto()                          // уточнить меры фото-аватара через рендер
 await head.refineShape()                          // деформация по точкам лица: овал и нос под фото (~2 с)
 head.setLook({ eyeShape: 'round', noseShape: 'roman', glasses: 'rect' })  // разрез (EYE_SHAPES), нос (NOSE_SHAPES), очки
+head.setDetail('medium'); head.getDetail()       // детализация: 'auto' (по умолчанию: medium на телефонах) | 'high' | 'medium' | 'low'
 head.pause(); head.resume(); head.renderStill(channels, pose)   // стоп-кадр мимо анимации (тесты, превью)
 head.snapshot(); head.dispose()
 ```
@@ -498,6 +499,15 @@ head.useProcedural('female');                    // вернуть процед�
 
 ## Производительность и ограничения
 
+- **Детализация** (`detail` в опциях, `head.setDetail()`, атрибут `detail` у Web Component):
+
+  | уровень | треугольников | кадр* | обновление на CPU | где |
+  |---|---|---|---|---|
+  | `high` | ~200 тыс. | 1× | 2,7 мс | ПК |
+  | `medium` | ~95 тыс. | 0,59× | 1,8 мс | телефоны (`auto`) |
+  | `low` | ~55–62 тыс. | 0,44× | 1,4 мс | слабые устройства |
+
+  *Относительное время кадра в программном рендере SwiftShader (мужская голова с бородой). На реальных GPU соотношение будет другим. Основную нагрузку дают сетки кожи (у неё ~30 морф-целей на вершину) и оболочки волос. На `medium`/`low` они грубее, а глаза, зубы, пряди, сетка бороды (её пересчитывают на CPU каждый кадр) и карта теней (на `low`) упрощены. `auto` выбирает `medium` по мобильному UA или сенсорному экрану без мыши. Визуально `medium` почти не отличается от `high`, на `low` чуть грубее линия роста волос.
 - **Нагрузка**: один draw-call на часть лица, геометрия рта и бровей обновляется на CPU (~1.5k вершин за кадр). Рендер останавливается, когда голова вне экрана или вкладка скрыта; `devicePixelRatio` ограничен до 2. На слабых устройствах помогают `shadows: false` и `maxPixelRatio: 1`.
 - **Постобработка**: используются ACES tone mapping, PBR-материалы с sheen, environment-карта и CSS-виньетка. EffectComposer не используется. Bloom или DOF можно добавить через `head.renderer` / `head.scene` / `head.camera`.
 - **Стиль**: процедурная голова стилизованная, а не фотореалистичная. Это осознанный выбор под приоритет «эмоциональная глубина и API».
@@ -508,7 +518,7 @@ head.useProcedural('female');                    // вернуть процед�
 
 ```bash
 npm i                         # puppeteer-core; нужен установленный Chrome/Chromium ($CHROME)
-npm run test:visual           # 25 состояний головы против эталонов tests/visual/ref/*.png
+npm run test:visual           # 27 состояний головы против эталонов tests/visual/ref/*.png
 npm run test:visual -- --update   # принять изменения как новые эталоны
 npm run test:likeness         # метрика сходства на docs/samples (или: -- путь/к/папке --k=0,1,1.5 --realism=0.8 --shape)
 node tests/calibrate.mjs dir  # калибровка основы через рендер → BASE_CORR для photo-avatar.js

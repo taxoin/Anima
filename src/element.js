@@ -14,11 +14,11 @@ import { EmotionalHead } from './emotional-head.js';
 
 const METHODS = ['setEmotion', 'addEmotion', 'getEmotion', 'getState', 'micro', 'gesture', 'express', 'speak', 'speakAudio', 'listenStream',
   'stopSpeaking', 'setGender', 'lookAt', 'followPointer', 'setIdle', 'setChannels', 'clearChannels', 'setLighting', 'setBackground',
-  'setFraming', 'loadModel', 'useProcedural', 'snapshot', 'fromPhoto', 'setPhotoOptions', 'clearPhoto', 'exportAvatar', 'importAvatar', 'setLook', 'getLook', 'pause', 'resume', 'likeness', 'refinePhoto', 'refineShape'];
+  'setFraming', 'loadModel', 'useProcedural', 'snapshot', 'fromPhoto', 'setPhotoOptions', 'clearPhoto', 'exportAvatar', 'importAvatar', 'setLook', 'getLook', 'setDetail', 'getDetail', 'pause', 'resume', 'likeness', 'refinePhoto', 'refineShape'];
 const EVENTS = ['emotionChange', 'speakStart', 'speakEnd', 'word', 'cue', 'gesture', 'micro', 'express', 'genderChange', 'blink', 'modelLoaded', 'photoAvatar', 'lookChange'];
 
 export class EmotionalHeadElement extends HTMLElement {
-  static get observedAttributes() { return ['gender', 'emotion', 'intensity', 'restraint', 'background', 'lighting', 'framing', 'idle', 'follow-pointer']; }
+  static get observedAttributes() { return ['gender', 'emotion', 'intensity', 'restraint', 'background', 'lighting', 'framing', 'idle', 'follow-pointer', 'detail']; }
 
   connectedCallback() {
     if (this.head) return;
@@ -34,6 +34,7 @@ export class EmotionalHeadElement extends HTMLElement {
       framing: a('framing', 'portrait'),
       idle: a('idle', 'true') !== 'false',
       shadows: a('shadows', 'true') !== 'false',
+      detail: a('detail', 'auto'),
       followPointer: this.hasAttribute('follow-pointer'),
     });
     for (const ev of EVENTS) this.head.on(ev, (detail) => this.dispatchEvent(new CustomEvent(ev, { detail })));
@@ -58,6 +59,7 @@ export class EmotionalHeadElement extends HTMLElement {
       case 'framing': h.setFraming(v); break;
       case 'idle': h.setIdle(v !== 'false'); break;
       case 'follow-pointer': h.followPointer(v !== null); break;
+      case 'detail': h.setDetail(v || 'auto'); break;
     }
   }
 }

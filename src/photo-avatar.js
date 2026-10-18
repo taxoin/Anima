@@ -1148,6 +1148,8 @@ export class Portrait {
           const b = Math.round((pos[i + 1] + 1.4) * 100);
           if (b >= 0 && b < 260) sil[b] = Math.max(sil[b], Math.abs(pos[i]));
         }
+        // на грубой сетке (detail: medium/low) часть корзин пуста — заполняем соседями, иначе точки овала падают на x = 0
+        for (let it = 0; it < 6; it++) for (let i = 1; i < 259; i++) if (!sil[i] && (sil[i - 1] || sil[i + 1])) sil[i] = Math.max(sil[i - 1], sil[i + 1]);
         const silW = (y) => sil[clamp(Math.round((y + 1.4) * 100), 0, 259)];
         // низ подбородка: где передняя поверхность по средней линии уходит назад
         const zc = hm.get(0, -0.75);

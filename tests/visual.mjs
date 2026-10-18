@@ -50,6 +50,9 @@ export const CASES = [
   { name: 'female-snub-bowler', gender: 'female', look: { noseShape: 'snub', hat: 'bowler', hairStyle: 'bob' }, pose: { yaw: 0.5 } },
   { name: 'female-bob-back', gender: 'female', look: { hairStyle: 'bob', hair: '#a87a4a' }, pose: { yaw: 2.6 } },
   { name: 'female-cornea-side', gender: 'female', framing: 'close', pose: { yaw: -0.6, eyeYaw: 0.45 } },
+  // детализация для телефонов
+  { name: 'male-medium-beard', gender: 'male', detail: 'medium', look: { beard: 'full' }, channels: SMILE },
+  { name: 'avatar-lincoln-low', avatar: '/tests/fixtures/lincoln-shape.anima.json', gender: 'male', detail: 'low' },
 ];
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg' };
