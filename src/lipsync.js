@@ -188,17 +188,33 @@ function findItem(items, t) {
 }
 
 /** Каналы рта в момент t (с ко-артикуляцией: в конце звука губы уже готовятся к следующему). */
+/**
+ * Каналы визем в момент t с коартикуляцией:
+ *  - симметричные плавные переходы: конец звука → 50 % следующего, начало → 50 % предыдущего (непрерывно на стыке);
+ *  - смыкание губ (PP) держится до конца звука, без утечки в следующий;
+ *  - предвосхищение округления: губы начинают вытягиваться за ~250 мс до О/У/Ш/Р (как в живой речи).
+ */
 export function visemeChannelsAt(tl, t, out = {}) {
   for (const k in out) out[k] = 0;
   if (!tl || !tl.items.length) return out;
-  const n = findItem(tl.items, t);
-  const it = tl.items[n], next = tl.items[n + 1];
-  const u = it.dur > 0 ? (t - it.t) / it.dur : 1;
-  const a = VISEMES[it.v] || {};
-  let blend = 0;
-  if (next && it.v !== 'PP' && u > 0.55) blend = Math.min(1, (u - 0.55) / 0.45) * 0.55;
-  for (const k in a) out[k] = (out[k] || 0) + a[k] * (1 - blend);
-  if (blend && next) { const b = VISEMES[next.v] || {}; for (const k in b) out[k] = (out[k] || 0) + b[k] * blend; }
+  const items = tl.items, n = findItem(items, t);
+  const it = items[n], next = items[n + 1], prev = items[n - 1];
+  const u = it.dur > 0 ? clamp((t - it.t) / it.dur, 0, 1) : 1;
+  const sm = (x) => x * x * (3 - 2 * x);
+  const wN = next && it.v !== 'PP' ? 0.5 * sm(clamp((u - 0.45) / 0.55, 0, 1)) : 0;
+  const wP = prev && prev.v !== 'PP' ? 0.5 * sm(clamp(1 - u / 0.35, 0, 1)) : 0;
+  const add = (v, w) => { if (!w) return; const a = VISEMES[v] || {}; for (const k in a) out[k] = (out[k] || 0) + a[k] * w; };
+  add(it.v, 1 - wN - wP);
+  if (next) add(next.v, wN);
+  if (prev) add(prev.v, wP);
+  for (let j = n + 1; j < items.length && items[j].t - t < 0.25; j++) {
+    const b = VISEMES[items[j].v] || {}, r = Math.max(b.mouthPucker || 0, b.mouthFunnel || 0);
+    if (r < 0.25) continue;
+    const k = 0.55 * (1 - (items[j].t - t) / 0.25);
+    out.mouthPucker = Math.max(out.mouthPucker || 0, (b.mouthPucker || 0) * k);
+    out.mouthFunnel = Math.max(out.mouthFunnel || 0, (b.mouthFunnel || 0) * k);
+    break;
+  }
   return out;
 }
 

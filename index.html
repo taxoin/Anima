@@ -95,9 +95,21 @@
       <div class="row"><label style="width:44px">кожа</label><span class="swatches" id="skinSw"></span></div>
       <div class="row"><label style="width:44px">глаза</label><span class="swatches" id="eyeSw"></span></div>
       <div class="row">
-        <label>разрез</label><select id="eyeShape"><option value="">авто</option><option>almond</option><option>round</option><option>upturned</option><option>downturned</option><option>narrow</option><option>wide</option></select>
+        <label>разрез</label><select id="eyeShape"><option value="">авто</option></select>
         <label>очки</label><select id="glassesSel"><option value="">авто</option><option value="none">нет</option><option>round</option><option>rect</option><option>cat</option><option>aviator</option><option>sun</option></select>
       </div>
+      <div class="row">
+        <label>причёска</label><select id="hairSel"><option value="">авто</option></select>
+        <label>борода</label><select id="beardSel"><option value="">авто</option><option value="none">нет</option></select>
+      </div>
+      <div class="row">
+        <label>макияж</label><select id="makeupSel"><option value="">нет</option></select>
+        <label>убор</label><select id="hatSel"><option value="">нет</option></select>
+        <label>серьги</label><select id="earSel"><option value="">нет</option></select>
+      </div>
+      <div class="row"><label style="width:84px" for="ageR">возраст</label><input type="range" id="ageR" min="0" max="1" step="0.05" value="0"></div>
+      <div class="row"><label style="width:84px" for="frecklesR">веснушки</label><input type="range" id="frecklesR" min="0" max="1" step="0.05" value="0"></div>
+      <div class="row"><button id="randomLook">Случайный персонаж</button><button id="resetLook">Сбросить внешность</button></div>
       <div class="row">
         <label><input type="checkbox" id="idle" checked> idle</label>
         <label><input type="checkbox" id="follow"> взгляд за курсором</label>
@@ -173,7 +185,7 @@
 </div>
 
 <script type="module">
-import { EmotionalHead, EMOTIONS, MICRO, GESTURES, CHANNELS, WebSpeech, parseNarrative, SKIN_TONES, EYE_COLORS } from './src/emotional-head.js';
+import { EmotionalHead, EMOTIONS, MICRO, GESTURES, CHANNELS, WebSpeech, parseNarrative, SKIN_TONES, EYE_COLORS, EYE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS, MAKEUP } from './src/emotional-head.js';
 
 const head = new EmotionalHead('#stage', { gender: 'female', background: 'dark', emotion: 'neutral', framing: 'portrait' });
 window.head = head; // для экспериментов в консоли
@@ -361,6 +373,43 @@ const lookSel = (id, key, map = (v) => v) => {
     api(`head.setLook(${fmt(look)}, { replace: true })`, () => head.setLook(look, { replace: true }));
   };
 };
+for (const [id, presets] of [['#eyeShape', EYE_SHAPES], ['#hairSel', HAIR_STYLES], ['#beardSel', BEARDS], ['#makeupSel', MAKEUP], ['#hatSel', HATS], ['#earSel', EARRINGS]])
+  for (const k of Object.keys(presets)) $(id).append(new Option(k, k));
+lookSel('#hairSel', 'hairStyle');
+lookSel('#beardSel', 'beard', (v) => (v === 'none' ? null : v));
+lookSel('#makeupSel', 'makeup');
+lookSel('#hatSel', 'hat');
+lookSel('#earSel', 'earrings');
+let lookT = 0;
+for (const [id, key] of [['#ageR', 'age'], ['#frecklesR', 'freckles']]) $(id).addEventListener('input', (e) => {
+  clearTimeout(lookT);
+  lookT = setTimeout(() => { const look = head.getLook(); if (+e.target.value) look[key] = +e.target.value; else delete look[key]; api(`head.setLook(${fmt(look)}, { replace: true })`, () => head.setLook(look, { replace: true })); }, 200);
+});
+// синхронизация контролов с текущей внешностью
+function syncLook() {
+  const lk = head.getLook(), str = (v) => (typeof v === 'string' ? v : '');
+  for (const [el, key] of [['#skinSw', 'skin'], ['#eyeSw', 'iris']]) $(el).querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (typeof lk[key] === 'string' ? lk[key] : 'auto')));
+  $('#eyeShape').value = str(lk.eyeShape); $('#glassesSel').value = lk.glasses === false ? 'none' : str(lk.glasses);
+  $('#hairSel').value = str(lk.hairStyle); $('#beardSel').value = lk.beard === null ? 'none' : str(lk.beard);
+  $('#makeupSel').value = str(lk.makeup); $('#hatSel').value = str(lk.hat); $('#earSel').value = str(lk.earrings);
+  $('#ageR').value = lk.age || 0; $('#frecklesR').value = lk.freckles || 0;
+}
+const pick = (o) => { const k = Object.keys(o); return k[Math.floor(Math.random() * k.length)]; };
+$('#randomLook').onclick = () => {
+  const male = head.gender === 'male', r = Math.random;
+  const look = { skin: pick(SKIN_TONES), iris: pick(EYE_COLORS), eyeShape: pick(EYE_SHAPES), hairStyle: pick(HAIR_STYLES),
+    hair: ['#1f1712', '#3a2418', '#6a4a32', '#a87a4a', '#d8b878', '#8a2a1a', '#c8c4bc'][Math.floor(r() * 7)] };
+  if (r() < 0.3) look.glasses = pick(GLASSES);
+  if (male && r() < 0.5) look.beard = pick(BEARDS);
+  if (!male && r() < 0.5) look.makeup = pick(MAKEUP);
+  if (r() < 0.2) look.hat = pick(HATS);
+  if (!male && r() < 0.4) look.earrings = pick(EARRINGS);
+  if (r() < 0.25) look.freckles = +(0.3 + r() * 0.6).toFixed(2);
+  if (r() < 0.3) look.age = +(0.3 + r() * 0.7).toFixed(2);
+  api(`head.setLook(${fmt(look)}, { replace: true })`, () => head.setLook(look, { replace: true }));
+  syncLook();
+};
+$('#resetLook').onclick = () => { api('head.setLook({}, { replace: true })', () => head.setLook({}, { replace: true })); syncLook(); };
 lookSel('#eyeShape', 'eyeShape');
 lookSel('#glassesSel', 'glasses', (v) => (v === 'none' ? false : v));
 $('#avatarSave').onclick = async () => {
@@ -383,10 +432,7 @@ async function openAvatar(f) {
     const o = head._photoOpts || {};
     for (const [id, k] of [['caric', 'caricature'], ['photoTex', 'texture'], ['realism', 'realism']]) if (o[k] !== undefined) { $('#' + id).value = o[k]; $('#' + id + 'V').textContent = o[k]; }
     document.querySelectorAll('[data-gender]').forEach((b) => b.classList.toggle('on', b.dataset.gender === head.gender));
-    const lk = head.getLook();
-    for (const [el, key] of [['#skinSw', 'skin'], ['#eyeSw', 'iris']]) $(el).querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (typeof lk[key] === 'string' ? lk[key] : 'auto')));
-    $('#eyeShape').value = typeof lk.eyeShape === 'string' ? lk.eyeShape : '';
-    $('#glassesSel').value = lk.glasses === false ? 'none' : typeof lk.glasses === 'string' ? lk.glasses : '';
+    syncLook();
     $('#photoRefine').disabled = !rep;
     status(`Аватар открыт: ${f.name}`);
     head.stopSpeaking();

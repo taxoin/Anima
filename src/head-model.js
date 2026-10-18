@@ -16,6 +16,7 @@
  *    rig.dispose()
  */
 import * as THREE from 'three';
+import { hasDecals, drawDecals, resolveMakeup, DECAL_BOUNDS } from './skin-decals.js';
 
 // ------------------------------------------------------------------ утилиты
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
@@ -91,6 +92,49 @@ export const EYE_SHAPES = {
   downturned: { lidUpSkew: -5, lidLoSkew: 3, eyeTilt: -0.02 },
   narrow: { lidUpFull: -5, lidLoFull: -4, upperOpen: 19, lowerOpen: -18 },
   wide: { lidUpFull: 4, lidLoFull: 2, upperOpen: 30, lowerOpen: -26 },
+  hooded: { hood: 0.8, lidCrease: 0.2, upperOpen: 22 },
+  monolid: { hood: 0.55, lidCrease: 0, epicanthus: 0.85, upperOpen: 19, lowerOpen: -19, lidUpFull: -2, eyeTilt: 0.12 },
+};
+/**
+ * Причёски на базе двух оболочек (short / long): объём по направлениям (hairVol, 0…100° от макушки), толщина,
+ * кудри (шум), залысины, хвост или пучок. look: { hairStyle: 'afro' }. Свои параметры из look важнее пресета.
+ */
+export const HAIR_STYLES = {
+  short: { hairStyle: 'short' },
+  long: { hairStyle: 'long' },
+  none: { hairStyle: 'none' },
+  bob: { hairStyle: 'long', hairBottom: -0.9, hairVol: [0.07, 0.08, 0.09, 0.1, 0.12, 0.14], bangDepth: 0.16, bangSide: 0 },
+  pixie: { hairStyle: 'short', hairVol: [0.06, 0.06, 0.05, 0.04, 0.03, 0.02], bangSide: -1, bangDepth: 0.14 },
+  buzz: { hairStyle: 'short', hairThick: 0.3, hairScalp: 0.5, hairVol: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01] },
+  undercut: { hairStyle: 'short', hairVol: [0.16, 0.15, 0.11, 0.03, 0.012, 0.01], hairVolMax: 0.2 },
+  receding: { hairStyle: 'short', hairTemples: 0.2, hairline: 0.08, hairVol: [0.03, 0.03, 0.025, 0.02, 0.02, 0.02] },
+  afro: { hairStyle: 'short', hairVol: [0.36, 0.36, 0.34, 0.31, 0.26, 0.17], hairVolMax: 0.4, hairCurl: 0.045 },
+  curly: { hairStyle: 'long', hairVol: [0.14, 0.15, 0.16, 0.18, 0.2, 0.22], hairCurl: 0.04, hairBottom: -1.15 },
+  ponytail: { hairStyle: 'short', hairVol: [0.02, 0.02, 0.02, 0.02, 0.015, 0.012], hairTail: 'ponytail' },
+  bun: { hairStyle: 'short', hairVol: [0.02, 0.02, 0.02, 0.02, 0.015, 0.012], hairTail: 'bun' },
+};
+/** Головные уборы: look.hat = 'beanie' | 'cap' | 'fedora' | 'headband' | { style, color }. Волосы под ним приминаются. */
+export const HATS = {
+  beanie: { style: 'beanie', color: '#3a4a5a' },
+  cap: { style: 'cap', color: '#24324a' },
+  fedora: { style: 'fedora', color: '#4a3a2c' },
+  headband: { style: 'headband', color: '#b03a48' },
+};
+/** Серьги: look.earrings = 'stud' | 'hoop' | 'drop' | { style, color, size }. */
+export const EARRINGS = {
+  stud: { style: 'stud', color: '#e6c36a', size: 1 },
+  hoop: { style: 'hoop', color: '#d9b45a', size: 1 },
+  drop: { style: 'drop', color: '#e8e8f0', size: 1 },
+};
+/** Борода и усы: look.beard = 'full' | 'goatee' | 'chinstrap' | 'moustache' | 'walrus' | 'pencil' | { style, moustache, length, color }. */
+export const BEARDS = {
+  full: { style: 'full', moustache: 'regular', length: 0.45 },
+  short: { style: 'full', moustache: 'regular', length: 0.15 },
+  goatee: { style: 'goatee', moustache: 'regular', length: 0.3 },
+  chinstrap: { style: 'chinstrap', moustache: false, length: 0.35 },
+  moustache: { style: 'none', moustache: 'regular', length: 0.3 },
+  walrus: { style: 'none', moustache: 'walrus', length: 0.6 },
+  pencil: { style: 'none', moustache: 'pencil', length: 0.1 },
 };
 /** Очки: look.glasses = 'round' | 'rect' | 'cat' | 'aviator' | 'sun' | true | false | { style, color, tint, size, aspect, thickness, metal, dy }. */
 export const GLASSES = {
@@ -105,7 +149,10 @@ const UNDERTONE = { warm: [1.02, 1.0, 0.93], cool: [1.0, 0.97, 1.02], olive: [0.
 /** Имена пресетов в look → цвета. Неизвестные ключи проходят как есть. */
 export function resolveLook(look = {}) {
   // разрез — первым: пресет задаёт lid*/eyeTilt/upperOpen, явные значения из look важнее
-  const o = typeof look.eyeShape === 'string' && EYE_SHAPES[look.eyeShape] ? { ...EYE_SHAPES[look.eyeShape], ...look } : { ...look };
+  // пресеты разреза и причёски — первыми: явные значения из look важнее (иначе строки вроде skin: 'brown' затрут готовый цвет)
+  const hs = typeof look.hairStyle === 'string' && HAIR_STYLES[look.hairStyle];
+  const o = { ...(typeof look.eyeShape === 'string' && EYE_SHAPES[look.eyeShape] || {}), ...(hs || {}), ...look };
+  if (hs) o.hairStyle = hs.hairStyle;
   if (typeof o.skin === 'string' && SKIN_TONES[o.skin]) {
     const t = SKIN_TONES[o.skin];
     o.skin = t.skin;
@@ -115,6 +162,11 @@ export function resolveLook(look = {}) {
     const c = new THREE.Color(o.skin), k = UNDERTONE[o.undertone];
     o.skin = '#' + c.setRGB(clamp(c.r * k[0], 0, 1), clamp(c.g * k[1], 0, 1), clamp(c.b * k[2], 0, 1)).getHexString();
   }
+  if (typeof o.hat === 'string') o.hat = HATS[o.hat] ? { ...HATS[o.hat] } : null;
+  if (typeof o.earrings === 'string') o.earrings = EARRINGS[o.earrings] ? { ...EARRINGS[o.earrings] } : null;
+  if (typeof o.beard === 'string') o.beard = BEARDS[o.beard] ? { ...BEARDS[o.beard] } : null;
+  const mk = resolveMakeup(o.makeup);
+  if (mk?.lipstick && look.lip === undefined) o.lip = mk.lipstick;
   if (typeof o.glasses === 'string') o.glasses = GLASSES[o.glasses] ? { ...GLASSES[o.glasses] } : { style: o.glasses };
   else if (o.glasses === true) o.glasses = { ...GLASSES.rect };
   for (const key of ['iris', 'irisRight']) if (typeof o[key] === 'string') o[key] = EYE_COLORS[o[key]] || [o[key], new THREE.Color(o[key]).multiplyScalar(0.45).getStyle()];
@@ -130,6 +182,8 @@ export function upperLipProfile(t, P) {
   const bow = 1 - dip * Math.exp(-((t / (bx * 0.45)) ** 2)) + peak * Math.exp(-(((at - bx) / (bx * 0.5)) ** 2));
   return Math.pow(Math.max(0, 1 - at ** 2.4), 0.55) * bow;
 }
+
+const HAT_LINE = { beanie: 0.4, cap: 0.48, fedora: 0.5, headband: 0.42 };   // нижний край убора (y)
 
 export const LAYOUT = { eyeX: 0.3, eyeY: 0.03, mouthY: -0.52, pivot: new THREE.Vector3(0, -0.72, -0.1) };
 const JAW_THETA = 0.24;                       // угол раскрытия челюсти при jawOpen = 1
@@ -265,7 +319,11 @@ const MORPHS = {
   jawRight: (x, y, z, o) => { const w = jawWeight(x, y, z); o[0] = -0.04 * w; o[1] = 0; o[2] = 0; return o; },
   mouthSmile: (x, y, z, o, sg) => {
     const g1 = G(sg * x, y, 0.27, -0.41, 0.085, 0.08), g2 = G(sg * x, y, 0.36, -0.28, 0.12, 0.12);
-    o[0] = sg * 0.015 * g1; o[1] = 0.035 * g1 + 0.015 * g2; o[2] = 0.03 * g1 + 0.01 * g2; return o;
+    // носогубная складка: бороздка по отрезку крыло носа (0.1, −0.27) → мимо уголка рта (0.27, −0.56), щека над ней выпирает
+    const ax = sg * x, px = ax - 0.1, py = y + 0.27, t = Math.min(1, Math.max(0, (px * 0.17 + py * -0.29) / (0.17 * 0.17 + 0.29 * 0.29)));
+    const dx = px - 0.17 * t, dy = py + 0.29 * t, dl = Math.hypot(dx, dy), side = dx * 0.29 + dy * 0.17;   // > 0 — со стороны щеки
+    const fold = Math.exp(-((dl / 0.016) ** 2)) * Math.sin(Math.PI * Math.min(1, t * 1.15)), bulge = side > 0 ? Math.exp(-(((dl - 0.03) / 0.03) ** 2)) * Math.sin(Math.PI * t) : 0;
+    o[0] = sg * 0.015 * g1; o[1] = 0.035 * g1 + 0.015 * g2; o[2] = 0.03 * g1 + 0.01 * g2 - 0.022 * fold + 0.016 * bulge; return o;
   },
   cheekSquint: (x, y, z, o, sg) => { const g = G(sg * x, y, 0.32, -0.11, 0.1, 0.06); o[0] = 0; o[1] = 0.03 * g; o[2] = 0.015 * g; return o; },
   noseSneer: (x, y, z, o, sg) => {
@@ -422,6 +480,25 @@ function buildDentition(P, zFront, upper) {
   return { teeth, gums };
 }
 
+/** Normal-карта губ: вертикальные бороздки (сетка губ: u — по ширине рта, v — от внутренней кромки к внешней). */
+function lipNormalTexture() {
+  const W = 512, H = 64, c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d'), im = g.createImageData(W, H), d = im.data;
+  const rnd = []; for (let i = 0; i < W; i++) rnd.push(Math.sin(i * 12.9898) * 43758.5453 % 1);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const ph = x / W * 140 + 0.9 * Math.sin(x * 0.07) + rnd[x] * 0.3;
+    const fade = Math.sin(Math.PI * Math.min(1, (y + 4) / (H + 4)));         // к кромкам бороздки мельче
+    const nx = Math.sin(ph * Math.PI * 2) * 0.55 * fade;
+    const k = (y * W + x) * 4;
+    d[k] = (nx * 0.5 + 0.5) * 255; d[k + 1] = 128; d[k + 2] = 255; d[k + 3] = 255;
+  }
+  g.putImageData(im, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = THREE.RepeatWrapping;
+  return t;
+}
+
 function hairTexture(color) {
   const W = 256, H = 512, c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -534,7 +611,7 @@ export class ProceduralHead {
         clearcoat: 0.06, clearcoatRoughness: 0.5, envMapIntensity: 0.6,
       })),
       lid: null,
-      lip: this._track(new THREE.MeshPhysicalMaterial({ color: P.lip, roughness: 0.38, vertexColors: true, clearcoat: 0.35, clearcoatRoughness: 0.35, sheen: 0.3, sheenColor: new THREE.Color('#ff8080'), side: THREE.DoubleSide, envMapIntensity: 0.6, depthTest: false })),
+      lip: this._track(new THREE.MeshPhysicalMaterial({ color: P.lip, roughness: 0.38, vertexColors: true, normalMap: this._track(lipNormalTexture()), normalScale: new THREE.Vector2(0.35, 0.35), clearcoat: 0.35, clearcoatRoughness: 0.35, sheen: 0.3, sheenColor: new THREE.Color('#ff8080'), side: THREE.DoubleSide, envMapIntensity: 0.6, depthTest: false })),
       brow: this._track(new THREE.MeshStandardMaterial({ color: P.brow.color, roughness: 0.9 })),
       lash: this._track(new THREE.MeshStandardMaterial({ color: '#120c0a', roughness: 0.8 })),
       hair: this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairTexture(P.hair)), roughness: 0.45, anisotropy: P.hairAniso ?? 0.6, anisotropyRotation: P.hairAnisoRot ?? 0, sheen: 0.6, sheenColor: new THREE.Color(P.hair).multiplyScalar(2.2), sheenRoughness: 0.35, vertexColors: true, side: THREE.DoubleSide, envMapIntensity: 0.5 })),
@@ -543,10 +620,20 @@ export class ProceduralHead {
       eyeR: null,
     };
     this.mat.eyeR = P.irisRight ? this._track(new THREE.MeshPhysicalMaterial({ map: this._track(eyeTexture({ ...P, iris: P.irisRight })), roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.3 })) : this.mat.eye;
+    if (P.hairScalp) {                                                // ёжик: сквозь короткие волосы просвечивает кожа
+      const hc = new THREE.Color(P.hair), sc = new THREE.Color(P.skin), k = P.hairScalp;
+      this.mat.hair.color.setRGB(lerp(1, sc.r / Math.max(0.03, hc.r), k * 0.35), lerp(1, sc.g / Math.max(0.03, hc.g), k * 0.35), lerp(1, sc.b / Math.max(0.03, hc.b), k * 0.35));
+    }
     this.mat.lid = this._track(this.mat.skin.clone());
     this.mat.lid.vertexColors = true;
     this.mat.lid.side = THREE.DoubleSide;
     this.mat.lid.color = new THREE.Color(P.skin).multiply(new THREE.Color(...P.lidTint));
+    const mk = resolveMakeup(P.makeup);
+    if (mk?.eyeshadow) {                                           // тени на подвижном веке
+      const [c, a] = Array.isArray(mk.eyeshadow) ? mk.eyeshadow : ['#8a6a7a', mk.eyeshadow];
+      this.mat.lid.color.lerp(this.mat.lid.color.clone().multiply(new THREE.Color(c)), clamp(a * 1.1, 0, 1));
+    }
+    if (mk?.gloss !== undefined) { this.mat.lip.clearcoat = 0.2 + 0.7 * mk.gloss; this.mat.lip.clearcoatRoughness = 0.4 - 0.32 * mk.gloss; this.mat.lip.roughness = 0.42 - 0.2 * mk.gloss; }
     this.mat.neck = this._track(this.mat.skin.clone());
     this.mat.neck.vertexColors = false;
     this.mat.neck.color = new THREE.Color(P.skin).multiplyScalar(0.92);
@@ -570,6 +657,9 @@ export class ProceduralHead {
     this._buildEars();
     this._buildBody();
     this._buildGlasses();
+    this._buildBeard();
+    this._buildHat();
+    this._buildEarrings();
 
     root.traverse((o) => {
       if (o.isMesh && this.shadows && !o.userData.noShadow) { o.castShadow = true; o.receiveShadow = true; }
@@ -714,6 +804,34 @@ export class ProceduralHead {
     mesh.frustumCulled = false;
     this.skin = mesh;
     this.headRoot.add(mesh);
+    if (hasDecals(P)) this._applyDecals(geo);
+  }
+
+  /**
+   * Слой декалей (skin-decals.js): фронтальная проекция (x, y) → UV второго канала, цвет кожи × рисунок.
+   * Инъекция в шейдер MeshPhysicalMaterial: отдельный атрибут decalUv, текстура decalMap.
+   */
+  _applyDecals(geo) {
+    const B = DECAL_BOUNDS, pos = geo.attributes.position.array, uv = new Float32Array((pos.length / 3) * 2);
+    for (let k = 0, i = 0; k < pos.length; k += 3, i += 2) {
+      const front = pos[k + 2] > 0.02;                              // затылок — в угол (белый пиксель)
+      uv[i] = front ? (pos[k] - B.x0) / (B.x1 - B.x0) : 0.001;
+      uv[i + 1] = front ? (pos[k + 1] - B.y0) / (B.y1 - B.y0) : 0.999;
+    }
+    geo.setAttribute('decalUv', new THREE.BufferAttribute(uv, 2));
+    const tex = this._track(new THREE.CanvasTexture(drawDecals(this.P, this.eye)));
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    const m = this.mat.skin;
+    m.onBeforeCompile = (sh) => {
+      sh.uniforms.decalMap = { value: tex };
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec2 decalUv;\nvarying vec2 vDecalUv;')
+        .replace('#include <uv_vertex>', '#include <uv_vertex>\n\tvDecalUv = decalUv;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D decalMap;\nvarying vec2 vDecalUv;')
+        .replace('#include <map_fragment>', '#include <map_fragment>\n\tdiffuseColor.rgb *= texture2D(decalMap, vDecalUv).rgb;');
+    };
+    m.customProgramCacheKey = () => 'skin-decals';
+    m.needsUpdate = true;
   }
 
   // ---------------- глаза и веки
@@ -736,7 +854,33 @@ export class ProceduralHead {
       geo.setAttribute('color', new THREE.BufferAttribute(c, 3));
     };
     shadeLid(upGeo, true); shadeLid(loGeo, false);
-    const lashGeo = this._track(new THREE.TorusGeometry(E.rs * 1.004, P.lash, 5, 40, Math.PI));
+    const liner = resolveMakeup(P.makeup)?.eyeliner || 0;           // подводка — толще линия ресниц
+    const lashGeo = this._track(new THREE.TorusGeometry(E.rs * 1.004, P.lash * (0.65 + 0.8 * liner), 5, 40, Math.PI));   // линия роста ресниц
+    // ресницы-карточки: изогнутые ленты от кромки, длиннее к внешнему углу; upper — вверх, lower — вниз и реже
+    const lashCards = (R, n, len, up, sg) => {
+      const pos = [], idx = [];
+      for (let j = 0; j < n; j++) {
+        const t = (j + 0.5) / n, a = lerp(-1.42, 1.42, t), u = Math.sin(a) * sg;              // u > 0 — к виску
+        const L = len * (0.55 + 0.6 * smoothstep(-0.7, 0.75, u)) * (1 - 0.35 * smoothstep(0.85, 1, Math.abs(u))) * (0.85 + 0.3 * ((j * 7919) % 13) / 13);
+        const h = ((j * 7919) % 101) / 101, h2 = ((j * 3571) % 97) / 97;                       // разброс без Math.random
+        const rad = [Math.sin(a), 0, Math.cos(a)], tan = [Math.cos(a), 0, -Math.sin(a)], tilt = 0.3 * u + 0.18 * (h2 - 0.5);   // у висков — наружу
+        const w = len * (0.045 + 0.02 * h), base = pos.length / 3;
+        for (let k = 0; k <= 3; k++) {
+          const f = k / 3, curl = up * (0.1 + (0.7 + 0.3 * h2) * f * f), out = 0.75 + 0.25 * f;
+          const cx = R * rad[0] + L * f * (out * rad[0] + tilt * tan[0]), cy = L * f * curl, cz = R * rad[2] + L * f * (out * rad[2] + tilt * tan[2]);
+          const ww = w * (1 - 0.85 * f);
+          pos.push(cx - tan[0] * ww, cy, cz - tan[2] * ww, cx + tan[0] * ww, cy, cz + tan[2] * ww);
+          if (k) { const b = base + (k - 1) * 2; idx.push(b, b + 1, b + 2, b + 1, b + 3, b + 2); }
+        }
+      }
+      const g = this._track(new THREE.BufferGeometry());
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setIndex(idx);
+      g.computeVertexNormals();
+      return g;
+    };
+    const lashLen = (P.lashLen ?? (this.gender === 'female' ? 1 : 0.7)) * 0.034 * (E.r / 0.116) * (1 + 0.25 * liner);
+    const lashCardMat = this._track(new THREE.MeshStandardMaterial({ color: '#120c0a', roughness: 0.8, side: THREE.DoubleSide }));
     lashGeo.rotateX(Math.PI / 2);
     const lashLoGeo = this._track(new THREE.TorusGeometry(E.rl * 1.004, P.lash * 0.28, 4, 32, Math.PI * 0.8));
     lashLoGeo.rotateX(Math.PI / 2);
@@ -762,6 +906,29 @@ export class ProceduralHead {
     // нижние ресницы редкие и короткие: не чёрная обводка, а тёмная полупрозрачная линия
     const lashLoMat = this._track(new THREE.MeshStandardMaterial({ color: new THREE.Color('#120c0a').lerp(new THREE.Color(P.skin), 0.35), roughness: 0.8, transparent: true, opacity: 0.6 }));
 
+    // складка: дуга-трубка на сфере радиуса rs·1.03 на высоте creaseEl над кромкой; hood опускает и утолщает её
+    const hood = clamp(P.hood || 0, 0, 1), crease = P.lidCrease ?? 0.45;
+    const creaseEl = (P.upperOpen + 30 - 20 * hood) * DEG;
+    let creaseGeo = null;
+    if (crease > 0.02 || hood > 0.02) {
+      const tube = (0.003 + 0.004 * crease + 0.013 * hood) * kr;
+      creaseGeo = this._track(new THREE.TorusGeometry(E.rs * (1.02 + 0.03 * hood), tube, 6, 36, Math.PI * 0.86));
+      creaseGeo.rotateX(Math.PI / 2);
+      creaseGeo.rotateY(Math.PI * 0.07);
+      // тень под валиком: низ трубки темнее, края дуги растворяются в коже (тоньше к углам)
+      const p = creaseGeo.attributes.position, c = new Float32Array(p.count * 3);
+      for (let i = 0; i < p.count; i++) { const v = p.getY(i) < 0 ? lerp(1, 0.72, clamp(-p.getY(i) / tube, 0, 1)) : 1; c.set([v, v * 0.97, v * 0.97], i * 3); }
+      creaseGeo.setAttribute('color', new THREE.BufferAttribute(c, 3));
+      const R = E.rs * (1.02 + 0.03 * hood);
+      for (let i = 0; i < p.count; i++) {                          // к углам глаза валик сходит на нет (прижимается к оболочке)
+        const x = p.getX(i), z = p.getZ(i), r = Math.hypot(x, z) || 1, e = Math.abs(x) / R, f = 1 - smoothstep(0.55, 0.98, e);
+        const rr = R + (r - R) * f; p.setXYZ(i, (x / r) * rr, p.getY(i) * f, (z / r) * rr);
+      }
+      creaseGeo.computeVertexNormals();
+    }
+    const epiGeo = this._track(new THREE.SphereGeometry(1, 14, 10));
+    epiGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(epiGeo.attributes.position.count * 3).fill(0.96), 3));
+
     this.eyes = [];
     for (const sg of [1, -1]) {                         // 1 = левый глаз персонажа (+X)
       const g = new THREE.Group();
@@ -785,8 +952,26 @@ export class ProceduralHead {
       const wet = new THREE.Mesh(this._shapeLid(wetGeo, sg, false, E.rl), wetMat);
       wet.userData.noShadow = true;
       wet.position.y = 0.0012 * kr;
-      up.add(lash, sh);
-      lo.add(lashLo, wet);
+      const cardsU = new THREE.Mesh(this._shapeLid(lashCards(E.rs * 1.003, 44, lashLen, 1, sg), sg, true, E.rs), lashCardMat);
+      const cardsL = new THREE.Mesh(this._shapeLid(lashCards(E.rl * 1.003, 26, lashLen * 0.38, -1, sg), sg, false, E.rl), lashLoMat);
+      cardsU.userData.noShadow = cardsL.userData.noShadow = true;
+      up.add(lash, sh, cardsU);
+      lo.add(lashLo, wet, cardsL);
+      // складка века (валик кожи над подвижным веком) и нависание; эпикантус — кожная складка во внутреннем углу
+      if (creaseGeo) {
+        const cr = new THREE.Mesh(this._shapeLid(creaseGeo, sg, true, E.rs), this.mat.lid);
+        cr.rotation.x = -creaseEl;
+        cr.userData.noShadow = true;
+        lids.add(cr);
+      }
+      if (P.epicanthus > 0.02) {
+        const ep = new THREE.Mesh(epiGeo, this.mat.lid), k = P.epicanthus;
+        ep.position.set(-sg * E.r * (0.9 - 0.05 * k), 0.004 * kr, E.r * (0.42 + 0.04 * k));
+        ep.scale.set((0.012 + 0.016 * k) * kr, (0.016 + 0.014 * k) * kr, (0.008 + 0.006 * k) * kr);
+        ep.rotation.set(0, -sg * 0.5, sg * -0.5);
+        ep.userData.noShadow = true;
+        lids.add(ep);
+      }
       const car = new THREE.Mesh(carGeo, carMat);       // в группе век: наклоняется вместе с разрезом
       car.position.set(-sg * E.r * 0.915, -0.003 * kr, E.r * 0.39);
       car.scale.set(0.008 * kr, 0.011 * kr, 0.006 * kr);
@@ -956,7 +1141,7 @@ export class ProceduralHead {
     const rollU = g('mouthRollUpper'), rollL = g('mouthRollLower'), shU = g('mouthShrugUpper'), shL = g('mouthShrugLower');
     const close = g('mouthClose'), shift = g('mouthLeft') - g('mouthRight');
     const upL = g('mouthUpperUpLeft'), upR = g('mouthUpperUpRight'), ldL = g('mouthLowerDownLeft'), ldR = g('mouthLowerDownRight');
-    const J = { open: g('jawOpen'), fwd: g('jawForward'), left: g('jawLeft'), right: g('jawRight') };
+    const J = this._jaw = { open: g('jawOpen'), fwd: g('jawForward'), left: g('jawLeft'), right: g('jawRight') };
     const press = (prL + prR) / 2, smile = (smL + smR) / 2, stretch = (stL + stR) / 2;
     const round = clamp(puck + fun, 0, 1);
 
@@ -1075,7 +1260,7 @@ export class ProceduralHead {
     };
     const bangSide = P.bangSide ?? (long ? -1 : 0), bangDepth = P.bangDepth ?? (long ? 0.1 : 0);
     const lineF = (long ? [0.6, 0.52, 0.34, 0.16, 0.0, -0.3, -0.5, -0.55] : [0.64, 0.57, 0.4, 0.24, 0.08, -0.2, -0.36, -0.4])
-      .map((v, i) => v + (P.hairline || 0) * Math.max(0, 1 - i / 4));   // сдвиг линии у лба (по фото)
+      .map((v, i) => v + (P.hairline || 0) * Math.max(0, 1 - i / 4) + (P.hairTemples || 0) * Math.exp(-(((i - 1.6) / 0.8) ** 2)));   // лоб (по фото), залысины
     const hairline = (a) => {
       const u = clamp(Math.abs(a) / Math.PI * (lineF.length - 1), 0, lineF.length - 1.001);
       const i = Math.floor(u);
@@ -1091,7 +1276,13 @@ export class ProceduralHead {
       if (!long) H += 0.012 * G(a, tmp[1], 0, 0.6, 0.5, 0.1);               // лёгкий объём надо лбом
       const v = volAt(tmp[0], tmp[1]);
       // силуэт причёски с фото; к вискам и ниже — плавно к обычной толщине (иначе по бокам «поля шляпы»)
-      if (v !== null) H = lerp(H, Math.max(H * 0.6, long ? v : Math.min(v, 0.14)), smoothstep(-0.45, 0.3, tmp[1]) * (0.55 + 0.45 * smoothstep(-0.2, 0.5, tmp[1])));
+      if (v !== null) H = lerp(H, Math.max(H * 0.6, long ? v : Math.min(v, P.hairVolMax ?? 0.14)), smoothstep(-0.45, 0.3, tmp[1]) * (0.55 + 0.45 * smoothstep(-0.2, 0.5, tmp[1])));
+      H *= P.hairThick ?? 1;
+      if (P.hairCurl) {                                                       // кудри: «пупырчатый» шум, сильнее у края силуэта
+        const nz = Math.sin(tmp[0] * 47 + Math.sin(tmp[1] * 29) * 2.5) + Math.sin(tmp[1] * 43 + tmp[2] * 31) + Math.sin(tmp[2] * 37 + tmp[0] * 19);
+        H += P.hairCurl * Math.abs(nz) * 0.6 * smoothstep(-0.2, 0.5, tmp[1]);
+      }
+      if (P.hat) H = lerp(H, Math.min(H, 0.03), smoothstep(HAT_LINE[P.hat.style] - 0.08, HAT_LINE[P.hat.style], tmp[1]));   // под шапкой волосы примяты
       // у линии роста волосы сходят на нет, ниже неё поверхность уходит глубоко под кожу
       const off = H * (0.3 + 0.7 * smoothstep(yh, yh + 0.16, tmp[1])) - (0.25 + 0.3 * H) * (1 - smoothstep(yh - 0.1, yh, tmp[1]));
       const nx = px / prof(P.gx, py), ny = py, nz = pz;
@@ -1107,6 +1298,7 @@ export class ProceduralHead {
     cap.name = 'hair';
     this.headRoot.add(cap);
 
+    if (P.hairTail) this._buildHairTail(P.hairTail);
     if (long) {
       // "занавес" длинных волос сзади и по бокам
       const side = volAt(1, HC - 0.17);                                      // объём у висков (θ ≈ 100°)
@@ -1134,6 +1326,126 @@ export class ProceduralHead {
     }
   }
 
+  /** Головной убор: тело вращения по силуэту черепа + волос (эллипс в плане), козырёк/поля — отдельно. */
+  _buildHat() {
+    const P = this.P, h = P.hat;
+    if (!h) return;
+    const st = h.style || 'beanie', y0 = HAT_LINE[st] ?? 0.45, tmp = [0, 0, 0];
+    const hairT = P.hairStyle === 'none' ? 0.005 : 0.035;
+    // полуоси головы на высоте y: ширина (x) и глубина вперёд/назад (z), центр по z
+    const ell = (y) => {
+      const yy = clamp(y, -0.99, 0.999), r = Math.sqrt(1 - yy * yy);
+      shapeHead(r, yy, 0, P, tmp); const ax = tmp[0];
+      shapeHead(0, yy, r, P, tmp); const zf = tmp[2];
+      shapeHead(0, yy, -r, P, tmp); const zb = tmp[2];
+      return { ax, az: (zf - zb) / 2, cz: (zf + zb) / 2 };
+    };
+    const mat = this._track(new THREE.MeshStandardMaterial({ color: h.color || '#3a4a5a', roughness: st === 'cap' ? 0.7 : 0.92, side: THREE.DoubleSide }));
+    const group = new THREE.Group();
+    group.name = 'hat';
+    // купол: кольца по высоте от края до макушки (поверх волос), для fedora — выше и с заломом
+    const rows = 22, segs = 72, pos = [], idx = [];
+    const topY = st === 'fedora' ? 1.32 : st === 'headband' ? y0 + 0.13 : 1.0 + hairT + 0.1;
+    for (let r = 0; r <= rows; r++) {
+      const t = r / rows, y = lerp(y0, topY, t);
+      const e = ell(Math.min(y, 0.8)), pad = hairT + (st === 'beanie' ? 0.03 + 0.012 * (r < 5 ? 1 : 0) : 0.02);   // выше 0.8 — эллипс купола, а не черепа
+      let k = 1;
+      if (st !== 'headband' && y > 0.8) k = Math.sqrt(Math.max(0, 1 - ((y - 0.8) / (topY - 0.8)) ** 2));   // скругление к макушке (с запасом над волосами)
+      if (st === 'fedora') k = y < 1.2 ? 1 - 0.05 * t : Math.sqrt(Math.max(0, 1 - ((y - 1.2) / 0.12) ** 2));
+      for (let c = 0; c <= segs; c++) {
+        const a = (c / segs) * Math.PI * 2, sx = Math.sin(a), cz = Math.cos(a);
+        let rx = (e.ax + pad) * k, rz = (e.az + pad) * k;
+        if (st === 'fedora') { rx = Math.max(rx, 0.62 * k); rz = Math.max(rz, 0.72 * k); }
+        let yy = y;
+        if (st === 'fedora' && y > 1.15) yy -= 0.06 * Math.exp(-((sx / 0.25) ** 2)) * (1 - Math.abs(cz) * 0.3);   // залом тульи
+        if (st === 'beanie') { const rib = 0.004 * Math.sin(a * 48); rx += rib * (r < 5 ? 1 : 0.4); rz += rib * (r < 5 ? 1 : 0.4); }
+        pos.push(rx * sx, yy, e.cz + rz * cz);
+      }
+    }
+    for (let r = 0; r < rows; r++) for (let c = 0; c < segs; c++) { const a = r * (segs + 1) + c, b = a + 1, d = a + segs + 1, e2 = d + 1; idx.push(a, b, d, b, e2, d); }
+    const dome = this._track(new THREE.BufferGeometry());
+    dome.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    dome.setIndex(idx); dome.computeVertexNormals();
+    group.add(new THREE.Mesh(dome, mat));
+    // козырёк (cap) или поля (fedora)
+    if (st === 'cap' || st === 'fedora') {
+      const e = ell(y0), pts = [], bi = [];
+      const n = 48, W = st === 'cap' ? Math.PI * 0.55 : Math.PI * 2, a0 = st === 'cap' ? -W / 2 : 0;
+      for (let i = 0; i <= n; i++) {
+        const a = a0 + (i / n) * W, sx = Math.sin(a), cz = Math.cos(a);
+        const rx = e.ax + hairT + 0.02, rz = e.az + hairT + 0.02;
+        const ext = st === 'cap' ? 0.42 * Math.cos((a / W) * Math.PI) ** 0.6 : 0.3;
+        const ix = rx * sx, iz = e.cz + rz * cz, ox = (rx + ext) * sx, oz = e.cz + (rz + ext) * cz;
+        const droop = st === 'cap' ? -0.06 : 0.04 * (1 - Math.abs(cz)) - 0.03 * Math.max(0, cz);    // козырёк вниз; поля: бока вверх
+        pts.push(ix, y0 + 0.005, iz, ox, y0 + droop, oz);
+        if (i) { const b = (i - 1) * 2; bi.push(b, b + 1, b + 2, b + 1, b + 3, b + 2); }
+      }
+      const brim = this._track(new THREE.BufferGeometry());
+      brim.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      brim.setIndex(bi); brim.computeVertexNormals();
+      group.add(new THREE.Mesh(brim, mat));
+    }
+    if (st === 'fedora') {                                          // лента на тулье
+      const band = this._track(new THREE.TorusGeometry(1, 0.035, 6, 64));
+      band.rotateX(Math.PI / 2);
+      const e = ell(y0 + 0.08), m = new THREE.Mesh(band, this._track(new THREE.MeshStandardMaterial({ color: '#1a1410', roughness: 0.6 })));
+      m.scale.set(Math.max(e.ax + 0.06, 0.62) * 0.97, 1, Math.max(e.az + 0.06, 0.72) * 0.97); m.position.set(0, y0 + 0.08, e.cz);
+      group.add(m);
+    }
+    this.hat = group;
+    this.headRoot.add(group);
+  }
+
+  /** Серьги на мочках ушей (и когда уши закрыты длинными волосами — висят ниже волос). */
+  _buildEarrings() {
+    const P = this.P, er = P.earrings;
+    if (!er) return;
+    const w = prof(P.gx, -0.06) * 0.998, es = clamp(w / 0.785, 0.85, 1.1), k = (er.size ?? 1) * es;
+    const mat = this._track(new THREE.MeshPhysicalMaterial({ color: er.color || '#e6c36a', metalness: er.style === 'drop' ? 0.1 : 0.95, roughness: er.style === 'drop' ? 0.05 : 0.25, clearcoat: er.style === 'drop' ? 1 : 0, envMapIntensity: 1.6 }));
+    for (const sg of [1, -1]) {
+      const g = new THREE.Group();
+      g.position.set(sg * (w + 0.03), -0.06 - 0.155 * es, -0.03);
+      if (er.style === 'hoop') {
+        const m = new THREE.Mesh(this._track(new THREE.TorusGeometry(0.05 * k, 0.0055 * k, 8, 40)), mat);
+        m.rotation.y = Math.PI / 2; m.position.y = -0.045 * k; g.add(m);
+      } else if (er.style === 'drop') {
+        const chain = new THREE.Mesh(this._track(new THREE.CylinderGeometry(0.0025, 0.0025, 0.05 * k, 6)), this._track(new THREE.MeshStandardMaterial({ color: '#d9b45a', metalness: 0.9, roughness: 0.3 })));
+        chain.position.y = -0.025 * k; g.add(chain);
+        const gem = new THREE.Mesh(this._track(new THREE.SphereGeometry(0.018 * k, 20, 14)), mat);
+        gem.scale.y = 1.35; gem.position.y = -0.068 * k; g.add(gem);
+      } else g.add(new THREE.Mesh(this._track(new THREE.SphereGeometry(0.014 * k, 16, 12)), mat));
+      this.headRoot.add(g);
+    }
+  }
+
+  /** Хвост (сужающаяся трубка от затылка вниз) или пучок (сфера на макушке сзади). */
+  _buildHairTail(kind) {
+    const P = this.P, tmp = [0, 0, 0];
+    const back = (y) => { shapeHead(0, y, -Math.sqrt(Math.max(0, 1 - y * y)), P, tmp); return tmp[2] - 0.03; };
+    let geo;
+    if (kind === 'bun') {
+      geo = this._track(new THREE.SphereGeometry(0.25, 28, 20));
+      const p = geo.attributes.position;
+      for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i), n = 1 + 0.06 * Math.sin(x * 60 + y * 40) * Math.sin(z * 50); p.setXYZ(i, x * n, y * n * 0.8, z * n); }
+      geo.translate(0, 0.78, back(0.78) - 0.12);
+    } else {
+      const pts = [[0, 0.62, back(0.62) + 0.05], [0, 0.48, back(0.48) - 0.12], [0, 0.1, back(0.1) - 0.2], [0, -0.35, back(-0.1) - 0.16], [0, -0.75, back(-0.1) - 0.08]].map((q) => new THREE.Vector3(...q));
+      const curve = new THREE.CatmullRomCurve3(pts), seg = 40, rad = 12;
+      geo = this._track(new THREE.TubeGeometry(curve, seg, 0.14, rad, false));
+      const p = geo.attributes.position;
+      for (let i = 0; i <= seg; i++) {
+        const t = i / seg, c = curve.getPointAt(t), k = (t < 0.12 ? lerp(0.6, 1.15, t / 0.12) : lerp(1.15, 0.35, (t - 0.12) / 0.88)) * (1 + 0.05 * Math.sin(t * 40));
+        for (let j = 0; j <= rad; j++) { const v = i * (rad + 1) + j; p.setXYZ(v, c.x + (p.getX(v) - c.x) * k, c.y + (p.getY(v) - c.y) * k, c.z + (p.getZ(v) - c.z) * k); }
+      }
+    }
+    geo.computeVertexNormals();
+    const col = new Float32Array(geo.attributes.position.count * 3).fill(0.85);
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    const m = new THREE.Mesh(geo, this.mat.hair);
+    m.name = 'hairTail';
+    this.headRoot.add(m);
+  }
+
   _buildEars() {
     if (this.P.hairStyle === 'long' && !this.P.ears) return;
     const geo = this._track(new THREE.SphereGeometry(1, 24, 16));
@@ -1151,6 +1463,87 @@ export class ProceduralHead {
       inner.scale.set(0.5, 0.6, 0.6);
       ear.add(inner);
       this.headRoot.add(ear);
+    }
+  }
+
+  /**
+   * Борода и усы: оболочки над кожей. Борода едет за челюстью и морфами кожи (веса как у губ, см. _mouthPoint),
+   * усы — за верхней губой и рисуются поверх губ. Толщина по маске стиля сходит на нет к краям, края растворяются
+   * через alphaHash (дизеринг без сортировки прозрачности).
+   */
+  _buildBeard() {
+    const P = this.P, bd = P.beard;
+    if (!bd || (bd.style === 'none' && !bd.moustache)) return;
+    const MY = LAYOUT.mouthY, hw = P.mouthHW, L = clamp(bd.length ?? 0.3, 0, 1);
+    const color = new THREE.Color(bd.color || P.beardColor || P.hair);
+    const lipTop = MY + P.lipU + 0.012, lipBot = MY - P.lipL - 0.012;
+    const ss = (a, b, x) => smoothstep(a, b, x);
+    const mat = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairTexture('#' + color.getHexString())), roughness: 0.7, sheen: 0.7, sheenRoughness: 0.4,
+      sheenColor: color.clone().multiplyScalar(2.4).addScalar(0.08), vertexColors: true, alphaHash: true, side: THREE.DoubleSide }));
+    mat.map.repeat.set(10, 3);
+    this.beard = { parts: [] };
+    const part = (name, x0, x1, y0, y1, cols, rows, mask, depth, jaw, extra = {}) => {
+      const geo = this._track(dynamicGrid(cols, rows, false));
+      const n = (cols + 1) * (rows + 1), col = new Float32Array(n * 4), rest = new Float32Array(n * 3), w = new Float32Array(n);
+      for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
+        const i = r * (cols + 1) + c, x = lerp(x0, x1, c / cols), y = lerp(y1, y0, r / rows), t = clamp(mask(x, y), 0, 1);
+        const z0 = this.hm.get(x, y);
+        rest[i * 3] = x; rest[i * 3 + 1] = y - (extra.droop || 0) * t; rest[i * 3 + 2] = depth(t, x, y);
+        w[i] = jaw ? jawWeight(x, y, z0) : 0;
+        const v = lerp(0.55, 1, t) * (0.9 + 0.1 * Math.sin(c * 2.3 + r * 1.7));
+        col.set([v, v, v, ss(0.02, 0.55, t)], i * 4);
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 4));
+      const mesh = new THREE.Mesh(geo, extra.mat || mat);
+      mesh.frustumCulled = false; mesh.name = name;
+      mesh.userData.noShadow = true;                               // тень не учитывает alphaHash: вся сетка дала бы тень-прямоугольник
+      if (extra.renderOrder) mesh.renderOrder = extra.renderOrder;
+      this.headRoot.add(mesh);
+      this.beard.parts.push({ mesh, rest, w, cols, rows });
+    };
+    // маска бороды: граница по щеке (бакенбарды → уголки рта), без губ
+    const cheekTop = (ax) => -0.36 + 0.3 * ss(0.25, 0.62, ax);
+    // вырез под губы — эллипс по контуру губ с мягким краем
+    const lc = (lipTop + lipBot) / 2, lh = (lipTop - lipBot) / 2 + 0.012;
+    const lips = (x, y) => ss(1, 1.25, Math.hypot(x / (hw * 1.1), (y - lc) / lh));
+    const st = bd.style;
+    if (st && st !== 'none') {
+      const mask = (x, y) => {
+        const ax = Math.abs(x);
+        let m = 0;
+        if (st === 'full') m = ss(cheekTop(ax), cheekTop(ax) - 0.07, y) * ss(0.66, 0.56, ax);
+        else if (st === 'goatee') m = ss(0.28, 0.2, ax) * ss(lipBot + 0.01, lipBot - 0.03, y) * ss(-1.02, -0.9, y);
+        else if (st === 'chinstrap') { const top = -0.62 + 0.5 * ss(0.18, 0.62, ax); m = ss(top, top - 0.07, y) * ss(0.66, 0.56, ax); }
+        return m * lips(x, y) * ss(-1.2, -1.05, y);
+      };
+      const depth = (t) => 0.006 + (0.02 + 0.06 * L) * Math.sqrt(t);
+      part('beard', -0.68, 0.68, -1.18, -0.06, 68, 56, mask, depth, true, { droop: 0.07 * L });
+    }
+    const ms = bd.moustache;
+    if (ms) {
+      const wide = ms === 'walrus' ? 1.3 : ms === 'pencil' ? 1.0 : 1.15, H = ms === 'pencil' ? 0.02 : ms === 'walrus' ? 0.11 : 0.075;
+      const mask = (x, y) => {
+        const u = Math.abs(x) / (hw * wide);
+        if (u > 1) return 0;
+        const low = lipTop - 0.012 - (ms === 'walrus' ? 0.03 * (1 - u * u) + 0.05 * ss(0.6, 1, u) : 0.012 * ss(0.7, 1, u));   // walrus свисает на губу
+        const top = lipTop + H * (1 - 0.55 * u * u) - (ms === 'pencil' ? 0 : 0.012 * Math.exp(-((x / 0.025) ** 2)));         // ложбинка под носом
+        return ss(low - 0.006, low + 0.022, y) * ss(top + 0.01, top - 0.03, y) * ss(1, 0.7, u);   // мягкая бахрома снизу и у кончиков
+      };
+      const mmat = this._track(mat.clone());
+      mmat.depthTest = false;                                       // поверх губ (они тоже без теста глубины)
+      const depth = (t, x, y) => 0.034 + (0.012 + 0.03 * L) * Math.sqrt(t) * (0.75 + 0.25 * Math.cos(Math.min(1, Math.abs(x) / (hw * wide)) * Math.PI / 2));
+      part('moustache', -hw * 1.35, hw * 1.35, lipTop - 0.09, lipTop + 0.13, 40, 20, mask, depth, false, { mat: mmat, renderOrder: 25 });
+    }
+  }
+
+  _updateBeard() {
+    if (!this.beard) return;
+    const J = this._jaw;
+    for (const pt of this.beard.parts) {
+      const pos = pt.mesh.geometry.attributes.position.array, n = pos.length / 3;
+      for (let i = 0; i < n; i++) this._mouthPoint(pt.rest[i * 3], pt.rest[i * 3 + 1], pt.rest[i * 3 + 2], pt.w[i], J, pos, i * 3);
+      pt.mesh.geometry.attributes.position.needsUpdate = true;
+      pt.mesh.geometry.computeVertexNormals();
     }
   }
 
@@ -1279,6 +1672,7 @@ export class ProceduralHead {
     }
     this._updateBrows(ch);
     this._updateMouth(ch);
+    this._updateBeard();
   }
 
   dispose() {

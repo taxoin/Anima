@@ -15,7 +15,8 @@
  *   6. manual   — прямые значения каналов из setChannels() (перекрывают всё)
  */
 import * as THREE from 'three';
-import { ProceduralHead, SKIN_TONES, EYE_COLORS, EYE_SHAPES, GLASSES } from './head-model.js';
+import { ProceduralHead, SKIN_TONES, EYE_COLORS, EYE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS } from './head-model.js';
+import { MAKEUP } from './skin-decals.js';
 import {
   CHANNELS, STATE_DEFAULTS, EMOTIONS, MICRO, GESTURES, ALIASES,
   resolveEmotion, applyRestraint, parseNarrative, parseEmotionString, expandChannels,
@@ -402,10 +403,11 @@ export class EmotionalHead {
     const cam = this._faceCam ||= new THREE.PerspectiveCamera(11, 1, 1, 60);
     const W = this.renderer.domElement.width, H = this.renderer.domElement.height;
     cam.aspect = W / H; cam.position.set(0, -0.3, 19); cam.lookAt(0, -0.3, 0); cam.updateProjectionMatrix();
-    const gl = this.rig.glasses;                                   // очки мешают распознаванию — на снимке их нет
-    if (gl) gl.visible = false;
+    // очки, борода и усы сбивают распознавание на рендере (форма лица под ними та же) — на снимке их нет
+    const hide = [this.rig.glasses, ...(this.rig.beard?.parts || []).map((q) => q.mesh)].filter(Boolean);
+    hide.forEach((m) => (m.visible = false));
     this.renderStill(o.channels || {}, {}, cam);
-    if (gl) gl.visible = true;
+    hide.forEach((m) => (m.visible = true));
     const s = Math.min(W, H), c = document.createElement('canvas');
     c.width = c.height = size;
     const g = c.getContext('2d');
@@ -957,5 +959,5 @@ function mirrorName(k) {
 function mirrorChannels(ch) { const o = {}; for (const k in ch) o[mirrorName(k)] = ch[k]; return o; }
 
 // реэкспорт, чтобы хватало одного импорта
-export { SKIN_TONES, EYE_COLORS, EYE_SHAPES, GLASSES, CHANNELS, EMOTIONS, MICRO, GESTURES, ALIASES, VISEMES, WebSpeech, parseNarrative, parseEmotionString, parseMarkup, resolveEmotion };
+export { SKIN_TONES, EYE_COLORS, EYE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS, MAKEUP, CHANNELS, EMOTIONS, MICRO, GESTURES, ALIASES, VISEMES, WebSpeech, parseNarrative, parseEmotionString, parseMarkup, resolveEmotion };
 export default EmotionalHead;

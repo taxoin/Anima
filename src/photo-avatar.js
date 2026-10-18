@@ -488,6 +488,7 @@ export class Portrait {
     this._measure();
     this._colors();
     this._hair();
+    this._facialHair();
     this._glasses();
     this._texture();
     this._fits = new Map();
@@ -695,6 +696,60 @@ export class Portrait {
     if (cols.length > 50) {                       // воспринимаемый цвет — светлая половина (без теней у корней)
       cols.sort((a, b) => lum(...a) - lum(...b));
       this.hairColor = robustColor(cols.slice(Math.floor(cols.length * 0.45), Math.floor(cols.length * 0.95)));
+    }
+  }
+
+  /**
+   * Борода и усы по зонам лица: доля маски волос, контраст яркости и «текстурность» (локальный разброс яркости)
+   * относительно чистой щеки. Результат — this.facial { stache, chin, jaw, side, … } и this.beardStyle.
+   */
+  _facialHair() {
+    const W = this.img.width, H = this.img.height, M = this.hairMask, hd = this.head;
+    const hw = Math.abs(hd[291].x - hd[61].x) / 2, MYp = (hd[13].y + hd[14].y) / 2, top = hd[0].y, bot = hd[17].y;
+    const sample = (x0, x1, y0, y1) => {
+      const ls = [], cols = [];
+      let n = 0, h = 0, tex = 0;
+      for (let y = y0; y <= y1; y += 0.012) for (let x = x0; x <= x1; x += 0.012) for (const sg of [1, -1]) {
+        const q = this.fromHead(sg * x, y);
+        if (q.x < 1 || q.y < 1 || q.x >= W - 2 || q.y >= H - 2) continue;
+        const c = this._rgb(q.x, q.y), c2 = this._rgb(q.x + 2, q.y + 1);
+        if (!c || !c2) continue;
+        n++; ls.push(lum(...c)); cols.push(c); tex += Math.abs(lum(...c) - lum(...c2));
+        if (M && M.data[Math.floor((q.y / H) * M.h) * M.w + Math.floor((q.x / W) * M.w)]) h++;
+        if (x === 0) break;                                          // средняя линия — один раз
+      }
+      ls.sort((a, b) => a - b);
+      return { n, hair: n ? h / n : 0, lum: ls.length ? ls[ls.length >> 1] : 0, tex: n ? tex / n : 0, cols };
+    };
+    const ref = sample(0.3, 0.42, -0.14, -0.02);                     // чистая щека под глазом
+    const Z = {
+      stache: sample(0, hw * 0.9, top + 0.012, top + 0.07),
+      corner: sample(hw * 0.95, hw * 1.25, bot, top),                // сбоку от уголков рта (свисающие усы, борода)
+      chin: sample(0, 0.15, -0.84, bot - 0.04),
+      jaw: (() => { const ow = ovalHalfWidth(hd, -0.52) || 0.5; return sample(ow * 0.55, ow * 0.78, -0.62, -0.42); })(),   // внутри овала: снаружи — волосы и фон
+    };
+    // пороги подобраны на 15 портретах: маска волос бороду почти не видит, решают контраст и текстура.
+    // Белые усы на ч/б фото (Эйнштейн) так не находятся; тени под губой на контрастных снимках — частая ложная «борода».
+    const TH = { stache: [0.45, 1.95], corner: [0.3, 2.6], chin: [0.55, 9], jaw: [0.45, 9] };
+    const score = (z, k) => {
+      const dark = (ref.lum - z.lum) / Math.max(0.05, ref.lum), tex = z.tex / Math.max(0.004, ref.tex);
+      const [d0, t0] = TH[k], on = z.hair > 0.35 || dark > d0 || tex > t0 || (k === 'corner' && dark > d0 && tex > 1.6);
+      return { hair: +z.hair.toFixed(2), dark: +dark.toFixed(2), tex: +tex.toFixed(2), on };
+    };
+    const F = {};
+    for (const k in Z) F[k] = score(Z[k], k);
+    this.facial = F;
+    // стиль
+    const st = F.chin.on && F.jaw.on ? 'full' : F.chin.on ? 'goatee' : 'none';
+    const ms = F.stache.on ? (F.corner.on && st === 'none' ? 'walrus' : 'regular') : false;
+    let style = st;
+    if (st === 'full' && !F.stache.on) style = 'chinstrap';
+    this.beardStyle = style === 'none' && !ms ? null : { style, moustache: ms, length: 0.35 };
+    if (this.beardStyle) {
+      const pool = [...(F.chin.on ? Z.chin.cols : []), ...(F.jaw.on ? Z.jaw.cols : []), ...(F.stache.on ? Z.stache.cols : [])];
+      pool.sort((a, b) => lum(...a) - lum(...b));
+      const c = robustColor(pool.slice(Math.floor(pool.length * 0.3)));   // светлая часть: тени между волосками темнее цвета
+      if (c) this.beardStyle.color = hex(c.map((v) => Math.min(1, v * 1.35)));   // волосок светлее среднего по зоне (тени между волосками)
     }
   }
 
@@ -1000,6 +1055,11 @@ export class Portrait {
       };
       ov.hairVol = this.hairR.map((r, i) => (r === null ? 0.04 : clamp(r - skull(i * 20), 0.015, 0.32)));
     }
+    // борода/усы с фото — только для мужской основы (на женских портретах тени у рта дают ложные срабатывания)
+    if (this.beardStyle && gender === 'male') {
+      ov.beard = { ...this.beardStyle };
+      if (ov.stubble) ov.stubble = Math.min(ov.stubble, 0.8);
+    }
     if (this.glasses?.detected) {
       const g = this.glasses;
       const thin = g.frac < 0.02;                                    // мало пикселей оправы — тонкая (металлическая) оправа
@@ -1119,7 +1179,7 @@ export class Portrait {
       origin: [r4(c.x), r4(c.y)], lm: b64(new Uint8Array(lm.buffer)),
       meas, warnings: this.warnings, expression: Object.fromEntries(Object.entries(this.expression).map(([k, v]) => [k, r4(v)])),
       colors: { skinPhoto: rc(this.skinPhoto), skin: rc(this.skinTex), lip: rc(this.lipColor), brow: rc(this.browColor), iris: rc(this.irisColor), hair: rc(this.hairColor), cloth: rc(this.clothColor) },
-      lidTex: rc(this.lidTex), beard: r4(this.beard), grayscale: !!this.grayscale, glasses: this.glasses || null,
+      lidTex: rc(this.lidTex), beard: r4(this.beard), grayscale: !!this.grayscale, glasses: this.glasses || null, beardStyle: this.beardStyle || null,
       bs: this.bs ? Object.fromEntries(Object.entries(this.bs).filter(([, v]) => v > 0.03).map(([k, v]) => [k, Math.round(v * 100) / 100])) : null,
       hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY), r: this.hairR ? this.hairR.map(r4) : null, bang: this.bang ? { side: this.bang.side, depth: r4(this.bang.depth) } : null },
       tex: null,
@@ -1159,7 +1219,7 @@ export class Portrait {
     const C = d.colors || {};
     p.skinPhoto = C.skinPhoto || C.skin || [0.85, 0.68, 0.58]; p.skinTex = C.skin || p.skinPhoto;
     p.lipColor = C.lip; p.browColor = C.brow; p.irisColor = C.iris; p.hairColor = C.hair; p.clothColor = C.cloth;
-    p.lidTex = d.lidTex; p.beard = d.beard || 0; p.grayscale = !!d.grayscale; p.bs = d.bs || null; p.glasses = d.glasses || null;
+    p.lidTex = d.lidTex; p.beard = d.beard || 0; p.grayscale = !!d.grayscale; p.bs = d.bs || null; p.glasses = d.glasses || null; p.beardStyle = d.beardStyle || null;
     p.hairStyle = d.hair?.style ?? null; p.hairBottom = d.hair?.bottom ?? null; p.hairlineY = d.hair?.line ?? null;
     p.hairR = d.hair?.r ?? null; p.bang = d.hair?.bang ?? null;
     p.tex = null;
@@ -1182,7 +1242,7 @@ export class Portrait {
   get report() {
     const hx = (c) => (c ? hex(c) : null);
     return {
-      warnings: this.warnings, yaw: +this.yaw.toFixed(3), expression: this.expression, glasses: this.glasses,
+      warnings: this.warnings, yaw: +this.yaw.toFixed(3), expression: this.expression, glasses: this.glasses, beard: this.beardStyle,
       hairStyle: this.hairStyle, colors: { skin: hx(this.skinTex), lip: hx(this.lipColor), brow: hx(this.browColor), iris: hx(this.irisColor), hair: hx(this.hairColor), cloth: hx(this.clothColor) },
       measures: Object.fromEntries(Object.entries(this.meas).filter(([, v]) => typeof v === 'number').map(([k, v]) => [k, +(v / MEAN_M[k]).toFixed(3)])),
       widths: this.meas.widths.map((v) => +v.toFixed(3)),
