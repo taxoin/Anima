@@ -44,6 +44,12 @@ export const CASES = [
   { name: 'avatar-truman-glasses', avatar: '/tests/fixtures/truman.anima.json', gender: 'male' },
   { name: 'avatar-lincoln', avatar: '/tests/fixtures/lincoln.anima.json', gender: 'male' },
   { name: 'avatar-monalisa-smile', avatar: '/tests/fixtures/monalisa.anima.json', channels: SMILE, framing: 'close' },
+  // волна 4: деформация по точкам, нос, убор, пряди со спины (губы не просвечивают), роговица сбоку
+  { name: 'avatar-lincoln-shape', avatar: '/tests/fixtures/lincoln-shape.anima.json', gender: 'male' },
+  { name: 'male-roman-nose-profile', gender: 'male', look: { noseShape: 'roman' }, pose: { yaw: 1.25 } },
+  { name: 'female-snub-bowler', gender: 'female', look: { noseShape: 'snub', hat: 'bowler', hairStyle: 'bob' }, pose: { yaw: 0.5 } },
+  { name: 'female-bob-back', gender: 'female', look: { hairStyle: 'bob', hair: '#a87a4a' }, pose: { yaw: 2.6 } },
+  { name: 'female-cornea-side', gender: 'female', framing: 'close', pose: { yaw: -0.6, eyeYaw: 0.45 } },
 ];
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg' };

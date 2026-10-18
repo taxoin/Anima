@@ -439,20 +439,24 @@ function eyeballGeometry(R) {
 }
 
 /** Преломление в роговице для материала глаза (см. eyeballGeometry). */
-function corneaShader(mat, R) {
+function corneaShader(mat, R, U) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uEyeR = { value: R };
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vEyeP;\nvarying vec3 vEyeN;\nvarying vec3 vEyeCam;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvEyeP = position; vEyeN = normal; vEyeCam = (inverse(modelMatrix) * vec4(cameraPosition, 1.0)).xyz;');
+    sh.uniforms.uCornea = U;
+    // uCornea = 0: яблоко без выпуклости (кадры для измерений) — вершины обратно на сферу радиуса R
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uEyeR;\nuniform float uCornea;\nvarying vec3 vEyeP;\nvarying vec3 vEyeN;\nvarying vec3 vEyeCam;')
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n\tif ( uCornea < 0.5 ) objectNormal = normalize( position );')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tif ( uCornea < 0.5 ) transformed = position * ( uEyeR / length( position ) );\n\tvEyeP = position; vEyeN = normal; vEyeCam = (inverse(modelMatrix) * vec4(cameraPosition, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
 uniform float uEyeR;
+uniform float uCornea;
 varying vec3 vEyeP;
 varying vec3 vEyeN;
 varying vec3 vEyeCam;`).replace('#include <map_fragment>', `
 #ifdef USE_MAP
 	vec4 sampledDiffuseColor = texture2D( map, vMapUv );
 	float eyeA = acos( clamp( vEyeP.z / length( vEyeP ), -1.0, 1.0 ) );
-	if ( eyeA < ${CORNEA_A.toFixed(3)} ) {
+	if ( eyeA < ${CORNEA_A.toFixed(3)} && uCornea > 0.5 ) {
 		vec3 rd = refract( normalize( vEyeP - vEyeCam ), normalize( vEyeN ), ${(1 / 1.376).toFixed(4)} );
 		if ( rd.z < -1e-3 ) {
 			vec3 q = vEyeP + rd * ( ( uEyeR * ${Math.cos(CORNEA_A).toFixed(4)} - vEyeP.z ) / rd.z );   // плоскость радужки
@@ -599,6 +603,42 @@ function hairTexture(color) {
   return tex;
 }
 
+/** Альфа-текстура пряди для карточек: тонкие волоски разной длины и яркости, прозрачный фон (детерминированно). */
+function hairCardTexture(color) {
+  const W = 128, H = 512, c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d'), base = new THREE.Color(color);
+  let seed = 3;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  for (let i = 0; i < 46; i++) {
+    const x = W * (0.1 + 0.8 * rnd()), l = 0.8 + 0.35 * rnd(), y0 = H * 0.12 * rnd(), end = H * (0.5 + 0.5 * rnd()), sway = (rnd() - 0.5) * 14;
+    const col = base.clone().multiplyScalar(l), a = 0.5 + 0.5 * rnd();
+    const g = ctx.createLinearGradient(0, y0, 0, end);
+    const rgb = `${Math.min(255, col.r * 255) | 0},${Math.min(255, col.g * 255) | 0},${Math.min(255, col.b * 255) | 0}`;
+    g.addColorStop(0, `rgba(${rgb},0)`); g.addColorStop(0.15, `rgba(${rgb},${a})`); g.addColorStop(0.7, `rgba(${rgb},${a})`); g.addColorStop(1, `rgba(${rgb},0)`);   // у корня и к кончику — на нет
+    ctx.strokeStyle = g; ctx.lineWidth = 0.9 + 1.4 * rnd();
+    ctx.beginPath(); ctx.moveTo(x, y0); ctx.bezierCurveTo(x + sway * 0.3, end * 0.35, x + sway, end * 0.7, x + sway * 1.3, end); ctx.stroke();
+  }
+  // края карточки растворяются (иначе видна прямоугольная лента)
+  const img = ctx.getImageData(0, 0, W, H), d = img.data;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) d[(y * W + x) * 4 + 3] *= smoothstep(0, 0.18, Math.min(x, W - 1 - x) / W);
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+/** Раскачка волос в вершинном шейдере: transformed += uHairSwing · hairSw (атрибут; нет атрибута — 0). */
+function hairSwayShader(mat, uniforms, key) {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uHairSwing = uniforms.uHairSwing;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float hairSw;\nuniform vec3 uHairSwing;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\ttransformed += uHairSwing * hairSw;');
+  };
+  mat.customProgramCacheKey = () => key;
+}
+
 // ------------------------------------------------------------------ динамические геометрии
 
 /** Сетка (cols+1)×(rows+1) с перезаписываемыми позициями — для губ, полости рта, зубов. */
@@ -727,6 +767,11 @@ export class ProceduralHead {
       const hc = new THREE.Color(P.hair), sc = new THREE.Color(P.skin), k = P.hairScalp;
       this.mat.hair.color.setRGB(lerp(1, sc.r / Math.max(0.03, hc.r), k * 0.35), lerp(1, sc.g / Math.max(0.03, hc.g), k * 0.35), lerp(1, sc.b / Math.max(0.03, hc.b), k * 0.35));
     }
+    // пряди-карточки: блик как у оболочки, альфа по текстуре прядей (alpha-to-coverage — без сортировки прозрачности)
+    this.mat.hairCards = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairCardTexture(P.hair)), roughness: 0.5, anisotropy: (P.hairAniso ?? 0.6) * 0.5, anisotropyRotation: Math.PI / 2, sheen: 0.6, sheenColor: new THREE.Color(P.hair).multiplyScalar(2.2), sheenRoughness: 0.35, vertexColors: true, alphaToCoverage: true, alphaTest: 0.02, side: THREE.DoubleSide, envMapIntensity: 0.4 }));
+    this._hairU = { uHairSwing: { value: new THREE.Vector3() } };
+    hairSwayShader(this.mat.hair, this._hairU, 'hair-sway');
+    hairSwayShader(this.mat.hairCards, this._hairU, 'hair-cards-sway');
     this.mat.lid = this._track(this.mat.skin.clone());
     this.mat.lid.vertexColors = true;
     this.mat.lid.side = THREE.DoubleSide;
@@ -948,9 +993,12 @@ export class ProceduralHead {
   // ---------------- глаза и веки
   _buildEyes() {
     const P = this.P, E = this.eye;
-    const ballGeo = this._track(eyeballGeometry(E.r));
-    corneaShader(this.mat.eye, E.r);
-    if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r);
+    const ballGeo = this._track(P.cornea === false ? new THREE.SphereGeometry(E.r, 48, 32).rotateX(Math.PI / 2) : eyeballGeometry(E.r));
+    this._corneaU = { value: 1 };
+    if (P.cornea !== false) {
+      corneaShader(this.mat.eye, E.r, this._corneaU);
+      if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r, this._corneaU);
+    }
     const phiS = Math.PI / 2 - 1.75, phiL = 3.5;
     const upGeo = this._track(new THREE.SphereGeometry(E.rs, 56, 14, phiS, phiL, 0, Math.PI / 2));
     const loGeo = this._track(new THREE.SphereGeometry(E.rl, 56, 10, phiS, phiL, Math.PI / 2, Math.PI / 2));
@@ -1379,7 +1427,8 @@ export class ProceduralHead {
       return lerp(lineF[i], lineF[i + 1], smoothstep(0, 1, u - i));
     };
     const tmp = [0, 0, 0];
-    const geo = this._track(sphereGrid(220, 160, (px, py, pz, out) => {
+    /** Точка оболочки волос по направлению (px, py, pz) единичной сферы; возвращает высоту на голове и линию роста. */
+    const shellAt = (px, py, pz, out) => {
       shapeHead(px, py, pz, P, tmp);
       if (this._warpF) this._warpF(tmp);
       const a = Math.atan2(tmp[0], tmp[2]);
@@ -1400,8 +1449,11 @@ export class ProceduralHead {
       const off = H * (0.3 + 0.7 * smoothstep(yh, yh + 0.16, tmp[1])) - (0.25 + 0.3 * H) * (1 - smoothstep(yh - 0.1, yh, tmp[1]));
       const nx = px / prof(P.gx, py), ny = py, nz = pz;
       const nl = Math.hypot(nx, ny, nz) || 1;
+      const y = tmp[1];
       out[0] = tmp[0] + (nx / nl) * off; out[1] = tmp[1] + (ny / nl) * off; out[2] = tmp[2] + (nz / nl) * off;
-    }));
+      return y - yh;                                                         // > 0 — выше линии роста
+    };
+    const geo = this._track(sphereGrid(220, 160, shellAt));
     geo.computeVertexNormals();
     // цвет: корни темнее, верх с бликом
     const p = geo.attributes.position.array, col = new Float32Array(p.length);
@@ -1412,31 +1464,121 @@ export class ProceduralHead {
     this.headRoot.add(cap);
 
     if (P.hairTail) this._buildHairTail(P.hairTail);
+    /** Занавес длинных волос: угол a вокруг головы (0 — лицо), t = 0 у висков … 1 у кончиков. */
+    const curtainAt = (a, t, out, wk = 1) => {
+      const bottom = (P.hairBottom ?? -1.55) + 0.07 * Math.sin(a * 5) + 0.05 * Math.sin(a * 13);
+      const y = lerp(0.42, bottom, t);
+      const flare = smoothstep(-0.2, -1.5, y);
+      const front = Math.cos(a) > 0 ? Math.cos(a) : 0;
+      const jaw = smoothstep(0.1, -0.7, y) * (1 - smoothstep(-0.9, -1.3, y)) * front;   // у лица пряди ближе к щекам
+      const rx = (0.84 + 0.1 * flare + 0.012 * Math.sin(a * 9 + y * 3) - 0.1 * jaw) * wk;
+      const rz = 0.86 + 0.06 * flare + 0.012 * Math.sin(a * 7 - y * 2) - 0.12 * jaw;
+      out[0] = rx * Math.sin(a); out[1] = y; out[2] = -0.08 + rz * Math.cos(a);
+      return out;
+    };
+    let wkC = 1;
     if (long) {
       // "занавес" длинных волос сзади и по бокам
       const side = volAt(1, HC - 0.17);                                      // объём у висков (θ ≈ 100°)
-      const cols = 64, rows = 30, a0 = 1.0, wk = prof(P.gx, 0) / 0.755 * (side === null ? 1 : clamp(1 + (side - 0.07) / 0.84, 0.92, 1.35));   // занавес по ширине головы и волос
+      const cols = 64, rows = 30, a0 = 1.0, wk = wkC = prof(P.gx, 0) / 0.755 * (side === null ? 1 : clamp(1 + (side - 0.07) / 0.84, 0.92, 1.35));   // занавес по ширине головы и волос
       const g = this._track(dynamicGrid(cols, rows, true));
-      const pos = g.attributes.position.array, c = g.attributes.color.array;
+      const pos = g.attributes.position.array, c = g.attributes.color.array, q = [0, 0, 0], sw = new Float32Array(pos.length / 3);
       for (let r = 0; r <= rows; r++) for (let i = 0; i <= cols; i++) {
         const a = a0 + (i / cols) * (Math.PI * 2 - 2 * a0);
-        const bottom = (P.hairBottom ?? -1.55) + 0.07 * Math.sin(a * 5) + 0.05 * Math.sin(a * 13);
-        const y = lerp(0.42, bottom, r / rows);
-        const flare = smoothstep(-0.2, -1.5, y);
-        const front = Math.cos(a) > 0 ? Math.cos(a) : 0;
-        const jaw = smoothstep(0.1, -0.7, y) * (1 - smoothstep(-0.9, -1.3, y)) * front;   // у лица пряди ближе к щекам
-        const rx = (0.84 + 0.1 * flare + 0.012 * Math.sin(a * 9 + y * 3) - 0.1 * jaw) * wk;
-        const rz = 0.86 + 0.06 * flare + 0.012 * Math.sin(a * 7 - y * 2) - 0.12 * jaw;
+        curtainAt(a, r / rows, q, wk);
         const k = (r * (cols + 1) + i) * 3;
-        pos[k] = rx * Math.sin(a); pos[k + 1] = y; pos[k + 2] = -0.08 + rz * Math.cos(a);
+        pos[k] = q[0]; pos[k + 1] = q[1]; pos[k + 2] = q[2];
+        sw[k / 3] = (r / rows) ** 2;                                        // раскачка растёт к кончикам
         const v = lerp(0.95, 0.55, r / rows) * (0.9 + 0.1 * Math.sin(i * 1.7));
         c[k] = c[k + 1] = c[k + 2] = v;
       }
+      g.setAttribute('hairSw', new THREE.BufferAttribute(sw, 1));
       g.computeVertexNormals();
       const curtain = new THREE.Mesh(g, this.mat.hair);
       curtain.name = 'hairLong';
       this.headRoot.add(curtain);
     }
+    if (P.hairCards ?? !(P.hairScalp || P.hairCurl)) this._buildHairCards(shellAt, long ? (a, t, o) => curtainAt(a, t, o, wkC) : null, volAt);
+  }
+
+  /**
+   * Пряди-карточки (1.7–1.9) поверх оболочки: ленты с альфа-текстурой прядей, корни на скальпе, пряди текут
+   * от макушки по оболочке, у длинных — дальше по занавесу. Прозрачность — alpha-to-coverage (MSAA, без сортировки), тени
+   * отбрасывает оболочка. Раскачка — вершинный шейдер: hairSw (0 у корня → 1 у кончика) × смещение пружины
+   * (_updateHairSwing). Детерминированный ГПСЧ: одинаковая причёска при каждой сборке.
+   */
+  _buildHairCards(shellAt, curtainAt, volAt) {
+    const P = this.P, long = !!curtainAt, n = P.hairCards > 1 ? P.hairCards : long ? 420 : 300;
+    let seed = 7;
+    const rnd = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const V = THREE.Vector3, C = new V(0, 0.82, -0.57).normalize();          // макушка (завиток) — пряди расходятся от неё
+    const side = P.bangSide ?? (long ? -1 : 0), q = [0, 0, 0];
+    const pos = [], uv = [], col = [], sw = [], idx = [];
+    const u = new V(), t = new V(), p = new V(), pPrev = new V(), nrm = new V(), b = new V(), X = new V(1, 0, 0), D = new V(0, -1, 0);
+    const seg = long ? 10 : 6;
+    for (let k = 0, tries = 0; k < n && tries < n * 20; tries++) {
+      // корень: равномерно по сфере, выше линии роста (с запасом)
+      const z = rnd() * 2 - 1, ph = rnd() * Math.PI * 2, r = Math.sqrt(1 - z * z);
+      u.set(r * Math.cos(ph), z, r * Math.sin(ph));
+      if (u.y < -0.2 || shellAt(u.x, u.y, u.z, q) < 0.06) continue;
+      const v = volAt(q[0], q[1]);
+      if (v !== null && v < 0.025) continue;                                  // выбритые зоны (андеркат) — без прядей
+      k++;
+      const len = (long ? 0.55 : 0.32) * (0.7 + 0.5 * rnd()), w = (long ? 0.075 : 0.06) * (0.75 + 0.5 * rnd()), lift = 0.003 + 0.01 * rnd();
+      const shade = 0.8 + 0.3 * rnd(), base = pos.length / 3, pts = [];
+      // шагаем по сфере направлений: от макушки, у лица — в сторону пробора, по бокам длинных — вниз
+      const step = len / seg / 0.9;
+      let onCurtain = false, ca = 0, ct = 0;
+      for (let i = 0; i <= seg; i++) {
+        if (!onCurtain) {
+          shellAt(u.x, u.y, u.z, q); p.set(q[0], q[1], q[2]);
+          nrm.copy(u);
+          if (long && i > 0 && p.y < 0.42 && Math.abs(Math.atan2(p.x, p.z + 0.08)) > 1.0) { onCurtain = true; ca = Math.atan2(p.x, p.z + 0.08); ct = 0; }
+        }
+        if (onCurtain) { curtainAt(ca, ct, q); p.set(q[0], q[1], q[2]); nrm.set(Math.sin(ca), 0, Math.cos(ca)); }
+        if (!pts.length || pts[pts.length - 1].p.distanceToSquared(p) > 1e-6)   // совпавшие узлы (конец занавеса) — пропуск
+          pts.push({ p: p.clone(), n: nrm.clone(), ct: onCurtain ? ct : null });   // на занавесе вес раскачки = как у занавеса (ct²)
+        if (onCurtain) ct = Math.min(1, ct + step / 1.6);
+        if (!onCurtain) {
+          t.copy(C).addScaledVector(u, -u.dot(C)).multiplyScalar(-1);       // касательная «от макушки»
+          if (u.z > 0.3 && side) t.addScaledVector(X, side * 0.5 * smoothstep(0.3, 0.8, u.z));
+          if (long) t.addScaledVector(D, 0.6 * smoothstep(0.2, 0.9, Math.abs(u.x)));
+          t.addScaledVector(u, -u.dot(t));
+          if (t.lengthSq() < 1e-8) t.set(0, 0, -1);
+          u.addScaledVector(t.normalize(), step).normalize();
+          if (!long && shellAt(u.x, u.y, u.z, q) < 0.0) break;                // у линии роста короткая прядь кончается
+        }
+      }
+      if (pts.length < 3) { k--; continue; }
+      const m = pts.length - 1;
+      for (let i = 0; i <= m; i++) {
+        const a = pts[i], f = i / m, dir = (i < m ? pts[i + 1].p : a.p).clone().sub(i < m ? a.p : pts[i - 1].p).normalize();
+        b.crossVectors(dir, a.n);
+        if (b.lengthSq() < 1e-10) b.set(1, 0, 0); else b.normalize();
+        const ww = w * (1 - 0.55 * f) / 2, h = lift + 0.006 * f;
+        for (const s of [-1, 1]) {
+          pos.push(a.p.x + a.n.x * h + b.x * ww * s, a.p.y + a.n.y * h + b.y * ww * s, a.p.z + a.n.z * h + b.z * ww * s);
+          uv.push(s < 0 ? 0 : 1, 1 - f);
+          const v = shade * lerp(0.62, 1.05, smoothstep(0, 0.5, f));
+          col.push(v, v, v);
+          sw.push(a.ct !== null ? a.ct * a.ct : 0.12 * f * f);
+        }
+        if (i) { const o = base + (i - 1) * 2; idx.push(o, o + 1, o + 2, o + 1, o + 3, o + 2); }
+      }
+    }
+    const geo = this._track(new THREE.BufferGeometry());
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    geo.setAttribute('hairSw', new THREE.Float32BufferAttribute(sw, 1));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, this.mat.hairCards);
+    mesh.name = 'hairCards';
+    mesh.userData.noShadow = true;                                    // тень по альфе не считается — тень даёт оболочка
+    mesh.frustumCulled = false;
+    this.headRoot.add(mesh);
+    this.hairCards = mesh;
   }
 
   /** Головной убор: тело вращения по силуэту черепа + волос (эллипс в плане), козырёк/поля — отдельно. */
@@ -1761,6 +1903,11 @@ export class ProceduralHead {
 
     // голова
     this.headPivot.rotation.set(pose.pitch, pose.yaw, pose.roll);
+    this._updateHairSwing(pose);
+    // губы и усы рисуются без теста глубины (поверх полости рта) — со спины их прячем, иначе просвечивают сквозь затылок
+    const facing = Math.cos(pose.yaw) * Math.cos(pose.pitch) > 0.05;
+    if (this.mouth.lipU) this.mouth.lipU.visible = this.mouth.lipL.visible = facing;
+    for (const pt of this.beard?.parts || []) if (pt.mesh.name === 'moustache') pt.mesh.visible = facing && !pt.mesh.userData.hidden;   // hidden — скрыты снаружи (кадр для метрики)
     const br = pose.breath || 0;
     this.body.position.y = br * 0.012;
     this.body.scale.set(1 + br * 0.006, 1, 1 + br * 0.01);
@@ -1795,6 +1942,37 @@ export class ProceduralHead {
     this._updateBrows(ch);
     this._updateMouth(ch);
     this._updateBeard();
+  }
+
+  /** Преломление в роговице вкл/выкл (кадры для измерений рендерятся без него — см. EmotionalHead._shotFace). */
+  setCornea(on) { if (this._corneaU) this._corneaU.value = on ? 1 : 0; }
+
+  /**
+   * Пружина раскачки волос (1.9): смещение кончиков d в системе головы. Масса «помнит» положение в мире —
+   * при повороте головы кончики отстают, потом догоняют с затуханием; гравитация тянет их вниз мира
+   * при наклоне. pose.still — сразу равновесие (детерминированные кадры renderStill).
+   */
+  _updateHairSwing(pose) {
+    const S = (this._swing ||= { d: new THREE.Vector3(), v: new THREE.Vector3(), q: new THREE.Quaternion(), t: 0, init: false, tmp: new THREE.Vector3(), tgt: new THREE.Vector3() });
+    const q = new THREE.Quaternion().setFromEuler(this.headPivot.rotation);
+    const qi = q.clone().invert();
+    // гравитация в системе головы: при наклоне длинные волосы свисают «вниз мира»
+    S.tgt.set(0, -1, 0).applyQuaternion(qi).sub(new THREE.Vector3(0, -1, 0)).multiplyScalar(0.18);
+    const now = performance.now() / 1000, dt = S.init ? Math.min(0.05, Math.max(0, now - S.t)) : 0;
+    S.t = now;
+    if (pose.still || !S.init) { S.d.copy(S.tgt); S.v.set(0, 0, 0); S.init = true; }
+    else if (dt > 0) {
+      // поворот головы за кадр: точка R + d, неподвижная в мире, в новой системе головы
+      const R = S.tmp.set(0, -0.45, -0.55);                            // типичный кончик относительно шарнира шеи
+      const w = R.clone().add(S.d).applyQuaternion(qi.clone().multiply(S.q)).sub(R);   // q⁻¹·q_prev·(R + d) − R
+      S.d.lerp(w, 0.85);                                               // не вся масса отстаёт (корни держат)
+      const k = 55, c = 2 * Math.sqrt(k) * 0.45;                    // недодемпфирована: одно-два качания и покой
+      S.v.addScaledVector(S.tgt.clone().sub(S.d).multiplyScalar(k).addScaledVector(S.v, -c), dt);
+      S.d.addScaledVector(S.v, dt);
+      if (S.d.length() > 0.22) S.d.setLength(0.22);
+    }
+    S.q.copy(q);
+    this._hairU?.uHairSwing.value.copy(S.d);
   }
 
   dispose() {

@@ -444,10 +444,13 @@ export class EmotionalHead {
     const W = this.renderer.domElement.width, H = this.renderer.domElement.height;
     cam.aspect = W / H; cam.position.set(0, -0.3, 19); cam.lookAt(0, -0.3, 0); cam.updateProjectionMatrix();
     // очки, борода и усы сбивают распознавание на рендере (форма лица под ними та же) — на снимке их нет
+    // роговица увеличивает радужку, и MediaPipe сдвигает точки век (глаза +0.5, брови +0.6 к rms); калибровка основы — без неё
     const hide = [this.rig.glasses, ...(this.rig.beard?.parts || []).map((q) => q.mesh)].filter(Boolean);
-    hide.forEach((m) => (m.visible = false));
+    hide.forEach((m) => { m.visible = false; m.userData.hidden = true; });
+    this.rig.setCornea?.(false);
     this.renderStill(o.channels || {}, {}, cam);
-    hide.forEach((m) => (m.visible = true));
+    this.rig.setCornea?.(true);
+    hide.forEach((m) => { m.visible = true; m.userData.hidden = false; });
     const s = Math.min(W, H), c = document.createElement('canvas');
     c.width = c.height = size;
     const g = c.getContext('2d');
@@ -633,7 +636,7 @@ export class EmotionalHead {
   renderStill(channels = {}, pose = {}, camera = this.camera) {
     const ch = { ...channels };                                    // + не-ARKit каналы (tongueUp)
     for (const c of CHANNELS) ch[c] = channels[c] || 0;
-    this.rig.update(ch, { pitch: 0, yaw: 0, roll: 0, eyeYaw: 0, eyePitch: 0, breath: 0, focus: 8, ...pose });
+    this.rig.update(ch, { pitch: 0, yaw: 0, roll: 0, eyeYaw: 0, eyePitch: 0, breath: 0, focus: 8, still: true, ...pose });   // still: волосы в равновесии
     this.renderer.render(this.scene, camera);
     return this.renderer.domElement;
   }

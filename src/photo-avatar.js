@@ -1067,7 +1067,7 @@ export class Portrait {
       brow,
       noseTipY: clamp(-0.21 + car('noseTip') - Mn.noseTip, -0.3, -0.13),
       noseW: clamp(0.07 * ratio('noseW'), 0.05, 0.1),
-      noseBridge: clamp(ratio('noseBr') ** 1.5, 0.7, 1.4),           // ширина спинки (MediaPipe по светотени — с осторожностью)
+      ...(typeof Q.noseBr === 'number' ? { noseBridge: clamp(ratio('noseBr') ** 1.5, 0.7, 1.4) } : {}),   // ширина спинки (MediaPipe по светотени — с осторожностью; в старых файлах меры нет)
       nose: clamp(d.nose * ratio('noseProj') ** 0.6, 0.08, 0.24),
       mouthHW: clamp(d.mouthHW * ratio('mouthHW'), 0.13, 0.25),
       lipU: clamp(d.lipU * ratio('lipU'), 0.018, 0.085),
