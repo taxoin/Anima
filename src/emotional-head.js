@@ -15,7 +15,7 @@
  *   6. manual   — прямые значения каналов из setChannels() (перекрывают всё)
  */
 import * as THREE from 'three';
-import { ProceduralHead } from './head-model.js';
+import { ProceduralHead, SKIN_TONES, EYE_COLORS } from './head-model.js';
 import {
   CHANNELS, STATE_DEFAULTS, EMOTIONS, MICRO, GESTURES, ALIASES,
   resolveEmotion, applyRestraint, parseNarrative, parseEmotionString, expandChannels,
@@ -76,6 +76,8 @@ function makeEnvironment(renderer) {
 }
 
 // ------------------------------------------------------------------ основной класс
+const AVATAR_FORMAT = 2;          // версия файла exportAvatar()
+
 export class EmotionalHead {
   /**
    * @param {HTMLElement|string} container  элемент или CSS-селектор
@@ -330,28 +332,93 @@ export class EmotionalHead {
   get portrait() { return this._portrait || null; }
 
   /**
+   * Метрика сходства фото-аватара: голова рендерится анфас в нейтральном выражении, на рендере ищутся те же
+   * 478 точек, что и на фото, и сравниваются в общей нормировке (глаза–рот).
+   *   rms / regions — расхождение точек в % расстояния глаза–рот (меньше — ближе к фото; честнее при caricature = 1)
+   *   direction     — косинус между отличиями человека от среднего лица и отличиями головы от своей основы (1 — идеально)
+   *   gain          — во сколько раз отличия усилены (≈ caricature)
+   * Занимает ~0.5 с: две пересборки головы и два распознавания. Нужен фото-аватар.
+   * @param {object} [o] { base = true — считать direction/gain, size = 640 }
+   */
+  async likeness(o = {}) {
+    if (!this._portrait) throw new Error('likeness(): сначала fromPhoto() или importAvatar()');
+    const { detectFace, likenessReport } = await import('./photo-avatar.js');
+    const size = o.size ?? 640;
+    const cam = new THREE.PerspectiveCamera(11, 1, 1, 60);
+    const shot = async () => {
+      const W = this.renderer.domElement.width, H = this.renderer.domElement.height;
+      cam.aspect = W / H; cam.position.set(0, -0.3, 19); cam.lookAt(0, -0.3, 0); cam.updateProjectionMatrix();
+      this.renderStill({}, {}, cam);
+      const s = Math.min(W, H), c = document.createElement('canvas');
+      c.width = c.height = size;
+      const g = c.getContext('2d');
+      g.fillStyle = '#6b6f78'; g.fillRect(0, 0, size, size);
+      g.drawImage(this.renderer.domElement, (W - s) / 2, (H - s) / 2, s, s, 0, 0, size, size);
+      this._render();                                              // вернуть обычный кадр в том же тике (без мигания)
+      const d = await detectFace(c);
+      if (!d) throw new Error('likeness(): на рендере не нашлось лица');
+      return d;
+    };
+    const render = await shot();
+    let base = null;
+    if (o.base !== false) {
+      const saved = { ...this._photoOpts };
+      this._photoOpts = { ...saved, caricature: 0 };
+      this._rebuildRig();
+      try { base = await shot(); } finally { this._photoOpts = saved; this._rebuildRig(); }
+    }
+    return likenessReport(this._portrait, render, base);
+  }
+
+  /**
+   * Внешность: тон кожи, цвет глаз, волос, губ, одежды и т.д. Пересобирает голову, эмоция и речь продолжаются.
+   *   head.setLook({ skin: 'olive', undertone: 'warm', iris: 'hazel', hair: '#2a1a12' })
+   *   head.setLook({ female: { skin: 'tan' }, male: { skin: 'brown' } })
+   * Пресеты: SKIN_TONES и EYE_COLORS (head-model.js). Поверх фото-аватара тоже работает.
+   * @param {object} look
+   * @param {object} [o] { replace: false } — true: заменить, а не дополнить текущие настройки
+   */
+  setLook(look = {}, o = {}) {
+    this.options.look = o.replace ? { ...look } : { ...(this.options.look || {}), ...look };
+    if (this.rig instanceof ProceduralHead) this._rebuildRig();      // у glTF-модели своя внешность
+    this._emit('lookChange', this.options.look);
+    return this;
+  }
+  getLook() { return { ...(this.options.look || {}) }; }
+
+  /**
    * Экспорт аватара: пол, настройки шаржа и слепок лица (точки, меры, цвета, текстура кожи).
    * Исходного фото внутри нет. Обычно 5–15 КБ JSON — помещается в сообщение, QR-цепочку, localStorage.
    * @param {object} [o] { size=320 — макс. сторона текстуры (0 — без неё, ~5 КБ), quality=0.8, format='object'|'json' }
    * @returns {Promise<object|string>}
    */
   async exportAvatar(o = {}) {
-    const d = { format: 'anima-avatar', v: 1, gender: this.gender, photo: this._portrait ? { ...this._photoOpts } : null, portrait: null };
+    // v2: + look (пресеты кожи/глаз, цвета, причёска и т.д. из setLook). v1-файлы импортируются как раньше.
+    const look = this.options.look || {};
+    const d = { format: 'anima-avatar', v: AVATAR_FORMAT, gender: this.gender, look: Object.keys(look).length ? JSON.parse(JSON.stringify(look)) : null,
+      photo: this._portrait ? { ...this._photoOpts } : null, portrait: null };
     if (this._portrait) d.portrait = await this._portrait.toData(o);
     return o.format === 'json' ? JSON.stringify(d) : d;
   }
   /**
    * Импорт аватара из exportAvatar(): объект, JSON-строка, File/Blob или URL. MediaPipe не нужен.
-   * @param {object} [o] переопределить { caricature, texture, realism, gender }
+   * @param {object} [o] переопределить { caricature, texture, realism, gender, look }
    * @returns {Promise<object|null>} отчёт как у fromPhoto (null — аватар без фото)
+   * Внешность (look) из файла заменяет текущую; в файле v1 её нет — текущая сохраняется.
    */
   async importAvatar(src, o = {}) {
     let d = src;
     if (src instanceof Blob) d = await src.text();
-    else if (typeof src === 'string' && !/^\s*\{/.test(src)) d = await (await fetch(src)).text();
+    else if (typeof src === 'string' && !/^\s*\{/.test(src)) {
+      const r = await fetch(src);
+      if (!r.ok) throw new Error(`Аватар не загрузился: ${r.status} ${src}`);
+      d = await r.text();
+    }
     if (typeof d === 'string') d = JSON.parse(d);
     if (!d || d.format !== 'anima-avatar') throw new Error('Не похоже на файл аватара (format anima-avatar)');
+    if (d.v > AVATAR_FORMAT) throw new Error(`Файл аватара новой версии (v${d.v}), обновите библиотеку`);
     const gender = o.gender || d.gender;
+    if (o.look || d.look !== undefined) this.options.look = { ...(o.look || d.look || {}) };
     if (!d.portrait) {
       this._portrait = null;
       this._customModel = true;
@@ -457,6 +524,30 @@ export class EmotionalHead {
 
   /** Скриншот текущего кадра (data URL). */
   snapshot(type = 'image/png') { this._render(); return this.renderer.domElement.toDataURL(type); }
+
+  /** Остановить / продолжить анимационный цикл (состояние сохраняется). */
+  pause() { cancelAnimationFrame(this._raf); this._raf = 0; this._paused = true; return this; }
+  resume() {
+    if (!this._paused) return this;
+    this._paused = false; this._last = performance.now();
+    this._raf = requestAnimationFrame(this._loop);
+    return this;
+  }
+  /**
+   * Статичный кадр с заданными каналами и позой, мимо слоёв анимации: тесты, превью, метрика сходства.
+   * Состояние головы не меняется — следующий кадр цикла (если он не на паузе) вернёт всё как было.
+   * @param {object} [channels]  ARKit-каналы 0..1 (остальные = 0)
+   * @param {object} [pose]      { pitch, yaw, roll, eyeYaw, eyePitch, breath, focus }
+   * @param {THREE.Camera} [camera]
+   * @returns {HTMLCanvasElement}
+   */
+  renderStill(channels = {}, pose = {}, camera = this.camera) {
+    const ch = {};
+    for (const c of CHANNELS) ch[c] = channels[c] || 0;
+    this.rig.update(ch, { pitch: 0, yaw: 0, roll: 0, eyeYaw: 0, eyePitch: 0, breath: 0, focus: 8, ...pose });
+    this.renderer.render(this.scene, camera);
+    return this.renderer.domElement;
+  }
 
   dispose() {
     cancelAnimationFrame(this._raf);
@@ -818,5 +909,5 @@ function mirrorName(k) {
 function mirrorChannels(ch) { const o = {}; for (const k in ch) o[mirrorName(k)] = ch[k]; return o; }
 
 // реэкспорт, чтобы хватало одного импорта
-export { CHANNELS, EMOTIONS, MICRO, GESTURES, ALIASES, VISEMES, WebSpeech, parseNarrative, parseEmotionString, parseMarkup, resolveEmotion };
+export { SKIN_TONES, EYE_COLORS, CHANNELS, EMOTIONS, MICRO, GESTURES, ALIASES, VISEMES, WebSpeech, parseNarrative, parseEmotionString, parseMarkup, resolveEmotion };
 export default EmotionalHead;

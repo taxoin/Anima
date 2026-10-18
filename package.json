@@ -10,11 +10,21 @@
     "./emotions": "./src/emotions.js",
     "./lipsync": "./src/lipsync.js"
   },
-  "files": ["src", "README.md"],
-  "peerDependencies": { "three": ">=0.163.0" },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "three": ">=0.163.0"
+  },
   "scripts": {
     "serve": "npx serve .",
-    "build": "npx esbuild src/element.js --bundle --minify --format=esm --external:three --external:three/addons/* --outfile=dist/emotional-head.min.js"
+    "build": "npx esbuild src/element.js --bundle --minify --format=esm --external:three --external:three/addons/* --outfile=dist/emotional-head.min.js",
+    "test:visual": "node tests/visual.mjs",
+    "test:likeness": "node tests/likeness.mjs"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "puppeteer-core": "^23.11.1"
+  }
 }

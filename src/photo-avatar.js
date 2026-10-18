@@ -20,7 +20,7 @@
  *
  * Модели грузятся с CDN при первом вызове (~4.5 МБ). Свои пути: fromPhoto(src, { assets: {...} }).
  */
-import { PRESETS, LAYOUT } from './head-model.js';
+import { PRESETS, LAYOUT, upperLipProfile } from './head-model.js';
 
 const MP = '0.10.14';
 export const PHOTO_ASSETS = {
@@ -148,6 +148,71 @@ export async function analyzePortrait(src, o = {}) {
   return new Portrait(img, L, bs, hair);
 }
 
+/** Точки лица на произвольном изображении (для метрики сходства): { L, bs } или null. */
+export async function detectFace(src, o = {}) {
+  const T = await loadTasks({ ...PHOTO_ASSETS, ...(o.assets || {}) });   // те же задачи, что у analyzePortrait (кэш)
+  const img = src instanceof HTMLCanvasElement ? src : await toCanvas(src);
+  const r = T.face.detect(img), L = r.faceLandmarks?.[0];
+  if (!L) return null;
+  const bs = {};
+  for (const c of r.faceBlendshapes?.[0]?.categories || []) bs[c.categoryName] = c.score;
+  return { L, bs, w: img.width, h: img.height };
+}
+
+// ------------------------------------------------------------------ метрика сходства
+
+const NOSE = [1, 2, 4, 5, 6, 19, 94, 98, 327, 129, 358, 168, 197, 195];
+const REGIONS = {
+  oval: OVAL.filter((i) => ![10, 338, 109, 297, 67].includes(i)),   // верх лба часто под волосами
+  eyes: EYE_RINGS.flat(), brows: BROWS.flatMap((b) => [...b.up, ...b.lo]), nose: NOSE, lips: [...LIPS_OUT, ...LIPS_IN],
+};
+// размерные меры сравниваются в долях среднего, положения и углы — в абсолютных единицах головы
+const POS_MEAS = new Set(['browY', 'browArch', 'browTail', 'noseTip', 'chin', 'browX0', 'browX1', 'tilt', 'eyeCX']);
+const MEAS_SCALE = (k) => (POS_MEAS.has(k) ? 0.05 : Math.abs(MEAN_M[k]) || 1);
+
+/** Нормированные точки (координаты головы, симметризованные) для найденного лица. */
+function normalizedFace(det) {
+  const p = Object.create(Portrait.prototype);
+  p.px = det.L.map((q) => ({ x: q.x * det.w, y: q.y * det.h, z: q.z * det.w }));
+  p._initFrame();
+  return p;
+}
+
+/**
+ * Сравнение лица на фото с отрендеренной головой.
+ * @param {Portrait} portrait     анализ фото
+ * @param {object} render         detectFace() по рендеру текущей головы
+ * @param {object} [base]         detectFace() по рендеру той же головы без шаржа (caricature = 0) — для «направления»
+ * @returns {object} { rms, regions, direction, gain, measures }
+ */
+export function likenessReport(portrait, render, base = null) {
+  const R = normalizedFace(render), B = base ? normalizedFace(base) : null;
+  const unit = 100 / (EY - MY);                                    // в % расстояния глаза–рот
+  const rmsOf = (A, idx) => Math.sqrt(idx.reduce((s, i) => s + (A.sym[i].x - portrait.sym[i].x) ** 2 + (A.sym[i].y - portrait.sym[i].y) ** 2, 0) / idx.length) * unit;
+  const regions = {};
+  for (const k in REGIONS) regions[k] = +rmsOf(R, REGIONS[k]).toFixed(2);
+  const all = Object.values(REGIONS).flat();
+  const out = { rms: +rmsOf(R, all).toFixed(2), regions, direction: null, gain: null, measures: {} };
+  const Q = portrait.meas, MR = measure(R.sym), MB = B ? measure(B.sym) : null;
+  let ab = 0, aa = 0, bb = 0;
+  for (const k of Object.keys(MEAN_M)) {
+    if (typeof Q[k] !== 'number') continue;
+    const sc = MEAS_SCALE(k), a = (Q[k] - MEAN_M[k]) / sc;
+    const row = { photo: +Q[k].toFixed(4), render: +MR[k].toFixed(4), mean: +MEAN_M[k].toFixed(4) };
+    if (MB) {
+      const b = (MR[k] - MB[k]) / sc;
+      row.base = +MB[k].toFixed(4); row.photoDev = +a.toFixed(3); row.renderDev = +b.toFixed(3);
+      ab += a * b; aa += a * a; bb += b * b;
+    }
+    out.measures[k] = row;
+  }
+  if (MB && aa > 0 && bb > 0) {
+    out.direction = +(ab / Math.sqrt(aa * bb)).toFixed(3);         // косинус: шарж «тянет» в сторону отличий человека (1 — идеально)
+    out.gain = +(ab / aa).toFixed(3);                              // во сколько раз отличия усилены (≈ caricature при честной передаче)
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ измерения
 
 /** Полуширина овала лица на высоте y (по многоугольнику OVAL). */
@@ -198,6 +263,7 @@ const REAL_GX = {
   male: [0.85, 0.81, 0.76, 0.74, 0.77, 0.78, 0.78, 0.68, 0.68],
 };
 const REAL = { eyeX: 0.234, eyeW: 0.207, chinScale: 1 };
+const BOW_MEAN = { x: 0.29, rc: 0.866 };    // «лук Купидона» по калибровочным фото: пики на 0.29 полуширины рта, центр/пик = 0.87
 
 // ------------------------------------------------------------------ обработка изображения
 
@@ -388,6 +454,18 @@ export class Portrait {
     // абсолютная полуширина овала на высотах эталонной головы (ниже рта — пропорционально длине подбородка)
     M.widthsAbs = WIDTH_YS.map((y) => ovalHalfWidth(this.head, y >= MY ? y : MY + ((y - MY) * (M.chin - MY)) / (MEAN_M.chin - MY)));
     M.widths = M.widthsAbs.map((w, i) => (w && POP_W[i] ? w / POP_W[i] : 1));
+    // «лук Купидона»: положение пиков (доля полуширины рта) и толщина губы в центре относительно пиков
+    {
+      const S = this.sym, ax = (i) => Math.abs(S[i].x), inner = [13, 312, 311, 310, 415, 308];
+      const xp = ax(267), hw = Math.max(1e-3, ax(291));
+      let yIn = S[13].y;
+      for (let j = 0; j < inner.length - 1; j++) {
+        const a = inner[j], b = inner[j + 1];
+        if (xp >= ax(a) && xp <= ax(b)) { yIn = lerp(S[a].y, S[b].y, (xp - ax(a)) / Math.max(1e-4, ax(b) - ax(a))); break; }
+      }
+      M.bowX = xp / hw;
+      M.bowRC = (S[0].y - S[13].y) / Math.max(0.004, S[267].y - yIn);
+    }
     this.meas = M;
     this.expression = { smile, squint, blink, mouthOpen: gap };
   }
@@ -710,6 +788,10 @@ export class Portrait {
       lipU: clamp(d.lipU * ratio('lipU'), 0.018, 0.085),
       lipL: clamp(d.lipL * ratio('lipL'), 0.022, 0.1),
       chinScale: clamp(baseChin * (car('chin') - MY) / (Mn.chin - MY), 0.8, 1.5),
+      ...(Q.bowX ? {
+        bowX: clamp(lerp(0.2, BOW_MEAN.x, re) + k * (Q.bowX - BOW_MEAN.x), 0.12, 0.36),
+        bowDip: clamp(0.2 + k * 1.09 * (BOW_MEAN.rc - Q.bowRC), 0.02, 0.45),
+      } : {}),
       skin: hex(this.skinTex.map((v) => v * TEX_GAIN)),
       blush: d.blush * 0.15, stubble: 0,
     };
@@ -779,9 +861,10 @@ export class Portrait {
         // рот: уголки, «лук Купидона», центр нижней губы, внутренний контур
         const hw = P.mouthHW;
         add(hw, MY, 291); add(-hw, MY, 61);
-        add(0, MY + 0.8 * P.lipU, 0);
-        const tb = clamp(Math.abs(hs[267].x - hs[37].x) / Math.abs(hs[291].x - hs[61].x), 0.1, 0.5);
-        add(tb * hw, MY + P.lipU * Math.pow(1 - tb ** 2.4, 0.55) * 1.1, 267); add(-tb * hw, MY + P.lipU * Math.pow(1 - tb ** 2.4, 0.55) * 1.1, 37);
+        add(0, MY + P.lipU * upperLipProfile(0, P), 0);
+        const tb = P.bowX ?? clamp(Math.abs(hs[267].x - hs[37].x) / Math.abs(hs[291].x - hs[61].x), 0.1, 0.5);
+        const peakY = MY + P.lipU * upperLipProfile(tb, P);
+        add(tb * hw, peakY, 267); add(-tb * hw, peakY, 37);
         add(0, MY - P.lipL, 17);
         add(0, MY + 0.002, 13); add(0, MY - 0.002, 14);
         // подбородок и овал (по силуэту собранной головы)

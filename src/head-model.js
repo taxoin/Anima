@@ -58,6 +58,59 @@ export const PRESETS = {
   },
 };
 
+/**
+ * Пресеты тона кожи (светлый → глубокий) с подходящим цветом губ. look: { skin: 'olive', undertone: 'warm' }.
+ * Можно и просто цвет: { skin: '#c99a72' }.
+ */
+export const SKIN_TONES = {
+  porcelain: { skin: '#f0ccb6', lip: '#c47a7e' },
+  fair: { skin: '#eab9a0', lip: '#b9535b' },
+  light: { skin: '#e3b08f', lip: '#b5626a' },
+  medium: { skin: '#d9a487', lip: '#a8645c' },
+  olive: { skin: '#c99a72', lip: '#a0605a' },
+  tan: { skin: '#b07a55', lip: '#8f5048' },
+  brown: { skin: '#8d5a3c', lip: '#74413a' },
+  deep: { skin: '#5e3a28', lip: '#5a3029' },
+};
+/** Цвета радужки: [у зрачка, у края]. look: { iris: 'hazel' } или { iris: ['#…', '#…'], irisRight: 'blue' } (гетерохромия). */
+export const EYE_COLORS = {
+  dark: ['#3a2618', '#160d07'],
+  brown: ['#5a3a22', '#2a1a0e'],
+  amber: ['#9a6a24', '#4a2c0c'],
+  hazel: ['#7a6a35', '#3f3a1c'],
+  green: ['#5b7a3e', '#2f4a22'],
+  gray: ['#8a96a0', '#4a545c'],
+  blue: ['#6a8fb2', '#2e4966'],
+  lightblue: ['#8fb6d9', '#4a6f94'],
+};
+const UNDERTONE = { warm: [1.02, 1.0, 0.93], cool: [1.0, 0.97, 1.02], olive: [0.98, 1.0, 0.92], neutral: [1, 1, 1] };
+
+/** Имена пресетов в look → цвета. Неизвестные ключи проходят как есть. */
+export function resolveLook(look = {}) {
+  const o = { ...look };
+  if (typeof o.skin === 'string' && SKIN_TONES[o.skin]) {
+    const t = SKIN_TONES[o.skin];
+    o.skin = t.skin;
+    if (look.lip === undefined) o.lip = t.lip;
+  }
+  if (o.undertone && UNDERTONE[o.undertone] && o.skin) {
+    const c = new THREE.Color(o.skin), k = UNDERTONE[o.undertone];
+    o.skin = '#' + c.setRGB(clamp(c.r * k[0], 0, 1), clamp(c.g * k[1], 0, 1), clamp(c.b * k[2], 0, 1)).getHexString();
+  }
+  for (const key of ['iris', 'irisRight']) if (typeof o[key] === 'string') o[key] = EYE_COLORS[o[key]] || [o[key], new THREE.Color(o[key]).multiplyScalar(0.45).getStyle()];
+  return o;
+}
+
+/**
+ * Профиль толщины верхней губы по ширине рта (t = -1..1 от уголка до уголка, без учёта мимики):
+ * «лук Купидона» — ямка в центре (bowDip) и два пика на ±bowX (bowPeak).
+ */
+export function upperLipProfile(t, P) {
+  const at = Math.abs(t), bx = P.bowX ?? 0.2, dip = P.bowDip ?? 0.2, peak = P.bowPeak ?? 0.12;
+  const bow = 1 - dip * Math.exp(-((t / (bx * 0.45)) ** 2)) + peak * Math.exp(-(((at - bx) / (bx * 0.5)) ** 2));
+  return Math.pow(Math.max(0, 1 - at ** 2.4), 0.55) * bow;
+}
+
 export const LAYOUT = { eyeX: 0.3, eyeY: 0.03, mouthY: -0.52, pivot: new THREE.Vector3(0, -0.72, -0.1) };
 const JAW_THETA = 0.24;                       // угол раскрытия челюсти при jawOpen = 1
 const JAW_PIVOT = { y: -0.12, z: -0.05 };
@@ -261,25 +314,92 @@ function eyeTexture(P) {
   return tex;
 }
 
-function teethTexture() {
-  const W = 512, H = 128, c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#b4545a'; ctx.fillRect(0, 0, W, H);              // дёсны
-  const n = 12;
-  for (let i = 0; i < n; i++) {
-    const cx = ((i + 0.5) / n) * W, dist = Math.abs(i + 0.5 - n / 2) / (n / 2);
-    const w = (W / n) * (dist < 0.2 ? 1.1 : dist < 0.4 ? 0.95 : 0.85);
-    const g = ctx.createLinearGradient(0, 20, 0, H);
-    g.addColorStop(0, '#d8cbb4'); g.addColorStop(0.5, '#f4efe4'); g.addColorStop(1, '#e9e2d4');
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.roundRect(cx - w / 2 + 2, 24, w - 4, H - 26, [6, 6, 14, 14]);
-    ctx.fill();
+/**
+ * Зубная дуга: отдельные зубы-суперэллипсоиды (резцы, клыки, премоляры, моляр) на параболе + дёсны.
+ * Координаты головы; верхняя дуга неподвижна, нижняя вращается вместе с челюстью (см. _updateMouth).
+ * @returns {{teeth: THREE.BufferGeometry, gums: THREE.BufferGeometry}}
+ */
+function buildDentition(P, zFront, upper) {
+  const MY = LAYOUT.mouthY, sc = (P.mouthHW / 0.185) * 0.92;
+  const a = 1.25;                                                  // глубина дуги: z = zFront - a·x²
+  const arch = (x) => zFront - a * x * x;
+  //            центр. резец, боковой, клык, премоляр 1, 2, моляр
+  const W = (upper ? [0.05, 0.04, 0.044, 0.042, 0.042, 0.052] : [0.035, 0.037, 0.042, 0.042, 0.044, 0.052]).map((v) => v * sc);
+  const H = (upper ? [0.064, 0.055, 0.064, 0.05, 0.046, 0.042] : [0.05, 0.05, 0.057, 0.046, 0.043, 0.04]).map((v) => v * sc);
+  const T = [0.032, 0.032, 0.04, 0.046, 0.048, 0.056].map((v) => v * sc);
+  const AO = [1, 0.93, 0.82, 0.66, 0.52, 0.42];                     // задние зубы в тени полости
+  const yEdge0 = upper ? MY - 0.026 : MY - 0.017;
+  const unit = new THREE.SphereGeometry(1, 12, 10), up = unit.attributes.position, un = up.count, uidx = unit.index.array;
+  const pos = [], col = [], idx = [], gum = [];
+  for (const sg of [1, -1]) {
+    let s = 0.0004 * sc;                                           // длина дуги от центра
+    for (let i = 0; i < 6; i++) {
+      const w = W[i], h = H[i], t = T[i];
+      // центр зуба по длине дуги → x (приближённо, дуга пологая)
+      let x = s + w / 2;
+      for (let k = 0; k < 3; k++) x = (s + w / 2) / Math.sqrt(1 + (2 * a * x) ** 2 * 0.5);
+      s += w + 0.0006 * sc;
+      x *= sg;
+      const ang = Math.atan(2 * a * x);                            // поворот вокруг Y по касательной к дуге
+      const ca = Math.cos(ang), sa = Math.sin(ang);
+      const yEdge = yEdge0 + (upper ? 1 : -1) * 0.0035 * i * i * 0.5;   // режущий край поднимается к задним зубам
+      const base = pos.length / 3, tint = 1 + (((i * 7 + (sg > 0 ? 3 : 0)) % 5) - 2) * 0.012;   // зубы чуть различаются по тону
+      for (let v = 0; v < un; v++) {
+        const nx = up.getX(v), ny = up.getY(v), nz = up.getZ(v);
+        const ex = Math.sign(nx) * Math.abs(nx) ** 0.45, ey = Math.sign(ny) * Math.abs(ny) ** 0.6, ez = Math.sign(nz) * Math.abs(nz) ** 0.5;
+        const vv = (ey + 1) / 2;                                   // 0 — низ, 1 — верх
+        const e = upper ? 1 - vv : vv;                             // 1 — режущий край, 0 — шейка у десны
+        const wf = lerp(0.86, 1, smoothstep(0, 0.4, e));
+        const tf = i < 2 ? lerp(1, 0.32, e ** 1.4) : i === 2 ? lerp(1, 0.55, e) : lerp(1, 0.85, e);
+        let lx = ex * (w / 2) * wf;
+        let ly = (upper ? yEdge + vv * h : yEdge - (1 - vv) * h);
+        if (i === 2) ly += (upper ? -1 : 1) * 0.006 * sc * Math.max(0, 1 - Math.abs(ex)) ** 1.6 * e ** 3;   // клык чуть заострён
+        let lz = ez * (t / 2) * tf - t / 2;
+        if (ez > 0) lz += 0.004 * sc * (1 - ex * ex);              // выпуклая губная поверхность
+        // в координаты головы
+        pos.push(x + lx * ca + lz * sa, ly, arch(x) - lx * sa + lz * ca);   // lx — по касательной к дуге, lz — по нормали
+        const ao = AO[i] * lerp(0.72, 1, smoothstep(0, 0.6, e)) * (upper ? 1 : 0.9);
+        const trans = smoothstep(0.82, 1, e) * (i < 3 ? 1 : 0.3);  // полупрозрачный режущий край: холоднее
+        col.push(ao * tint * (1 - 0.1 * trans), ao * tint * (1 - 0.06 * trans), ao * tint * (1 + 0.02 * trans) * 0.98);
+      }
+      for (let k = 0; k < uidx.length; k++) idx.push(base + uidx[k]);
+      gum.push({ x, w, h, yEdge });
+    }
   }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
+  unit.dispose();
+  const teeth = new THREE.BufferGeometry();
+  teeth.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  teeth.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  teeth.setIndex(idx);
+  teeth.computeVertexNormals();
+
+  // дёсны: полоса над (под) зубами с фестонами — у межзубных промежутков десна опускается к зубам
+  const xs = gum.map((g) => g.x).sort((p, q) => p - q), xMax = Math.max(...xs.map(Math.abs)) + 0.03 * sc;
+  const line = (x) => {
+    let best = null;
+    for (const g of gum) { const d = Math.abs(x - g.x) / (g.w / 2); if (!best || d < best.d) best = { d, g }; }
+    const g = best.g, pap = smoothstep(0.55, 1.05, best.d);       // межзубный сосочек
+    return upper ? g.yEdge + g.h * lerp(0.84, 0.62, pap) : g.yEdge - g.h * lerp(0.84, 0.62, pap);
+  };
+  const cols = 72, rows = 4, gpos = [], gcol = [], gidx = [];
+  for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
+    const x = lerp(-xMax, xMax, c / cols), s = r / rows, y0 = line(x);
+    const y = upper ? y0 + s * 0.06 : y0 - s * 0.06;
+    const bulge = 0.006 * Math.sin(Math.PI * Math.min(1, s * 1.6));
+    gpos.push(x, y, arch(x) + 0.003 + bulge - 0.004 * (1 - s));
+    const ao = lerp(1, 0.45, smoothstep(0.05, 0.22, Math.abs(x))) * lerp(0.85, 1, s);
+    gcol.push(ao, ao, ao);
+  }
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    const p = r * (cols + 1) + c, q = p + 1, d = p + cols + 1, e = d + 1;
+    if (upper) gidx.push(p, q, d, q, e, d); else gidx.push(p, d, q, q, d, e);
+  }
+  const gums = new THREE.BufferGeometry();
+  gums.setAttribute('position', new THREE.Float32BufferAttribute(gpos, 3));
+  gums.setAttribute('color', new THREE.Float32BufferAttribute(gcol, 3));
+  gums.setIndex(gidx);
+  gums.computeVertexNormals();
+  return { teeth, gums };
 }
 
 function hairTexture(color) {
@@ -372,7 +492,7 @@ export class ProceduralHead {
   constructor({ gender = 'female', shadows = true, overrides = {} } = {}) {
     this.gender = gender;
     this.shadows = shadows;
-    this.P = { ...PRESETS[gender] || PRESETS.female, ...overrides };
+    this.P = { ...PRESETS[gender] || PRESETS.female, ...resolveLook(overrides) };
     this.object3D = new THREE.Group();
     this.object3D.name = 'ProceduralHead';
     this._disposables = [];
@@ -390,17 +510,19 @@ export class ProceduralHead {
     this.mat = {
       skin: this._track(new THREE.MeshPhysicalMaterial({
         color: P.skin, roughness: 0.55, metalness: 0, vertexColors: true,
-        sheen: 0.45, sheenRoughness: 0.5, sheenColor: new THREE.Color('#ff9a80'),
+        sheen: 0.45, sheenRoughness: 0.5, sheenColor: new THREE.Color(P.skin).multiplyScalar(1.25).lerp(new THREE.Color('#ff9a80'), 0.5),   // подповерхностный «тёплый» отсвет в тон кожи
         clearcoat: 0.06, clearcoatRoughness: 0.5, envMapIntensity: 0.6,
       })),
       lid: null,
       lip: this._track(new THREE.MeshPhysicalMaterial({ color: P.lip, roughness: 0.38, vertexColors: true, clearcoat: 0.35, clearcoatRoughness: 0.35, sheen: 0.3, sheenColor: new THREE.Color('#ff8080'), side: THREE.DoubleSide, envMapIntensity: 0.6, depthTest: false })),
       brow: this._track(new THREE.MeshStandardMaterial({ color: P.brow.color, roughness: 0.9 })),
       lash: this._track(new THREE.MeshStandardMaterial({ color: '#120c0a', roughness: 0.8 })),
-      hair: this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairTexture(P.hair)), roughness: 0.55, sheen: 0.6, sheenColor: new THREE.Color(P.hair).multiplyScalar(2.2), sheenRoughness: 0.35, vertexColors: true, side: THREE.DoubleSide, envMapIntensity: 0.5 })),
+      hair: this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairTexture(P.hair)), roughness: 0.45, anisotropy: P.hairAniso ?? 0.6, anisotropyRotation: P.hairAnisoRot ?? 0, sheen: 0.6, sheenColor: new THREE.Color(P.hair).multiplyScalar(2.2), sheenRoughness: 0.35, vertexColors: true, side: THREE.DoubleSide, envMapIntensity: 0.5 })),
       cloth: this._track(new THREE.MeshStandardMaterial({ color: P.cloth, roughness: 0.85 })),
       eye: this._track(new THREE.MeshPhysicalMaterial({ map: this._track(eyeTexture(P)), roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.3 })),
+      eyeR: null,
     };
+    this.mat.eyeR = P.irisRight ? this._track(new THREE.MeshPhysicalMaterial({ map: this._track(eyeTexture({ ...P, iris: P.irisRight })), roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.3 })) : this.mat.eye;
     this.mat.lid = this._track(this.mat.skin.clone());
     this.mat.lid.vertexColors = true;
     this.mat.lid.side = THREE.DoubleSide;
@@ -591,11 +713,21 @@ export class ProceduralHead {
     shGeo.setAttribute('color', new THREE.BufferAttribute(shCol, 4));
     const shMat = this._track(new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false }));
 
+    // кромка нижнего века (влажная полоска между веком и глазом) и слёзное мясцо во внутреннем углу
+    const wetGeo = this._track(new THREE.TorusGeometry((E.r + E.rl) / 2, Math.max(0.0024, (E.rl - E.r) * 0.7), 6, 40, Math.PI));
+    wetGeo.rotateX(Math.PI / 2);
+    const wetMat = this._track(new THREE.MeshPhysicalMaterial({ color: new THREE.Color(P.skin).lerp(new THREE.Color('#d98a86'), 0.55), roughness: 0.25, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 1.1 }));
+    const carGeo = this._track(new THREE.SphereGeometry(1, 16, 12));
+    const carMat = this._track(new THREE.MeshPhysicalMaterial({ color: '#cf7f7a', roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.1, envMapIntensity: 1.0 }));
+    const kr = E.r / 0.116;
+    // нижние ресницы редкие и короткие: не чёрная обводка, а тёмная полупрозрачная линия
+    const lashLoMat = this._track(new THREE.MeshStandardMaterial({ color: new THREE.Color('#120c0a').lerp(new THREE.Color(P.skin), 0.35), roughness: 0.8, transparent: true, opacity: 0.6 }));
+
     this.eyes = [];
     for (const sg of [1, -1]) {                         // 1 = левый глаз персонажа (+X)
       const g = new THREE.Group();
       g.position.set(sg * E.x, E.y, E.z);
-      const ball = new THREE.Mesh(ballGeo, this.mat.eye);
+      const ball = new THREE.Mesh(ballGeo, sg > 0 ? this.mat.eye : this.mat.eyeR);   // sg < 0 — правый глаз персонажа
       ball.rotation.order = 'YXZ';
       ball.userData.noShadow = false;
       g.add(ball);
@@ -605,14 +737,22 @@ export class ProceduralHead {
       const up = new THREE.Mesh(upGeo, this.mat.lid);
       const lo = new THREE.Mesh(loGeo, this.mat.lid);
       const lash = new THREE.Mesh(lashGeo, this.mat.lash);
-      const lashLo = new THREE.Mesh(lashLoGeo, this.mat.lash);
+      const lashLo = new THREE.Mesh(lashLoGeo, lashLoMat);
       const sh = new THREE.Mesh(shGeo, shMat);
       sh.userData.noShadow = true;
       sh.renderOrder = 1;
       lash.userData.noShadow = true; lashLo.userData.noShadow = true;
+      const wet = new THREE.Mesh(wetGeo, wetMat);
+      wet.userData.noShadow = true;
+      wet.position.y = 0.0012 * kr;
       up.add(lash, sh);
-      lo.add(lashLo);
-      lids.add(up, lo);
+      lo.add(lashLo, wet);
+      const car = new THREE.Mesh(carGeo, carMat);       // в группе век: наклоняется вместе с разрезом
+      car.position.set(-sg * E.r * 0.915, -0.003 * kr, E.r * 0.39);
+      car.scale.set(0.008 * kr, 0.011 * kr, 0.006 * kr);
+      car.rotation.y = -sg * 0.3;
+      car.userData.noShadow = true;
+      lids.add(up, lo, car);
       this.headRoot.add(g);
       this.eyes.push({ sg, group: g, ball, up, lo });
     }
@@ -659,44 +799,57 @@ export class ProceduralHead {
     const P = this.P;
     const stencilWrite = { stencilWrite: true, stencilRef: 1, stencilFunc: THREE.AlwaysStencilFunc, stencilZPass: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp, stencilFail: THREE.ReplaceStencilOp };
     const stencilTest = { stencilWrite: true, stencilRef: 1, stencilFunc: THREE.EqualStencilFunc, stencilZPass: THREE.KeepStencilOp, stencilZFail: THREE.KeepStencilOp, stencilFail: THREE.KeepStencilOp };
-    // Рот рисуется поверх кожи без теста глубины (порядок: полость → язык → зубы → губы).
-    // Так деформированная кожа никогда не "протыкает" губы; рот фронтальный, при поворотах до ±20° это незаметно.
-    const cavMat = this._track(new THREE.MeshBasicMaterial({ vertexColors: true, depthTest: false, depthWrite: false, ...stencilWrite }));
-    const teethMat = this._track(new THREE.MeshStandardMaterial({ map: this._track(teethTexture()), roughness: 0.35, vertexColors: true, depthTest: false, depthWrite: false, ...stencilTest }));
-    const tongueMat = this._track(new THREE.MeshStandardMaterial({ color: '#b5525a', roughness: 0.5, vertexColors: true, depthTest: false, depthWrite: false, ...stencilTest }));
-
     this.mouth = {};
     const M = this.mouth;
+    // Рот рисуется поверх кожи без теста глубины (порядок: полость → язык → зубы → губы).
+    // Так деформированная кожа никогда не "протыкает" губы; рот фронтальный, при поворотах до ±20° это незаметно.
+    // Полость пишет в буфер глубины «дальнюю плоскость» (gl_FragDepth = 1): внутри ротового отверстия зубы, дёсны
+    // и язык потом перекрывают друг друга по-честному, а кожа, нарисованная раньше, им не мешает.
+    const cavMat = this._track(new THREE.MeshBasicMaterial({ vertexColors: true, depthTest: true, depthFunc: THREE.AlwaysDepth, depthWrite: true, ...stencilWrite }));
+    cavMat.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace('#include <dithering_fragment>', '#include <dithering_fragment>\n\tgl_FragDepth = 1.0;'); };
+    const inner = { depthTest: true, depthWrite: true, ...stencilTest };
+    const teethMat = this._track(new THREE.MeshPhysicalMaterial({ color: '#efe8da', roughness: 0.3, clearcoat: 0.5, clearcoatRoughness: 0.25, vertexColors: true, envMapIntensity: 0.5, ...inner }));
+    const gumMat = this._track(new THREE.MeshPhysicalMaterial({ color: '#c4646c', roughness: 0.42, clearcoat: 0.4, clearcoatRoughness: 0.3, vertexColors: true, envMapIntensity: 0.4, ...inner }));
+    const tongueMat = this._track(new THREE.MeshStandardMaterial({ color: '#b5525a', roughness: 0.5, vertexColors: true, side: THREE.DoubleSide, ...inner }));   // сетка языка обходится «изнанкой» к камере
+    M.teethMat = teethMat; M.gumMat = gumMat; M.cavMat = cavMat; M.tongueMat = tongueMat;
+
     M.N = 36;
     M.cav = new THREE.Mesh(this._track(dynamicGrid(M.N, 8, true)), cavMat);
     M.tongue = new THREE.Mesh(this._track(dynamicGrid(16, 6, true)), tongueMat);
-    M.teethL = new THREE.Mesh(this._track(dynamicGrid(24, 2, true)), teethMat);
-    M.teethU = new THREE.Mesh(this._track(dynamicGrid(24, 2, true)), teethMat);
+    // зубы и дёсны: верхние неподвижны, нижние — в группе, которая поворачивается вокруг оси челюсти
+    const zFront = this.hm.get(0, LAYOUT.mouthY) - 0.012;
+    const dU = buildDentition(P, zFront, true), dL = buildDentition(P, zFront - 0.024, false);
+    for (const g of [dU.teeth, dU.gums, dL.teeth, dL.gums]) this._track(g);
+    M.teethU = new THREE.Mesh(dU.teeth, teethMat); M.gumsU = new THREE.Mesh(dU.gums, gumMat);
+    M.jaw = new THREE.Group();
+    M.jaw.position.set(0, JAW_PIVOT.y, JAW_PIVOT.z);
+    const jawInner = new THREE.Group();
+    jawInner.position.set(0, -JAW_PIVOT.y, -JAW_PIVOT.z);
+    M.jaw.add(jawInner);
+    M.teethL = new THREE.Mesh(dL.teeth, teethMat); M.gumsL = new THREE.Mesh(dL.gums, gumMat);
+    jawInner.add(M.teethL, M.gumsL);
+    this.headRoot.add(M.jaw);
     M.lipU = new THREE.Mesh(this._track(dynamicGrid(M.N, 7, true)), this.mat.lip);
     M.lipL = new THREE.Mesh(this._track(dynamicGrid(M.N, 7, true)), this.mat.lip);
     let order = 10;
-    for (const k of ['cav', 'tongue', 'teethL', 'teethU', 'lipU', 'lipL']) {
+    for (const k of ['cav', 'tongue', 'gumsL', 'teethL', 'gumsU', 'teethU', 'lipU', 'lipL']) {
       const m = M[k];
       m.renderOrder = order++;
       m.frustumCulled = false;
       if (k !== 'lipU' && k !== 'lipL') m.userData.noShadow = true;
-      this.headRoot.add(m);
+      if (!m.parent) this.headRoot.add(m);
     }
-    // постоянные цвета: зубы темнеют к краям (тень во рту), губы темнеют к внутренней кромке
-    const shadeTeeth = (geo) => {
-      const { cols, rows } = geo.userData, c = geo.attributes.color.array;
-      for (let r = 0; r <= rows; r++) for (let i = 0; i <= cols; i++) {
-        const t = (i / cols) * 2 - 1, k = (r * (cols + 1) + i) * 3, v = lerp(0.95, 0.35, Math.abs(t) ** 1.6);
-        c[k] = c[k + 1] = c[k + 2] = v;
-      }
-    };
-    shadeTeeth(M.teethU.geometry); shadeTeeth(M.teethL.geometry);
+    // постоянные цвета: губы темнеют к внутренней кромке
+    // губы темнеют к внутренней кромке и к уголкам; у внешнего контура цвет чуть уходит в тон кожи (без «наклейки»)
+    const lipC = new THREE.Color(P.lip), skinC = new THREE.Color(P.skin);
+    const toSkin = [skinC.r / Math.max(0.05, lipC.r), skinC.g / Math.max(0.05, lipC.g), skinC.b / Math.max(0.05, lipC.b)];
     const shadeLip = (geo) => {
       const { cols, rows } = geo.userData, c = geo.attributes.color.array;
       for (let r = 0; r <= rows; r++) for (let i = 0; i <= cols; i++) {
         const s = r / rows, t = (i / cols) * 2 - 1, k = (r * (cols + 1) + i) * 3;
         const v = lerp(0.55, 1, smoothstep(0, 0.35, s)) * lerp(1, 0.75, Math.abs(t) ** 4);
-        c[k] = v; c[k + 1] = v * 0.97; c[k + 2] = v * 0.97;
+        const edge = smoothstep(0.82, 1, s) * 0.22;
+        c[k] = v * lerp(1, toSkin[0], edge); c[k + 1] = v * 0.97 * lerp(1, toSkin[1], edge); c[k + 2] = v * 0.97 * lerp(1, toSkin[2], edge);
       }
     };
     shadeLip(M.lipU.geometry); shadeLip(M.lipL.geometry);
@@ -767,8 +920,7 @@ export class ProceduralHead {
       const D = 0.03 * lerp(ldR, ldL, f) + 0.03 * fun + 0.012 * stretch + 0.004 * puck;
       C.u[i] = C.cy[i] + U * bell + 0.012 * shU - 0.004 * rollU;
       C.l[i] = C.cy[i] - D * bell + 0.012 * shL + 0.012 * rollL;
-      const bow = 1 - 0.2 * Math.exp(-((t / 0.09) ** 2)) + 0.12 * Math.exp(-(((at - 0.2) / 0.1) ** 2));
-      C.thU[i] = thU0 * Math.pow(Math.max(0, 1 - at ** 2.4), 0.55) * bow;
+      C.thU[i] = thU0 * upperLipProfile(t, P);
       C.thL[i] = thL0 * Math.pow(Math.max(0, 1 - at ** 2.2), 0.5);
       const cw = 0.5 * at ** 4;                     // в уголках губы делят движение челюсти пополам
       C.wU[i] = cw * lowerJawW;
@@ -786,7 +938,8 @@ export class ProceduralHead {
           const th = upper ? C.thU[i] : C.thL[i];
           const inner = upper ? C.u[i] : C.l[i];
           const y = upper ? inner + th * s : inner - th * s;
-          const bulge = th * 0.55 * Math.pow(Math.sin(Math.PI * (0.12 + 0.88 * s)), 0.65) * (1 - 0.3 * s);
+          const bulge = th * 0.55 * Math.pow(Math.sin(Math.PI * (0.12 + 0.88 * s)), 0.65) * (1 - 0.3 * s)
+            + 0.0022 * Math.exp(-(((s - 0.9) / 0.06) ** 2));       // кайма: валик по внешнему контуру ловит свет
           const curl = -0.012 * (1 - s) ** 3 - roll * 0.015 * (1 - s);
           const w = upper ? C.wU[i] : C.wL[i];
           this._mouthPoint(C.x[i], y, 0.004 + bulge + curl + C.zl[i], w, J, pos, (r * (N + 1) + i) * 3);
@@ -814,20 +967,16 @@ export class ProceduralHead {
       geo.attributes.position.needsUpdate = true;
     }
 
-    // зубы: верхние на черепе, нижние на челюсти; дуга уходит назад к краям
-    const teeth = (mesh, yTop, yBot, w) => {
-      const geo = mesh.geometry, { cols, rows } = geo.userData, pos = geo.attributes.position.array;
-      const hw = P.mouthHW * 0.95;
-      for (let r = 0; r <= rows; r++) for (let i = 0; i <= cols; i++) {
-        const t = (i / cols) * 2 - 1, x = t * hw;
-        const y = lerp(yTop, yBot, r / rows);
-        this._mouthPoint(x, y, -0.006 - 0.05 * t * t + C.zl[N >> 1] * 0.5, w, J, pos, (r * (cols + 1) + i) * 3);
-      }
-      geo.attributes.position.needsUpdate = true;
-      geo.computeVertexNormals();
-    };
-    teeth(M.teethU, MY + 0.03, MY - 0.032, 0);
-    teeth(M.teethL, MY + 0.004, MY - 0.06, lowerJawW);
+    // зубы: нижняя дуга поворачивается вместе с челюстью (тот же угол, что у морфа jawOpen)
+    M.jaw.rotation.x = J.open * JAW_THETA;
+    M.jaw.position.x = (J.left - J.right) * 0.04;
+    M.jaw.position.z = JAW_PIVOT.z + J.fwd * 0.045;
+    // свет во рту: чем шире раскрыт рот, тем светлее зубы и полость (узкая щель — почти темнота)
+    const gap = clamp(J.open * 1.6 + smile * 0.55 + 0.4 * (upL + upR) / 2 - 0.5 * press, 0, 1);
+    const lit = lerp(0.5, 1, smoothstep(0, 0.6, gap));
+    M.teethMat.color.set('#efe8da').multiplyScalar(lit);
+    M.gumMat.color.set('#c4646c').multiplyScalar(lit);
+    M.tongueMat.color.set('#b5525a').multiplyScalar(lerp(0.6, 1, smoothstep(0, 0.6, gap)));
 
     // язык
     {
@@ -835,9 +984,9 @@ export class ProceduralHead {
       const out = g('tongueOut');
       for (let r = 0; r <= rows; r++) for (let i = 0; i <= cols; i++) {
         const t = (i / cols) * 2 - 1, s = r / rows;
-        const x = t * P.mouthHW * 0.75 * Math.sqrt(1 - 0.6 * s * s);
-        const y = MY - 0.075 + s * (0.05 + 0.05 * out) * (1 - 0.5 * t * t);
-        this._mouthPoint(x, y, -0.03 + 0.04 * out * s - 0.03 * t * t, lowerJawW, J, pos, (r * (cols + 1) + i) * 3);
+        const x = t * P.mouthHW * 0.82 * Math.sqrt(1 - 0.6 * s * s);
+        const y = MY - 0.068 + s * (0.05 + 0.06 * out) * (1 - 0.5 * t * t);
+        this._mouthPoint(x, y, -0.068 + 0.1 * out * s - 0.03 * t * t, lowerJawW, J, pos, (r * (cols + 1) + i) * 3);
       }
       geo.attributes.position.needsUpdate = true;
       geo.computeVertexNormals();
@@ -975,8 +1124,9 @@ export class ProceduralHead {
       const blink = ch['eyeBlink' + S] || 0, sq = ch['eyeSquint' + S] || 0, wide = ch['eyeWide' + S] || 0;
       const chs = ch['cheekSquint' + S] || 0, sm = ch['mouthSmile' + S] || 0;
       const bd = ch['browDown' + S] || 0, bu = Math.max(ch.browInnerUp || 0, ch['browOuterUp' + S] || 0);
-      const lower = P.lowerOpen + 13 * sq + 9 * chs + 3 * sm - 4 * wide + pitchDeg * 0.25;
-      const open = P.upperOpen + 18 * wide - 7 * sq - 5 * bd + 3 * bu + pitchDeg * 0.65;
+      // веки следуют за взглядом: вниз верхнее веко почти «едет» за зрачком, вверх — меньше; нижнее — слабее
+      const lower = P.lowerOpen + 13 * sq + 9 * chs + 3 * sm - 4 * wide + pitchDeg * (pitchDeg > 0 ? 0.4 : 0.22);
+      const open = P.upperOpen + 18 * wide - 7 * sq - 5 * bd + 3 * bu + pitchDeg * (pitchDeg > 0 ? 0.55 : 0.85);
       const upper = Math.max(lower + 1.2, lerp(open, lower + 1.5, clamp(blink, 0, 1)));
       e.up.rotation.x = -upper * DEG;
       e.lo.rotation.x = -lower * DEG;

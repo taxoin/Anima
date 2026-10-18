@@ -36,7 +36,7 @@
     const ALLOWED = q.get('origin') || '*';
     const ALLOWED_METHODS = new Set(['setEmotion', 'addEmotion', 'micro', 'gesture', 'express', 'speak', 'stopSpeaking', 'setGender',
       'lookAt', 'setIdle', 'setChannels', 'clearChannels', 'setLighting', 'setBackground', 'setFraming', 'getEmotion', 'getState',
-      'fromPhoto', 'setPhotoOptions', 'clearPhoto', 'exportAvatar', 'importAvatar']);   // fromPhoto/importAvatar принимают File/Blob (structured clone) или URL
+      'fromPhoto', 'setPhotoOptions', 'clearPhoto', 'exportAvatar', 'importAvatar', 'setLook', 'getLook', 'pause', 'resume', 'likeness']);   // fromPhoto/importAvatar принимают File/Blob (structured clone) или URL
     window.addEventListener('message', async (e) => {
       if (ALLOWED !== '*' && e.origin !== ALLOWED) return;
       const m = e.data;
@@ -46,7 +46,7 @@
       if (result === head) result = true;
       if (m.id !== undefined) e.source?.postMessage({ type: 'emotional-head:result', id: m.id, result: JSON.parse(JSON.stringify(result ?? null)) }, e.origin === 'null' ? '*' : e.origin);
     });
-    for (const ev of ['emotionChange', 'speakStart', 'speakEnd', 'word', 'cue', 'gesture', 'photoAvatar']) {
+    for (const ev of ['emotionChange', 'speakStart', 'speakEnd', 'word', 'cue', 'gesture', 'photoAvatar', 'lookChange']) {
       head.on(ev, (data) => parent !== window && parent.postMessage({ type: 'emotional-head:event', event: ev, data: JSON.parse(JSON.stringify(data ?? null)) }, ALLOWED));
     }
   </script>

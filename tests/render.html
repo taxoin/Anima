@@ -1,0 +1,39 @@
+<!doctype html>
+<!-- Стенд для визуальных тестов (tests/visual.mjs): детерминированные кадры без анимационного цикла. -->
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Anima — render test</title>
+  <link rel="icon" href="data:,">
+  <script>
+    // детерминированный Math.random: процедурные текстуры (радужка, пряди) одинаковы от запуска к запуску
+    window.__seed = (a) => { Math.random = () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };
+    __seed(1);
+  </script>
+  <script type="importmap">
+  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+                 "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }
+  </script>
+  <style>html, body { margin: 0; background: #000; } #head { width: 480px; height: 600px; }</style>
+</head>
+<body>
+  <div id="head"></div>
+  <script type="module">
+    import { EmotionalHead } from '../src/emotional-head.js';
+    const head = new EmotionalHead('#head', { idle: false, maxPixelRatio: 1, vignette: false, background: 'dark' });
+    head.pause();
+    window.head = head;
+    /** c: { gender, look, avatar (URL файла аватара), channels, pose, framing } → PNG data URL */
+    window.renderCase = async (c) => {
+      __seed(c.seed ?? 1);
+      head.options.look = c.look || {};
+      if (c.avatar) await head.importAvatar(c.avatar, c.gender ? { gender: c.gender } : {});
+      else { head.useProcedural(c.gender || 'female'); }
+      head.setFraming(c.framing || 'portrait');
+      head.renderStill(c.channels, c.pose);
+      return head.renderer.domElement.toDataURL('image/png');
+    };
+    window.ready = true;
+  </script>
+</body>
+</html>

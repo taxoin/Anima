@@ -1,0 +1,99 @@
+/**
+ * Визуальные регрессионные тесты: рендерим набор состояний головы и сравниваем со снимками-эталонами.
+ *
+ *   npm run test:visual            сравнить с tests/visual/ref/*.png
+ *   npm run test:visual -- --update   перезаписать эталоны
+ *   npm run test:visual -- smile      только кейсы, в имени которых есть «smile»
+ *
+ * Нужен Chrome/Chromium (путь: $CHROME, по умолчанию /usr/bin/google-chrome) и npm i (puppeteer-core).
+ * Рендер идёт через SwiftShader, поэтому эталоны не зависят от видеокарты. three.js грузится с CDN.
+ * Различия: пиксель «другой», если max |ΔRGB| > 24; кейс падает, если таких пикселей > 0,4 %.
+ * Карты различий пишутся в tests/visual/out/.
+ */
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import puppeteer from 'puppeteer-core';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const REF = path.join(ROOT, 'tests/visual/ref'), OUT = path.join(ROOT, 'tests/visual/out');
+const args = process.argv.slice(2), update = args.includes('--update'), filter = args.filter((a) => !a.startsWith('--'));
+const PIX_TOL = 24, FAIL_FRAC = 0.004;
+
+const SMILE = { mouthSmileLeft: 0.8, mouthSmileRight: 0.8, cheekSquintLeft: 0.4, cheekSquintRight: 0.4, jawOpen: 0.18, mouthUpperUpLeft: 0.3, mouthUpperUpRight: 0.3 };
+const AA = { jawOpen: 0.55, mouthLowerDownLeft: 0.3, mouthLowerDownRight: 0.3, mouthUpperUpLeft: 0.15, mouthUpperUpRight: 0.15 };
+export const CASES = [
+  { name: 'female-neutral', gender: 'female' },
+  { name: 'male-neutral', gender: 'male' },
+  { name: 'female-smile', gender: 'female', channels: SMILE, framing: 'close' },
+  { name: 'male-aa', gender: 'male', channels: AA, framing: 'close' },
+  { name: 'female-look-down', gender: 'female', pose: { eyePitch: -0.35 }, framing: 'close' },
+  { name: 'male-look-up-left', gender: 'male', pose: { eyePitch: 0.3, eyeYaw: 0.4 }, framing: 'close' },
+  { name: 'female-tongue', gender: 'female', channels: { jawOpen: 0.45, tongueOut: 0.7 }, framing: 'close' },
+  { name: 'female-porcelain-blue', gender: 'female', look: { skin: 'porcelain', iris: 'blue' } },
+  { name: 'male-deep-heterochromia', gender: 'male', look: { skin: 'deep', iris: 'amber', irisRight: 'green' }, framing: 'close' },
+  { name: 'avatar-lincoln', avatar: '/tests/fixtures/lincoln.anima.json', gender: 'male' },
+  { name: 'avatar-monalisa-smile', avatar: '/tests/fixtures/monalisa.anima.json', channels: SMILE, framing: 'close' },
+];
+
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg' };
+const server = http.createServer((req, res) => {
+  const f = path.join(ROOT, decodeURIComponent(new URL(req.url, 'http://x').pathname));
+  if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); return res.end(); }
+  res.writeHead(200, { 'content-type': MIME[path.extname(f)] || 'application/octet-stream' });
+  fs.createReadStream(f).pipe(res);
+});
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const base = `http://127.0.0.1:${server.address().port}`;
+
+const browser = await puppeteer.launch({
+  executablePath: process.env.CHROME || '/usr/bin/google-chrome', headless: 'new',
+  args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox', '--window-size=600,700'],
+});
+const page = await browser.newPage();
+await page.setViewport({ width: 600, height: 700, deviceScaleFactor: 1 });
+const errors = [];
+page.on('pageerror', (e) => errors.push(e.message));
+page.on('console', (m) => m.type() === 'error' && !/GL Driver|favicon/.test(m.text()) && errors.push(m.text()));
+await page.goto(`${base}/tests/render.html`, { waitUntil: 'networkidle0' });
+try { await page.waitForFunction('window.ready === true', { timeout: 30000 }); }
+catch (e) { console.error('Стенд не загрузился:\n  ' + (errors.join('\n  ') || e.message)); await browser.close(); server.close(); process.exit(2); }
+
+fs.mkdirSync(REF, { recursive: true }); fs.mkdirSync(OUT, { recursive: true });
+let failed = 0;
+for (const c of CASES.filter((c) => !filter.length || filter.some((f) => c.name.includes(f)))) {
+  const png = await page.evaluate((c) => window.renderCase(c), c);
+  const buf = Buffer.from(png.split(',')[1], 'base64');
+  const refFile = path.join(REF, c.name + '.png');
+  if (update || !fs.existsSync(refFile)) { fs.writeFileSync(refFile, buf); console.log(`  ✎ ${c.name} — эталон записан`); continue; }
+  const ref = 'data:image/png;base64,' + fs.readFileSync(refFile).toString('base64');
+  const r = await page.evaluate(async (a, b, tol) => {
+    const load = async (u) => createImageBitmap(await (await fetch(u)).blob());
+    const [A, B] = await Promise.all([load(a), load(b)]);
+    if (A.width !== B.width || A.height !== B.height) return { frac: 1, size: true };
+    const w = A.width, h = A.height, cv = new OffscreenCanvas(w, h), g = cv.getContext('2d', { willReadFrequently: true });
+    g.drawImage(A, 0, 0); const da = g.getImageData(0, 0, w, h).data;
+    g.drawImage(B, 0, 0); const db = g.getImageData(0, 0, w, h);
+    let bad = 0;
+    for (let i = 0; i < da.length; i += 4) {
+      const d = Math.max(Math.abs(da[i] - db.data[i]), Math.abs(da[i + 1] - db.data[i + 1]), Math.abs(da[i + 2] - db.data[i + 2]));
+      if (d > tol) { bad++; db.data[i] = 255; db.data[i + 1] = 0; db.data[i + 2] = 255; }
+      else { const l = (db.data[i] + db.data[i + 1] + db.data[i + 2]) / 9; db.data[i] = db.data[i + 1] = db.data[i + 2] = l; }
+    }
+    g.putImageData(db, 0, 0);
+    const blob = await cv.convertToBlob({ type: 'image/png' });
+    const diff = await new Promise((res) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(blob); });
+    return { frac: bad / (w * h), diff };
+  }, png, ref, PIX_TOL);
+  fs.writeFileSync(path.join(OUT, c.name + '.png'), buf);
+  if (r.diff) fs.writeFileSync(path.join(OUT, c.name + '.diff.png'), Buffer.from(r.diff.split(',')[1], 'base64'));
+  const ok = r.frac <= FAIL_FRAC;
+  if (!ok) failed++;
+  console.log(`  ${ok ? '✓' : '✗'} ${c.name} — ${(r.frac * 100).toFixed(2)} % пикселей отличается${r.size ? ' (другой размер)' : ''}`);
+}
+await browser.close();
+server.close();
+if (errors.length) { console.log('Ошибки страницы:\n  ' + errors.join('\n  ')); failed++; }
+console.log(failed ? `\n${failed} проблем(ы). Карты различий: tests/visual/out/` : '\nВсё совпадает.');
+process.exit(failed ? 1 : 0);

@@ -31,6 +31,10 @@
   details { border-top:1px solid var(--line); padding:10px 0; } details[open] summary { margin-bottom:8px; }
   summary { cursor:pointer; font-weight:600; font-size:13px; letter-spacing:.02em; color:#cfd5e4; list-style:none; }
   summary::before { content:"▸ "; color:var(--dim); } details[open] summary::before { content:"▾ "; }
+  .swatches { display:flex; gap:5px; flex-wrap:wrap; }
+  .swatches button { width:22px; height:22px; padding:0; border-radius:50%; border:2px solid transparent; }
+  .swatches button.on { border-color:var(--text); }
+  .swatches button.auto { width:auto; padding:0 7px; border-radius:11px; border:1px solid var(--line); font-size:11px; }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
   label { color:var(--dim); font-size:12px; }
   .chips { display:flex; flex-wrap:wrap; gap:6px; }
@@ -88,6 +92,8 @@
         <label>Кадр</label>
         <select id="framing"><option>portrait</option><option>close</option><option>bust</option></select>
       </div>
+      <div class="row"><label style="width:44px">кожа</label><span class="swatches" id="skinSw"></span></div>
+      <div class="row"><label style="width:44px">глаза</label><span class="swatches" id="eyeSw"></span></div>
       <div class="row">
         <label><input type="checkbox" id="idle" checked> idle</label>
         <label><input type="checkbox" id="follow"> взгляд за курсором</label>
@@ -162,7 +168,7 @@
 </div>
 
 <script type="module">
-import { EmotionalHead, EMOTIONS, MICRO, GESTURES, CHANNELS, WebSpeech, parseNarrative } from './src/emotional-head.js';
+import { EmotionalHead, EMOTIONS, MICRO, GESTURES, CHANNELS, WebSpeech, parseNarrative, SKIN_TONES, EYE_COLORS } from './src/emotional-head.js';
 
 const head = new EmotionalHead('#stage', { gender: 'female', background: 'dark', emotion: 'neutral', framing: 'portrait' });
 window.head = head; // для экспериментов в консоли
@@ -195,6 +201,25 @@ $('#bgBtn').onclick = () => {
   $('#bgBtn').textContent = light ? 'Тёмный фон' : 'Светлый фон';
   api(`head.setBackground('${light ? 'light' : 'dark'}')`, () => head.setBackground(light ? 'light' : 'dark'));
 };
+// пресеты внешности: head.setLook({ skin: 'olive' }) / ({ iris: 'hazel' }); «авто» — по пресету пола или по фото
+function swatches(el, key, presets, color) {
+  const all = [['auto', null], ...Object.keys(presets).map((k) => [k, color(presets[k])])];
+  for (const [name, c] of all) {
+    const b = document.createElement('button');
+    b.title = name; b.dataset.v = name;
+    if (c) b.style.background = c; else { b.textContent = 'авто'; b.className = 'auto on'; }
+    b.onclick = () => {
+      el.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+      const look = head.getLook();
+      if (name === 'auto') delete look[key]; else look[key] = name;
+      if (key === 'skin' && name === 'auto') delete look.lip;
+      api(`head.setLook(${fmt(look)}, { replace: true })`, () => head.setLook(look, { replace: true }));
+    };
+    el.append(b);
+  }
+}
+swatches($('#skinSw'), 'skin', SKIN_TONES, (t) => t.skin);
+swatches($('#eyeSw'), 'iris', EYE_COLORS, (c) => `radial-gradient(circle, #111 0 28%, ${c[0]} 32%, ${c[1]} 100%)`);
 $('#lighting').onchange = (e) => api(`head.setLighting('${e.target.value}')`, () => head.setLighting(e.target.value));
 $('#framing').onchange = (e) => api(`head.setFraming('${e.target.value}')`, () => head.setFraming(e.target.value));
 $('#idle').onchange = (e) => api(`head.setIdle(${e.target.checked})`, () => head.setIdle(e.target.checked));
@@ -332,6 +357,8 @@ async function openAvatar(f) {
     const o = head._photoOpts || {};
     for (const [id, k] of [['caric', 'caricature'], ['photoTex', 'texture'], ['realism', 'realism']]) if (o[k] !== undefined) { $('#' + id).value = o[k]; $('#' + id + 'V').textContent = o[k]; }
     document.querySelectorAll('[data-gender]').forEach((b) => b.classList.toggle('on', b.dataset.gender === head.gender));
+    const lk = head.getLook();
+    for (const [el, key] of [['#skinSw', 'skin'], ['#eyeSw', 'iris']]) $(el).querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (typeof lk[key] === 'string' ? lk[key] : 'auto')));
     status(`Аватар открыт: ${f.name}`);
     head.stopSpeaking();
     head.speak('[e:curious] Я снова здесь. [e:smirk*0.8] Скучали?', { tts: WebSpeech.available() ? $('#ttsMode').value : 'none', revert: true });
