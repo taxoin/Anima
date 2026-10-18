@@ -113,6 +113,8 @@
       </div>
       <div class="row"><label style="width:84px" for="ageR">возраст</label><input type="range" id="ageR" min="0" max="1" step="0.05" value="0"></div>
       <div class="row"><label style="width:84px" for="frecklesR">веснушки</label><input type="range" id="frecklesR" min="0" max="1" step="0.05" value="0"></div>
+      <div class="row"><label style="width:84px" for="grayR">седина</label><input type="range" id="grayR" min="0" max="1" step="0.05" value="0"></div>
+      <div class="row"><label style="width:84px" for="streakR">мелирование</label><input type="range" id="streakR" min="0" max="1" step="0.05" value="0"></div>
       <div class="row"><button id="randomLook">Случайный персонаж</button><button id="resetLook">Сбросить внешность</button></div>
       <div class="row">
         <label><input type="checkbox" id="idle" checked> idle</label>
@@ -393,7 +395,7 @@ lookSel('#makeupSel', 'makeup');
 lookSel('#hatSel', 'hat');
 lookSel('#earSel', 'earrings');
 let lookT = 0;
-for (const [id, key] of [['#ageR', 'age'], ['#frecklesR', 'freckles']]) $(id).addEventListener('input', (e) => {
+for (const [id, key] of [['#ageR', 'age'], ['#frecklesR', 'freckles'], ['#grayR', 'hairGray'], ['#streakR', 'hairStreaks']]) $(id).addEventListener('input', (e) => {
   clearTimeout(lookT);
   lookT = setTimeout(() => { const look = head.getLook(); if (+e.target.value) look[key] = +e.target.value; else delete look[key]; api(`head.setLook(${fmt(look)}, { replace: true })`, () => head.setLook(look, { replace: true })); }, 200);
 });
@@ -404,7 +406,7 @@ function syncLook() {
   $('#eyeShape').value = str(lk.eyeShape); $('#noseSel').value = str(lk.noseShape); $('#glassesSel').value = lk.glasses === false ? 'none' : str(lk.glasses);
   $('#hairSel').value = str(lk.hairStyle); $('#beardSel').value = lk.beard === null ? 'none' : str(lk.beard);
   $('#makeupSel').value = str(lk.makeup); $('#hatSel').value = str(lk.hat); $('#earSel').value = str(lk.earrings);
-  $('#ageR').value = lk.age || 0; $('#frecklesR').value = lk.freckles || 0;
+  $('#ageR').value = lk.age || 0; $('#frecklesR').value = lk.freckles || 0; $('#grayR').value = lk.hairGray || 0; $('#streakR').value = lk.hairStreaks || 0;
 }
 const pick = (o) => { const k = Object.keys(o); return k[Math.floor(Math.random() * k.length)]; };
 $('#randomLook').onclick = () => {
@@ -418,6 +420,8 @@ $('#randomLook').onclick = () => {
   if (!male && r() < 0.4) look.earrings = pick(EARRINGS);
   if (r() < 0.25) look.freckles = +(0.3 + r() * 0.6).toFixed(2);
   if (r() < 0.3) look.age = +(0.3 + r() * 0.7).toFixed(2);
+  if (look.age > 0.6 && r() < 0.6) look.hairGray = +(0.3 + r() * 0.7).toFixed(2);
+  if (!male && r() < 0.2) look.hairStreaks = +(0.3 + r() * 0.5).toFixed(2);
   api(`head.setLook(${fmt(look)}, { replace: true })`, () => head.setLook(look, { replace: true }));
   syncLook();
 };

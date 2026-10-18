@@ -696,7 +696,44 @@ export class Portrait {
     if (cols.length > 50) {                       // воспринимаемый цвет — светлая половина (без теней у корней)
       cols.sort((a, b) => lum(...a) - lum(...b));
       this.hairColor = robustColor(cols.slice(Math.floor(cols.length * 0.45), Math.floor(cols.length * 0.95)));
+      this._hairTone(cols);
     }
+  }
+
+  /**
+   * Седина и ровность цвета волос (1.5). Седые волоски — светлые и ненасыщенные (L > 0.4, S < 0.2): на цветных
+   * портретах их доля 0.29–0.42 у седых и ≤ 0.03 у остальных. Мелкий контраст (разброс яркости в окнах ~0.012
+   * ед. головы, деленный на среднюю) отличает ровную белую шевелюру (~0.08) от «соли с перцем» (~0.3).
+   * На чёрно-белых снимках седину не отличить от светлых волос — там только hairVar.
+   * Мелирование по фото не определяется: светлые пряди неотличимы от бликов освещения.
+   */
+  _hairTone(cols) {
+    this.hairGray = 0; this.hairGrayColor = null; this.hairVar = null;
+    const sat = (c) => { const M = Math.max(...c), m = Math.min(...c); return M > 0 ? (M - m) / M : 0; };
+    const bw = cols.reduce((a, c) => a + sat(c), 0) / cols.length < 0.025;
+    // мелкий контраст по окнам внутри маски (окно целиком в волосах — без края с фоном)
+    const M = this.hairMask, W = this.img.width, H = this.img.height, r = Math.max(1, Math.round(0.012 / this.frame.s));
+    let cs = 0, cn = 0;
+    for (let y = 2; y < M.h - 2; y += 4) for (let x = 2; x < M.w - 2; x += 4) {
+      if (!(M.data[y * M.w + x] && M.data[(y - 2) * M.w + x] && M.data[(y + 2) * M.w + x] && M.data[y * M.w + x - 2] && M.data[y * M.w + x + 2])) continue;
+      const px = ((x + 0.5) / M.w) * W, py = ((y + 0.5) / M.h) * H;
+      let s1 = 0, s2 = 0, n = 0;
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) { const c = this._rgb(px + dx, py + dy); if (!c) continue; const L = lum(...c); s1 += L; s2 += L * L; n++; }
+      if (n < 4) continue;
+      const m = s1 / n; cs += Math.sqrt(Math.max(0, s2 / n - m * m)) / Math.max(0.05, m); cn++;
+    }
+    const fine = cn > 30 ? cs / cn : null;
+    if (fine !== null) this.hairVar = clamp(fine / 0.3, 0.3, 1.4);
+    if (bw) return;
+    const isGray = (c) => lum(...c) > 0.4 && sat(c) < 0.2;
+    const gray = cols.filter(isGray), g = gray.length / cols.length;
+    if (g < 0.15 || gray.length < 30) return;
+    const gc = robustColor(gray.slice()), gl = lum(...gc);
+    this.hairGrayColor = gc.map((v) => lerp(v, gl, 0.75));                   // седина почти нейтральна, остаток оттенка — отсвет кожи и фона
+    if (fine !== null && fine < 0.15) { this.hairGray = 1; this.hairColor = this.hairGrayColor; return; }   // ровно светлые — полностью седые
+    this.hairGray = clamp(g * 1.2, 0, 0.9);                                  // «соль с перцем»: основа — тёмные волоски
+    const dark = cols.filter((c) => !isGray(c));
+    if (dark.length > 30) { dark.sort((a, b) => lum(...a) - lum(...b)); this.hairColor = robustColor(dark.slice(Math.floor(dark.length * 0.1), Math.floor(dark.length * 0.6))); }
   }
 
   /**
@@ -1093,6 +1130,8 @@ export class Portrait {
     if (this.lidTex && tex > 0) ov.lidTint = this.lidTex.map((v) => lerp(1, v, tex));
     if (this.beard > 0.05) ov.stubble = this.beard * 2.2;      // борода/щетина: затемнение челюсти и усов поверх текстуры
     if (this.hairColor) ov.hair = hex(this.hairColor.map((v) => v * 1.05));
+    if (this.hairGray > 0) { ov.hairGray = Math.round(this.hairGray * 100) / 100; ov.hairGrayColor = hex(this.hairGrayColor.map((v) => v * 1.05)); }
+    if (this.hairVar !== null) ov.hairVar = Math.round(this.hairVar * 100) / 100;
     if (this.clothColor) ov.cloth = hex(this.clothColor);
     if (this.hairR && this.hairStyle && this.hairStyle !== 'none') {
       // толщина = граница волос на фото − силуэт нашего черепа на том же луче (силуэт анфас: √(1−y²)·gx(y))
@@ -1237,7 +1276,7 @@ export class Portrait {
       colors: { skinPhoto: rc(this.skinPhoto), skin: rc(this.skinTex), lip: rc(this.lipColor), brow: rc(this.browColor), iris: rc(this.irisColor), hair: rc(this.hairColor), cloth: rc(this.clothColor) },
       lidTex: rc(this.lidTex), beard: r4(this.beard), grayscale: !!this.grayscale, glasses: this.glasses || null, beardStyle: this.beardStyle || null, hat: this.hat || null,
       bs: this.bs ? Object.fromEntries(Object.entries(this.bs).filter(([, v]) => v > 0.03).map(([k, v]) => [k, Math.round(v * 100) / 100])) : null,
-      hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY), r: this.hairR ? this.hairR.map(r4) : null, bang: this.bang ? { side: this.bang.side, depth: r4(this.bang.depth) } : null },
+      hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY), r: this.hairR ? this.hairR.map(r4) : null, bang: this.bang ? { side: this.bang.side, depth: r4(this.bang.depth) } : null, gray: r4(this.hairGray || 0), grayColor: rc(this.hairGrayColor), vari: r4(this.hairVar) },
       tex: null,
       corr: this.corr ? JSON.parse(JSON.stringify(this.corr, (k, v) => (typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v))) : null,
       warp: this.warp ? { k: this.warp.k, n: this.warp.n, win: this.warp.win, pts: this.warp.pts.map((p) => p.map(r4)) } : null,
@@ -1279,6 +1318,7 @@ export class Portrait {
     p.lidTex = d.lidTex; p.beard = d.beard || 0; p.grayscale = !!d.grayscale; p.bs = d.bs || null; p.glasses = d.glasses || null; p.beardStyle = d.beardStyle || null; p.hat = d.hat || null;
     p.hairStyle = d.hair?.style ?? null; p.hairBottom = d.hair?.bottom ?? null; p.hairlineY = d.hair?.line ?? null;
     p.hairR = d.hair?.r ?? null; p.bang = d.hair?.bang ?? null;
+    p.hairGray = d.hair?.gray || 0; p.hairGrayColor = d.hair?.grayColor ?? null; p.hairVar = d.hair?.vari ?? null;
     p.tex = null;
     if (d.tex?.img) {
       const t = d.tex, bmp = await createImageBitmap(await (await fetch(t.img)).blob());
@@ -1301,7 +1341,8 @@ export class Portrait {
     const hx = (c) => (c ? hex(c) : null);
     return {
       warnings: this.warnings, yaw: +this.yaw.toFixed(3), expression: this.expression, glasses: this.glasses, beard: this.beardStyle, hat: this.hat || null,
-      hairStyle: this.hairStyle, colors: { skin: hx(this.skinTex), lip: hx(this.lipColor), brow: hx(this.browColor), iris: hx(this.irisColor), hair: hx(this.hairColor), cloth: hx(this.clothColor) },
+      hairStyle: this.hairStyle, colors: { skin: hx(this.skinTex), lip: hx(this.lipColor), brow: hx(this.browColor), iris: hx(this.irisColor), hair: hx(this.hairColor), hairGray: hx(this.hairGrayColor), cloth: hx(this.clothColor) },
+      hairGray: +(this.hairGray || 0).toFixed(2), hairVar: this.hairVar === null || this.hairVar === undefined ? null : +this.hairVar.toFixed(2),
       measures: Object.fromEntries(Object.entries(this.meas).filter(([, v]) => typeof v === 'number').map(([k, v]) => [k, +(v / MEAN_M[k]).toFixed(3)])),
       widths: this.meas.widths.map((v) => +v.toFixed(3)),
       widthsAbs: this.meas.widthsAbs.map((v) => (v ? +v.toFixed(4) : null)),

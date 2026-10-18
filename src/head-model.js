@@ -620,16 +620,45 @@ function lipNormalTexture() {
   return t;
 }
 
-function hairTexture(color) {
+/**
+ * Окраска прядей (1.5): седина, мелирование, разброс оттенков. P → { base, gray, grayCol, streak, streakCol, vari }.
+ * hairGray — доля седых волосков (1 — полностью седые), hairGrayColor; hairStreaks — доля прядей мелирования
+ * (пучками), hairStreakColor; hairVar — разброс яркости волосков (1 — по умолчанию, 0.3 — ровный цвет).
+ */
+export function hairTone(P, color = P.hair, gray = P.hairGray) {
+  const base = new THREE.Color(color);
+  return {
+    base, gray: clamp(gray ?? 0, 0, 1), grayCol: new THREE.Color(P.hairGrayColor || '#c4c2bc'),
+    streak: clamp(P.hairStreaks ?? 0, 0, 1), streakCol: new THREE.Color(P.hairStreakColor || '#' + base.clone().lerp(new THREE.Color('#d9c49c'), 0.55).getHexString()),
+    vari: clamp(P.hairVar ?? 1, 0, 2),
+  };
+}
+/** Средний видимый цвет волос (для sheen и подложки). */
+function hairMean(T) {
+  return T.base.clone().lerp(T.streakCol, T.streak * 0.6).lerp(T.grayCol, T.gray);
+}
+/** Цвет одного волоска: u — случайное 0..1 для выбора седого, inStreak — попал ли в пучок мелирования, l — яркость. */
+function strandColor(T, u, inStreak, l) {
+  const c = u < T.gray ? T.grayCol.clone() : inStreak ? T.streakCol.clone() : T.base.clone();
+  return c.multiplyScalar(l);
+}
+const rgbOf = (c) => `${Math.min(255, c.r * 255) | 0},${Math.min(255, c.g * 255) | 0},${Math.min(255, c.b * 255) | 0}`;
+
+function hairTexture(T) {
   const W = 256, H = 512, c = document.createElement('canvas');
   c.width = W; c.height = H;
   const ctx = c.getContext('2d');
-  const base = new THREE.Color(color);
-  ctx.fillStyle = '#' + base.getHexString(); ctx.fillRect(0, 0, W, H);
+  const mean = hairMean(T);
+  // подложка — между волосками: тот же цвет, что в среднем дают волоски (седина «соль с перцем» — смесь, а не серый слой)
+  ctx.fillStyle = '#' + T.base.clone().lerp(mean, 0.7).getHexString(); ctx.fillRect(0, 0, W, H);
+  // пучки мелирования: центры по ширине текстуры (она повторяется 4 раза по кругу головы)
+  const nS = T.streak > 0 ? Math.round(3 + 5 * T.streak) : 0, cs = Array.from({ length: nS }, (_, i) => (i + 0.3 + 0.4 * Math.random()) * W / nS);
+  const wS = 2 + 6 * T.streak;
+  const inStreak = (x) => T.streak > 0 && cs.some((cx) => Math.abs(((x - cx + W * 1.5) % W) - W / 2) < wS * (0.6 + 0.4 * Math.random()));
   for (let i = 0; i < 1400; i++) {
-    const x = Math.random() * W, l = 0.6 + Math.random() * 0.9;
-    const col = base.clone().multiplyScalar(l);
-    ctx.strokeStyle = `rgba(${col.r * 255 | 0},${col.g * 255 | 0},${col.b * 255 | 0},0.5)`;
+    const x = Math.random() * W, l = 1.05 + T.vari * (Math.random() - 0.5) * 0.9;
+    const col = strandColor(T, T.gray > 0 ? Math.random() : 1, inStreak(x), l);   // лишних Math.random нет — без седины текстура та же, что раньше
+    ctx.strokeStyle = `rgba(${rgbOf(col)},0.5)`;
     ctx.lineWidth = 0.5 + Math.random() * 1.5;
     ctx.beginPath(); ctx.moveTo(x, 0);
     ctx.bezierCurveTo(x + (Math.random() - 0.5) * 20, H * 0.33, x + (Math.random() - 0.5) * 20, H * 0.66, x + (Math.random() - 0.5) * 10, H);
@@ -643,17 +672,18 @@ function hairTexture(color) {
 }
 
 /** Альфа-текстура пряди для карточек: тонкие волоски разной длины и яркости, прозрачный фон (детерминированно). */
-function hairCardTexture(color) {
+function hairCardTexture(T) {
   const W = 128, H = 512, c = document.createElement('canvas');
   c.width = W; c.height = H;
-  const ctx = c.getContext('2d'), base = new THREE.Color(color);
+  const ctx = c.getContext('2d');
   let seed = 3;
   const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const sx = T.streak > 0 ? W * (0.25 + 0.5 * rnd()) : -W;             // пучок мелирования на карточке
   for (let i = 0; i < 46; i++) {
-    const x = W * (0.1 + 0.8 * rnd()), l = 0.8 + 0.35 * rnd(), y0 = H * 0.12 * rnd(), end = H * (0.5 + 0.5 * rnd()), sway = (rnd() - 0.5) * 14;
-    const col = base.clone().multiplyScalar(l), a = 0.5 + 0.5 * rnd();
+    const x = W * (0.1 + 0.8 * rnd()), l = 0.975 + T.vari * (rnd() - 0.5) * 0.35, y0 = H * 0.12 * rnd(), end = H * (0.5 + 0.5 * rnd()), sway = (rnd() - 0.5) * 14;
+    const col = strandColor(T, T.gray > 0 ? rnd() : 1, Math.abs(x - sx) < W * 0.25 * T.streak, l), a = 0.5 + 0.5 * rnd();
     const g = ctx.createLinearGradient(0, y0, 0, end);
-    const rgb = `${Math.min(255, col.r * 255) | 0},${Math.min(255, col.g * 255) | 0},${Math.min(255, col.b * 255) | 0}`;
+    const rgb = rgbOf(col);
     g.addColorStop(0, `rgba(${rgb},0)`); g.addColorStop(0.15, `rgba(${rgb},${a})`); g.addColorStop(0.7, `rgba(${rgb},${a})`); g.addColorStop(1, `rgba(${rgb},0)`);   // у корня и к кончику — на нет
     ctx.strokeStyle = g; ctx.lineWidth = 0.9 + 1.4 * rnd();
     ctx.beginPath(); ctx.moveTo(x, y0); ctx.bezierCurveTo(x + sway * 0.3, end * 0.35, x + sway, end * 0.7, x + sway * 1.3, end); ctx.stroke();
@@ -796,9 +826,9 @@ export class ProceduralHead {
       })),
       lid: null,
       lip: this._track(new THREE.MeshPhysicalMaterial({ color: P.lip, roughness: 0.38, vertexColors: true, normalMap: this._track(lipNormalTexture()), normalScale: new THREE.Vector2(0.35, 0.35), clearcoat: 0.35, clearcoatRoughness: 0.35, sheen: 0.3, sheenColor: new THREE.Color('#ff8080'), side: THREE.DoubleSide, envMapIntensity: 0.6, depthTest: false })),
-      brow: this._track(new THREE.MeshStandardMaterial({ color: P.brow.color, roughness: 0.9 })),
+      brow: this._track(new THREE.MeshStandardMaterial({ color: new THREE.Color(P.brow.color).lerp(hairTone(P).grayCol, 0.5 * (P.browGray ?? P.hairGray ?? 0) ** 2), roughness: 0.9 })),   // брови седеют вслед за волосами, но слабее
       lash: this._track(new THREE.MeshStandardMaterial({ color: '#120c0a', roughness: 0.8 })),
-      hair: this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairTexture(P.hair)), roughness: 0.45, anisotropy: P.hairAniso ?? 0.6, anisotropyRotation: P.hairAnisoRot ?? 0, sheen: 0.6, sheenColor: new THREE.Color(P.hair).multiplyScalar(2.2), sheenRoughness: 0.35, vertexColors: true, side: THREE.DoubleSide, envMapIntensity: 0.5 })),
+      hair: this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairTexture(hairTone(P))), roughness: 0.45, anisotropy: P.hairAniso ?? 0.6, anisotropyRotation: P.hairAnisoRot ?? 0, sheen: 0.6, sheenColor: hairMean(hairTone(P)).multiplyScalar(2.2), sheenRoughness: 0.35, vertexColors: true, side: THREE.DoubleSide, envMapIntensity: 0.5 })),
       cloth: this._track(new THREE.MeshStandardMaterial({ color: P.cloth, roughness: 0.85 })),
       eye: this._track(new THREE.MeshPhysicalMaterial({ map: this._track(eyeTexture(P)), roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.3 })),
       eyeR: null,
@@ -809,7 +839,7 @@ export class ProceduralHead {
       this.mat.hair.color.setRGB(lerp(1, sc.r / Math.max(0.03, hc.r), k * 0.35), lerp(1, sc.g / Math.max(0.03, hc.g), k * 0.35), lerp(1, sc.b / Math.max(0.03, hc.b), k * 0.35));
     }
     // пряди-карточки: блик как у оболочки, альфа по текстуре прядей (alpha-to-coverage — без сортировки прозрачности)
-    this.mat.hairCards = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairCardTexture(P.hair)), roughness: 0.5, anisotropy: (P.hairAniso ?? 0.6) * 0.5, anisotropyRotation: Math.PI / 2, sheen: 0.6, sheenColor: new THREE.Color(P.hair).multiplyScalar(2.2), sheenRoughness: 0.35, vertexColors: true, alphaToCoverage: true, alphaTest: 0.02, side: THREE.DoubleSide, envMapIntensity: 0.4 }));
+    this.mat.hairCards = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairCardTexture(hairTone(P))), roughness: 0.5, anisotropy: (P.hairAniso ?? 0.6) * 0.5, anisotropyRotation: Math.PI / 2, sheen: 0.6, sheenColor: hairMean(hairTone(P)).multiplyScalar(2.2), sheenRoughness: 0.35, vertexColors: true, alphaToCoverage: true, alphaTest: 0.02, side: THREE.DoubleSide, envMapIntensity: 0.4 }));
     this._hairU = { uHairSwing: { value: new THREE.Vector3() } };
     hairSwayShader(this.mat.hair, this._hairU, 'hair-sway');
     hairSwayShader(this.mat.hairCards, this._hairU, 'hair-cards-sway');
@@ -1780,8 +1810,8 @@ export class ProceduralHead {
     const color = new THREE.Color(bd.color || P.beardColor || P.hair);
     const lipTop = MY + P.lipU + 0.012, lipBot = MY - P.lipL - 0.012;
     const ss = (a, b, x) => smoothstep(a, b, x);
-    const mat = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairTexture('#' + color.getHexString())), roughness: 0.7, sheen: 0.7, sheenRoughness: 0.4,
-      sheenColor: color.clone().multiplyScalar(2.4).addScalar(0.08), vertexColors: true, alphaHash: true, side: THREE.DoubleSide }));
+    const mat = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairTexture({ ...hairTone(P, color, P.beardGray ?? P.hairGray), streak: 0 })), roughness: 0.7, sheen: 0.7, sheenRoughness: 0.4,
+      sheenColor: hairMean(hairTone(P, color, P.beardGray ?? P.hairGray)).multiplyScalar(2.4).addScalar(0.08), vertexColors: true, alphaHash: true, side: THREE.DoubleSide }));
     mat.map.repeat.set(10, 3);
     this.beard = { parts: [] };
     const part = (name, x0, x1, y0, y1, cols, rows, mask, depth, jaw, extra = {}) => {
