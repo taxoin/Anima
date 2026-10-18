@@ -95,6 +95,10 @@
       <div class="row"><label style="width:44px">кожа</label><span class="swatches" id="skinSw"></span></div>
       <div class="row"><label style="width:44px">глаза</label><span class="swatches" id="eyeSw"></span></div>
       <div class="row">
+        <label>разрез</label><select id="eyeShape"><option value="">авто</option><option>almond</option><option>round</option><option>upturned</option><option>downturned</option><option>narrow</option><option>wide</option></select>
+        <label>очки</label><select id="glassesSel"><option value="">авто</option><option value="none">нет</option><option>round</option><option>rect</option><option>cat</option><option>aviator</option><option>sun</option></select>
+      </div>
+      <div class="row">
         <label><input type="checkbox" id="idle" checked> idle</label>
         <label><input type="checkbox" id="follow"> взгляд за курсором</label>
       </div>
@@ -110,8 +114,9 @@
       <div class="photo-box" id="photoBox" hidden><img id="photoThumb" alt="Загруженный портрет"><div id="photoInfo"></div></div>
       <div class="row"><label style="width:84px" for="caric">шарж</label><input type="range" id="caric" min="0" max="3" step="0.1" value="1.5"><span class="val" id="caricV">1.5</span></div>
       <div class="row"><label style="width:84px" for="photoTex">кожа с фото</label><input type="range" id="photoTex" min="0" max="1" step="0.05" value="0.9"><span class="val" id="photoTexV">0.9</span></div>
-      <div class="row"><label style="width:84px" for="realism">реализм</label><input type="range" id="realism" min="0" max="1" step="0.05" value="0.65"><span class="val" id="realismV">0.65</span></div>
-      <div class="row"><button id="photoClear" disabled>Стандартная голова</button><span class="hint" id="photoStatus"></span></div>
+      <div class="row"><label style="width:84px" for="realism">реализм</label><input type="range" id="realism" min="0" max="1" step="0.05" value="0.8"><span class="val" id="realismV">0.8</span></div>
+      <div class="row"><label><input type="checkbox" id="photoAcc"> искать очки (+16 МБ модель)</label></div>
+      <div class="row"><button id="photoClear" disabled>Стандартная голова</button><button id="photoRefine" disabled title="Рендер → распознать → подправить параметры (~1–3 с)">Уточнить по рендеру</button><span class="hint" id="photoStatus"></span></div>
       <div class="row"><button id="avatarSave" disabled>Сохранить аватар</button><label class="filebtn" for="avatarFile">Открыть аватар</label><input type="file" id="avatarFile" accept=".json,application/json" hidden></div>
       <div class="hint">Файл аватара весит около 10 КБ: точки лица, цвета и кожа, без исходного фото. Его можно переслать на другой телефон и открыть там, распознавание не нужно.</div>
     </details>
@@ -309,6 +314,7 @@ if (new URLSearchParams(location.search).get('autoplay') !== '0') setTimeout(() 
 
 // ---- аватар по фото
 const photoOpts = () => ({ caricature: +$('#caric').value, texture: +$('#photoTex').value, realism: +$('#realism').value });
+const photoExtra = () => ($('#photoAcc').checked ? { accessories: true } : {});
 const status = (t) => { $('#photoStatus').textContent = t; };
 let photoBusy = false;
 async function usePhoto(src, label) {
@@ -319,13 +325,13 @@ async function usePhoto(src, label) {
     const url = typeof src === 'string' ? src : URL.createObjectURL(src);
     $('#photoThumb').src = url; $('#photoBox').hidden = false; $('#photoInfo').textContent = label;
     const t0 = performance.now();
-    const rep = await api(`await head.fromPhoto(${typeof src === 'string' ? `'${src}'` : 'file'}, ${fmt(photoOpts())})`, () => head.fromPhoto(src, { ...photoOpts(), onProgress: status }));
+    const rep = await api(`await head.fromPhoto(${typeof src === 'string' ? `'${src}'` : 'file'}, ${fmt({ ...photoOpts(), ...photoExtra() })})`, () => head.fromPhoto(src, { ...photoOpts(), ...photoExtra(), onProgress: status }));
     const c = rep.colors;
     $('#photoInfo').innerHTML = `${label}<br>причёска: ${({ short: 'короткая', long: 'длинная', none: 'без волос' })[rep.hairStyle] || '—'}<br>`
       + ['skin', 'hair', 'iris', 'lip'].filter((k) => c[k]).map((k) => `<span title="${k}" style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;background:${c[k]}"></span>`).join(' ')
       + rep.warnings.map((w) => `<div class="warn">${w}</div>`).join('');
     status(`Готово за ${((performance.now() - t0) / 1000).toFixed(1)} с`);
-    $('#photoClear').disabled = $('#avatarSave').disabled = false;
+    $('#photoClear').disabled = $('#avatarSave').disabled = $('#photoRefine').disabled = false;
     log(`⟵ photoAvatar ${fmt(rep.measures)}`);
     head.stopSpeaking();
     head.speak('[e:curious] Ну, здравствуй. [e:smirk*0.8] Узнаёшь? [g:tilt] Теперь я говорю твоим лицом.', { tts: WebSpeech.available() ? $('#ttsMode').value : 'none', revert: true });
@@ -336,7 +342,27 @@ async function usePhoto(src, label) {
 }
 $('#photoFile').onchange = (e) => { const f = e.target.files[0]; if (f) usePhoto(f, f.name); e.target.value = ''; };
 document.querySelectorAll('[data-sample]').forEach((b) => b.onclick = () => usePhoto(b.dataset.sample, b.textContent));
-$('#photoClear').onclick = () => { api('head.clearPhoto()', () => head.clearPhoto()); $('#photoBox').hidden = true; $('#photoClear').disabled = $('#avatarSave').disabled = true; status(''); };
+$('#photoClear').onclick = () => { api('head.clearPhoto()', () => head.clearPhoto()); $('#photoBox').hidden = true; $('#photoClear').disabled = $('#avatarSave').disabled = $('#photoRefine').disabled = true; status(''); };
+$('#photoRefine').onclick = async () => {
+  if (photoBusy) return;
+  photoBusy = true; $('#photoRefine').disabled = true;
+  try {
+    const t0 = performance.now();
+    const errs = await api('await head.refinePhoto()', () => head.refinePhoto({ onProgress: status }));
+    status(`Уточнено за ${((performance.now() - t0) / 1000).toFixed(1)} с, ошибка ${errs[0]} → ${Math.min(...errs)}`);
+    log(`⟵ refinePhoto ${fmt(errs)}`);
+  } catch (e) { status(''); log('✕ ' + (e.message || e), 'err'); }
+  finally { photoBusy = false; $('#photoRefine').disabled = false; }
+};
+const lookSel = (id, key, map = (v) => v) => {
+  $(id).onchange = (e) => {
+    const look = head.getLook(), v = e.target.value;
+    if (!v) delete look[key]; else look[key] = map(v);
+    api(`head.setLook(${fmt(look)}, { replace: true })`, () => head.setLook(look, { replace: true }));
+  };
+};
+lookSel('#eyeShape', 'eyeShape');
+lookSel('#glassesSel', 'glasses', (v) => (v === 'none' ? false : v));
 $('#avatarSave').onclick = async () => {
   const json = await api("await head.exportAvatar({ format: 'json' })", () => head.exportAvatar({ format: 'json' }));
   const file = new File([json], 'avatar.anima.json', { type: 'application/json' });
@@ -359,6 +385,9 @@ async function openAvatar(f) {
     document.querySelectorAll('[data-gender]').forEach((b) => b.classList.toggle('on', b.dataset.gender === head.gender));
     const lk = head.getLook();
     for (const [el, key] of [['#skinSw', 'skin'], ['#eyeSw', 'iris']]) $(el).querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (typeof lk[key] === 'string' ? lk[key] : 'auto')));
+    $('#eyeShape').value = typeof lk.eyeShape === 'string' ? lk.eyeShape : '';
+    $('#glassesSel').value = lk.glasses === false ? 'none' : typeof lk.glasses === 'string' ? lk.glasses : '';
+    $('#photoRefine').disabled = !rep;
     status(`Аватар открыт: ${f.name}`);
     head.stopSpeaking();
     head.speak('[e:curious] Я снова здесь. [e:smirk*0.8] Скучали?', { tts: WebSpeech.available() ? $('#ttsMode').value : 'none', revert: true });

@@ -23,11 +23,12 @@
     const head = new EmotionalHead('#head', { idle: false, maxPixelRatio: 1, vignette: false, background: 'dark' });
     head.pause();
     window.head = head;
-    /** c: { gender, look, avatar (URL файла аватара), channels, pose, framing } → PNG data URL */
+    /** c: { gender, look, avatar (URL файла аватара) | photo + photoOpts, channels, pose, framing } → PNG data URL */
     window.renderCase = async (c) => {
       __seed(c.seed ?? 1);
       head.options.look = c.look || {};
-      if (c.avatar) await head.importAvatar(c.avatar, c.gender ? { gender: c.gender } : {});
+      if (c.photo) await head.fromPhoto(c.photo, { ...(c.photoOpts || {}), ...(c.gender ? { gender: c.gender } : {}) });   // нужен MediaPipe (сеть)
+      else if (c.avatar) await head.importAvatar(c.avatar, c.gender ? { gender: c.gender } : {});
       else { head.useProcedural(c.gender || 'female'); }
       head.setFraming(c.framing || 'portrait');
       head.renderStill(c.channels, c.pose);

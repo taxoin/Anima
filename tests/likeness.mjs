@@ -3,7 +3,8 @@
  *
  *   npm run test:likeness                    портреты из docs/samples
  *   npm run test:likeness -- path/to/dir     все .jpg/.png из папки (внутри репозитория)
- *   npm run test:likeness -- --k=0,1,1.5,2.5 значения шаржа
+ *   npm run test:likeness -- --k=0,1,1.5,2.5 значения шаржа;  --realism=0.8 — основа ближе к реальным пропорциям
+ * Пол для известных имён (obama, lincoln…) — мужской, иначе женский.
  *
  * Колонки: rms — расхождение точек в % расстояния глаза–рот (меньше — ближе), по зонам: овал, глаза, брови, нос, губы;
  * dir — косинус «отличия человека от среднего» ↔ «отличия головы от своей основы» (1 — идеально);
@@ -18,6 +19,7 @@ import puppeteer from 'puppeteer-core';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
+const RE = +(args.find((a) => a.startsWith('--realism='))?.slice(10) || NaN);
 const K = (args.find((a) => a.startsWith('--k='))?.slice(4) || '0,1,1.5,2.5').split(',').map(Number);
 const dir = path.resolve(args.find((a) => !a.startsWith('--')) || path.join(ROOT, 'docs/samples'));
 if (!dir.startsWith(ROOT)) { console.error('Папка должна быть внутри репозитория (её раздаёт локальный сервер).'); process.exit(2); }
@@ -43,22 +45,25 @@ console.log(`${'фото'.padEnd(16)} ${'k'.padStart(4)} ${pad('rms')} ${pad('о
 const sum = {};
 for (const ph of photos) {
   for (const k of K) {
-    const r = await page.evaluate(async (ph, k) => {
+    const r = await page.evaluate(async (ph, k, re) => {
       try {
-        if (!head.portrait || head.__src !== ph) { await head.fromPhoto(ph, { caricature: k }); head.__src = ph; }
-        else head.setPhotoOptions({ caricature: k });
+        const male = /obama|biden|clinton|einstein|lincoln|tesla|truman|gandhi|roosevelt|twain/i.test(ph), o = { caricature: k, gender: male ? 'male' : 'female' };
+        if (re === re) o.realism = re;
+        if (!head.portrait || head.__src !== ph) { await head.fromPhoto(ph, o); head.__src = ph; }
+        else head.setPhotoOptions(o);
         return await head.likeness({ base: k !== 0 });
       } catch (e) { return { error: e.message }; }
-    }, ph, k);
+    }, ph, k, RE);
     const name = path.basename(ph).padEnd(16);
     if (r.error) { console.log(`${name} ${pad(k, 4)}  ошибка: ${r.error}`); continue; }
     const g = r.regions;
     console.log(`${name} ${pad(k, 4)} ${pad(r.rms)} ${pad(g.oval)} ${pad(g.eyes)} ${pad(g.brows)} ${pad(g.nose)} ${pad(g.lips)} ${pad(r.direction)} ${pad(r.gain)}`);
-    const s = (sum[k] ||= { n: 0, rms: 0, dir: 0, nd: 0 });
-    s.n++; s.rms += r.rms; if (r.direction !== null) { s.dir += r.direction; s.nd++; }
+    const s = (sum[k] ||= { n: 0, rms: 0, dir: 0, nd: 0, reg: {} });
+    s.n++; s.rms += r.rms;
+    for (const z in g) s.reg[z] = (s.reg[z] || 0) + g[z]; if (r.direction !== null) { s.dir += r.direction; s.nd++; }
   }
 }
 console.log('\nсреднее:');
-for (const k of K) { const s = sum[k]; if (s) console.log(`  k=${k}: rms ${(s.rms / s.n).toFixed(2)}${s.nd ? `, dir ${(s.dir / s.nd).toFixed(3)}` : ''}`); }
+for (const k of K) { const s = sum[k]; if (s) console.log(`  k=${k}: rms ${(s.rms / s.n).toFixed(2)}${s.nd ? `, dir ${(s.dir / s.nd).toFixed(3)}` : ''} | ` + Object.entries(s.reg).map(([z, v]) => `${z} ${(v / s.n).toFixed(1)}`).join(', ')); }
 await browser.close();
 server.close();

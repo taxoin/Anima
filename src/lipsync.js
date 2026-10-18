@@ -21,23 +21,26 @@ export const VISEMES = {
   sil: {},
   PP: { mouthClose: 0.35, mouthPressLeft: 0.4, mouthPressRight: 0.4, jawOpen: 0.03 },
   FF: { jawOpen: 0.08, mouthRollLower: 0.55, mouthUpperUpLeft: 0.18, mouthUpperUpRight: 0.18 },
-  TH: { jawOpen: 0.14, tongueOut: 0.45 },
-  DD: { jawOpen: 0.18, mouthStretchLeft: 0.1, mouthStretchRight: 0.1 },
+  TH: { jawOpen: 0.14, tongueOut: 0.45, tongueUp: 0.3 },
+  DD: { jawOpen: 0.18, mouthStretchLeft: 0.1, mouthStretchRight: 0.1, tongueUp: 0.85 },
   kk: { jawOpen: 0.24, mouthStretchLeft: 0.12, mouthStretchRight: 0.12 },
-  CH: { jawOpen: 0.14, mouthFunnel: 0.5, mouthPucker: 0.2, mouthUpperUpLeft: 0.1, mouthUpperUpRight: 0.1 },
-  SS: { jawOpen: 0.07, mouthStretchLeft: 0.3, mouthStretchRight: 0.3 },
-  nn: { jawOpen: 0.15, mouthStretchLeft: 0.06, mouthStretchRight: 0.06 },
-  RR: { jawOpen: 0.15, mouthFunnel: 0.28 },
+  CH: { jawOpen: 0.14, mouthFunnel: 0.5, mouthPucker: 0.2, mouthUpperUpLeft: 0.1, mouthUpperUpRight: 0.1, tongueUp: 0.45 },
+  SS: { jawOpen: 0.07, mouthStretchLeft: 0.3, mouthStretchRight: 0.3, tongueUp: 0.4 },
+  nn: { jawOpen: 0.15, mouthStretchLeft: 0.06, mouthStretchRight: 0.06, tongueUp: 0.9 },
+  RR: { jawOpen: 0.15, mouthFunnel: 0.28, tongueUp: 0.6 },
   aa: { jawOpen: 0.58, mouthLowerDownLeft: 0.15, mouthLowerDownRight: 0.15 },
   E: { jawOpen: 0.34, mouthStretchLeft: 0.32, mouthStretchRight: 0.32 },
   I: { jawOpen: 0.18, mouthStretchLeft: 0.45, mouthStretchRight: 0.45, mouthSmileLeft: 0.08, mouthSmileRight: 0.08 },
   O: { jawOpen: 0.42, mouthFunnel: 0.6 },
   U: { jawOpen: 0.16, mouthPucker: 0.75, mouthFunnel: 0.2 },
 };
-/** Каналы, которыми владеет речевой слой (эмоция в них ослабляется во время речи). */
+/**
+ * Каналы, которыми владеет речевой слой (эмоция в них ослабляется во время речи).
+ * tongueUp — не ARKit: кончик языка к альвеолам (Т, Д, Н, Л, Р, С, Ш). Процедурная голова его показывает, glTF игнорирует.
+ */
 export const SPEECH_CHANNELS = ['jawOpen', 'mouthClose', 'mouthFunnel', 'mouthPucker', 'mouthPressLeft', 'mouthPressRight',
   'mouthRollLower', 'mouthRollUpper', 'mouthLowerDownLeft', 'mouthLowerDownRight', 'mouthUpperUpLeft', 'mouthUpperUpRight',
-  'mouthStretchLeft', 'mouthStretchRight', 'tongueOut'];
+  'mouthStretchLeft', 'mouthStretchRight', 'tongueOut', 'tongueUp'];
 
 /** Azure Speech viseme ID (0..21) → наш визем. Для ElevenLabs/OpenAI используйте alignment по символам. */
 export const AZURE_VISEMES = ['sil', 'aa', 'aa', 'O', 'E', 'RR', 'I', 'U', 'O', 'aa', 'O', 'aa', 'kk', 'RR', 'nn', 'SS', 'CH', 'TH', 'FF', 'DD', 'kk', 'PP'];

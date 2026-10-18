@@ -25,7 +25,7 @@ const G = (x, y, cx, cy, sx, sy) => Math.exp(-(((x - cx) / sx) ** 2 + ((y - cy) 
 const DEG = Math.PI / 180;
 
 /** Catmull-Rom по 9 равномерным отсчётам y = 1, .75, ... -1 */
-function prof(arr, y) {
+export function prof(arr, y) {
   const u = clamp((1 - y) / 0.25, 0, arr.length - 1);
   const i = Math.min(Math.floor(u), arr.length - 2), t = u - i;
   const p0 = arr[Math.max(i - 1, 0)], p1 = arr[i], p2 = arr[i + 1], p3 = arr[Math.min(i + 2, arr.length - 1)];
@@ -83,11 +83,29 @@ export const EYE_COLORS = {
   blue: ['#6a8fb2', '#2e4966'],
   lightblue: ['#8fb6d9', '#4a6f94'],
 };
+/** Типы разреза глаз (параметры кромки век, см. _shapeLid; eyeTilt — наклон всего разреза). look: { eyeShape: 'round' }. */
+export const EYE_SHAPES = {
+  almond: { lidUpSkew: 0, lidUpFull: 0, lidLoSkew: 0, lidLoFull: 0 },
+  round: { lidUpFull: 7, lidLoFull: 6, lidUpSkew: 0, lidLoSkew: 0 },
+  upturned: { lidUpSkew: 2, lidLoSkew: -2, eyeTilt: 0.16 },
+  downturned: { lidUpSkew: -5, lidLoSkew: 3, eyeTilt: -0.02 },
+  narrow: { lidUpFull: -5, lidLoFull: -4, upperOpen: 19, lowerOpen: -18 },
+  wide: { lidUpFull: 4, lidLoFull: 2, upperOpen: 30, lowerOpen: -26 },
+};
+/** Очки: look.glasses = 'round' | 'rect' | 'cat' | 'aviator' | 'sun' | true | false | { style, color, tint, size, aspect, thickness, metal, dy }. */
+export const GLASSES = {
+  round: { style: 'round', color: '#b59a62', metal: true, thickness: 0.0045, size: 1.42, aspect: 1.05 },
+  rect: { style: 'rect', color: '#1c1a1a', thickness: 0.009, size: 1.55, aspect: 1.35 },
+  cat: { style: 'cat', color: '#2a1416', thickness: 0.009, size: 1.6, aspect: 1.4 },
+  aviator: { style: 'aviator', color: '#a8a8a8', metal: true, thickness: 0.005, size: 1.65, aspect: 1.15 },
+  sun: { style: 'aviator', color: '#3a3a3a', metal: true, thickness: 0.006, size: 1.7, aspect: 1.15, tint: '#1a1f24' },
+};
 const UNDERTONE = { warm: [1.02, 1.0, 0.93], cool: [1.0, 0.97, 1.02], olive: [0.98, 1.0, 0.92], neutral: [1, 1, 1] };
 
 /** Имена пресетов в look → цвета. Неизвестные ключи проходят как есть. */
 export function resolveLook(look = {}) {
-  const o = { ...look };
+  // разрез — первым: пресет задаёт lid*/eyeTilt/upperOpen, явные значения из look важнее
+  const o = typeof look.eyeShape === 'string' && EYE_SHAPES[look.eyeShape] ? { ...EYE_SHAPES[look.eyeShape], ...look } : { ...look };
   if (typeof o.skin === 'string' && SKIN_TONES[o.skin]) {
     const t = SKIN_TONES[o.skin];
     o.skin = t.skin;
@@ -97,6 +115,8 @@ export function resolveLook(look = {}) {
     const c = new THREE.Color(o.skin), k = UNDERTONE[o.undertone];
     o.skin = '#' + c.setRGB(clamp(c.r * k[0], 0, 1), clamp(c.g * k[1], 0, 1), clamp(c.b * k[2], 0, 1)).getHexString();
   }
+  if (typeof o.glasses === 'string') o.glasses = GLASSES[o.glasses] ? { ...GLASSES[o.glasses] } : { style: o.glasses };
+  else if (o.glasses === true) o.glasses = { ...GLASSES.rect };
   for (const key of ['iris', 'irisRight']) if (typeof o[key] === 'string') o[key] = EYE_COLORS[o[key]] || [o[key], new THREE.Color(o[key]).multiplyScalar(0.45).getStyle()];
   return o;
 }
@@ -549,6 +569,7 @@ export class ProceduralHead {
     this._buildHair();
     this._buildEars();
     this._buildBody();
+    this._buildGlasses();
 
     root.traverse((o) => {
       if (o.isMesh && this.shadows && !o.userData.noShadow) { o.castShadow = true; o.receiveShadow = true; }
@@ -567,6 +588,7 @@ export class ProceduralHead {
     const E = this.eye;
     const pos = geo.attributes.position.array;
     this._eyeRing = new Float32Array(pos.length / 3);
+    const ring = [];
     for (let k = 0; k < pos.length; k += 3) {
       const x = pos[k], y = pos[k + 1], z = pos[k + 2];
       if (z < 0.35) continue;
@@ -575,19 +597,36 @@ export class ProceduralHead {
       // нижнее веко плотнее облегает яблоко (меньше "мешков"), верхнее — объёмнее
       const rr = lerp(rs, E.rl, smoothstep(0, -0.35, dy));
       const rho = dist / rr;
-      if (rho > 1.9) continue;
+      if (rho > 2.2) continue;
       // зона максимального раскрытия глаза: здесь кожа уходит ЗА глазное яблоко
       const eo = Math.hypot(dx / 0.97, dy > 0 ? dy / 0.74 : dy / 0.5);
       const inner = E.z + Math.sqrt(Math.max(0, (0.93 * E.r) ** 2 - dist * dist));
       // вокруг — кожа вровень с оболочкой века (веко как бы вырастает из кожи, без "ямы")
-      const flush = E.z + Math.sqrt(Math.max(0, rr * rr - Math.min(dist, rr * 0.999) ** 2)) - 0.006;
+      // у края оболочки кожа уходит под неё глубже: плоские треугольники кожи не протыкают кривую сферу века «зубцами»
+      const flush = E.z + Math.sqrt(Math.max(0, rr * rr - Math.min(dist, rr * 0.999) ** 2)) - 0.006 - 0.022 * smoothstep(0.7, 1.0, rho);
       let T = lerp(inner, flush, smoothstep(0.92, 1.03, eo));
       // за гладким силуэтом оболочки века кожа поднимается к естественной поверхности (складка века)
-      if (rho >= 1) T = E.z - 0.006 + rr * 4.6 * Math.pow(rho - 1, 1.1);
-      const m = 1 - smoothstep(1.25, 1.8, rho);
+      // пологая стенка: крутой подъём сетка 240×200 передаёт «зубцами» (ступеньки вершин по кругу глазницы)
+      if (rho >= 1) T = E.z - 0.028 + rr * 2.9 * Math.pow(rho - 1, 1.3) + 0.022 * smoothstep(1.0, 1.25, rho);
+      const m = 1 - smoothstep(1.2, 2.1, rho);
       pos[k + 2] = lerp(z, Math.min(z, T), m);
       // затенение глазницы: мягкий градиент по всей стенке, а не светлое кольцо
       this._eyeRing[k / 3] = (rho < 1 ? smoothstep(0.85, 1.0, rho) : 1 - smoothstep(1.0, 1.5, rho)) * m * (dy > 0 ? 1 : 0.9);
+      if (rho > 0.9 && rho < 2.0) ring.push(k / 3);
+    }
+    // сглаживание стенки глазницы по соседям (z): крутой склон на грубой сетке иначе даёт «зубцы» в освещении
+    {
+      const idx = geo.index.array, nb = new Map(), set = new Set(ring);
+      for (let t = 0; t < idx.length; t += 3) for (let e = 0; e < 3; e++) {
+        const a = idx[t + e], b = idx[t + (e + 1) % 3];
+        if (set.has(a)) (nb.get(a) || nb.set(a, new Set()).get(a)).add(b);
+        if (set.has(b)) (nb.get(b) || nb.set(b, new Set()).get(b)).add(a);
+      }
+      const tmpZ = new Float32Array(ring.length);
+      for (let it = 0; it < 4; it++) {
+        ring.forEach((v, j) => { let sz = 0, n = 0; for (const u of nb.get(v) || []) { sz += pos[u * 3 + 2]; n++; } tmpZ[j] = n ? lerp(pos[v * 3 + 2], sz / n, 0.6) : pos[v * 3 + 2]; });
+        ring.forEach((v, j) => { pos[v * 3 + 2] = tmpZ[j]; });
+      }
     }
     geo.computeVertexNormals();
     this.hm = new HeightMap(geo);
@@ -734,15 +773,16 @@ export class ProceduralHead {
       const lids = new THREE.Group();
       lids.rotation.z = sg * P.eyeTilt;
       g.add(lids);
-      const up = new THREE.Mesh(upGeo, this.mat.lid);
-      const lo = new THREE.Mesh(loGeo, this.mat.lid);
-      const lash = new THREE.Mesh(lashGeo, this.mat.lash);
-      const lashLo = new THREE.Mesh(lashLoGeo, lashLoMat);
-      const sh = new THREE.Mesh(shGeo, shMat);
+      const up = new THREE.Mesh(this._shapeLid(upGeo, sg, true), this.mat.lid);
+      const lo = new THREE.Mesh(this._shapeLid(loGeo, sg, false), this.mat.lid);
+      // ресницы, тень и кромка повторяют форму кромки века
+      const lash = new THREE.Mesh(this._shapeLid(lashGeo, sg, true, E.rs), this.mat.lash);
+      const lashLo = new THREE.Mesh(this._shapeLid(lashLoGeo, sg, false, E.rl), lashLoMat);
+      const sh = new THREE.Mesh(this._shapeLid(shGeo, sg, true, E.rs), shMat);
       sh.userData.noShadow = true;
       sh.renderOrder = 1;
       lash.userData.noShadow = true; lashLo.userData.noShadow = true;
-      const wet = new THREE.Mesh(wetGeo, wetMat);
+      const wet = new THREE.Mesh(this._shapeLid(wetGeo, sg, false, E.rl), wetMat);
       wet.userData.noShadow = true;
       wet.position.y = 0.0012 * kr;
       up.add(lash, sh);
@@ -756,6 +796,29 @@ export class ProceduralHead {
       this.headRoot.add(g);
       this.eyes.push({ sg, group: g, ball, up, lo });
     }
+  }
+
+  /**
+   * Форма разреза: кромка века поворачивается вокруг оси глаза на угол Δ(u), u = −1 (внутренний угол) … +1 (внешний).
+   *   lidUpSkew / lidLoSkew — перекос, градусы: > 0 — вершина дуги смещена к внешнему углу (верх) / внешний угол ниже (низ)
+   *   lidUpFull / lidLoFull — полнота, градусы: > 0 — середина раскрыта сильнее (круглее), < 0 — площе (уже)
+   * Вершины ближе к кромке поворачиваются полностью, к полюсу оболочки — плавно меньше. Геометрия своя для каждого глаза.
+   */
+  _shapeLid(geo, sg, upper, R = geo.parameters.radius) {
+    const P = this.P, sk = upper ? P.lidUpSkew || 0 : P.lidLoSkew || 0, fu = upper ? P.lidUpFull || 0 : P.lidLoFull || 0;
+    if (!sk && !fu) return geo;
+    const g = this._track(geo.clone()), p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+      const u = clamp((sg * x) / R, -1, 1), e = 1 - u * u;
+      const d = (sk * u * e * 2.6 + fu * e * e) * DEG;            // градусы → радианы
+      const el = Math.asin(clamp(Math.abs(y) / R, 0, 1));          // 0 у кромки → π/2 у полюса
+      const a = (upper ? -d : d) * (1 - smoothstep(0, 1.3, el));   // верх: −Δ поднимает кромку; низ: +Δ опускает
+      const c = Math.cos(a), s = Math.sin(a);
+      p.setXYZ(i, x, y * c - z * s, y * s + z * c);
+    }
+    g.computeVertexNormals();
+    return g;
   }
 
   // ---------------- брови
@@ -981,12 +1044,16 @@ export class ProceduralHead {
     // язык
     {
       const geo = M.tongue.geometry, { cols, rows } = geo.userData, pos = geo.attributes.position.array;
-      const out = g('tongueOut');
+      // s: 0 — корень (низ), 1 — кончик. tongueUp поднимает и сужает кончик к альвеолам за верхними зубами
+      // (Т, Д, Н, Л), tongueOut выдвигает вперёд; по центру — продольный желобок
+      const out = g('tongueOut'), up = clamp(ch.tongueUp || 0, 0, 1);
+      const reach = (J.open * JAW_THETA) * 0.32;                   // челюсть опускает язык — кончику тянуться выше
       for (let r = 0; r <= rows; r++) for (let i = 0; i <= cols; i++) {
-        const t = (i / cols) * 2 - 1, s = r / rows;
-        const x = t * P.mouthHW * 0.82 * Math.sqrt(1 - 0.6 * s * s);
-        const y = MY - 0.068 + s * (0.05 + 0.06 * out) * (1 - 0.5 * t * t);
-        this._mouthPoint(x, y, -0.068 + 0.1 * out * s - 0.03 * t * t, lowerJawW, J, pos, (r * (cols + 1) + i) * 3);
+        const t = (i / cols) * 2 - 1, s = r / rows, tip = s * s;
+        const x = t * P.mouthHW * 0.82 * Math.sqrt(1 - 0.6 * s * s) * (1 - 0.38 * up * tip);
+        const y = MY - 0.068 + s * (0.05 + 0.06 * out) * (1 - 0.5 * t * t) + up * tip * (0.08 + reach) * (1 - 0.6 * t * t);
+        const z = -0.068 + 0.1 * out * s - 0.03 * t * t + 0.03 * up * tip - 0.006 * Math.exp(-((t / 0.28) ** 2)) * (1 - s);
+        this._mouthPoint(x, y, z, lowerJawW, J, pos, (r * (cols + 1) + i) * 3);
       }
       geo.attributes.position.needsUpdate = true;
       geo.computeVertexNormals();
@@ -999,6 +1066,14 @@ export class ProceduralHead {
     if (P.hairStyle === 'none') return;
     const long = P.hairStyle === 'long';
     // линия роста волос как функция долготы (0 = лоб, π = затылок)
+    // объём по фото (photo-avatar): толщина волос над силуэтом черепа по углу θ от макушки (0, 20 … 100°, анфас)
+    const vol = P.hairVol, HC = 0.15;
+    const volAt = (x, y) => {
+      if (!vol) return null;
+      const t = clamp(Math.atan2(Math.abs(x), y - HC) / DEG / 20, 0, vol.length - 1), i = Math.min(Math.floor(t), vol.length - 2);
+      return lerp(vol[i], vol[i + 1], t - i);
+    };
+    const bangSide = P.bangSide ?? (long ? -1 : 0), bangDepth = P.bangDepth ?? (long ? 0.1 : 0);
     const lineF = (long ? [0.6, 0.52, 0.34, 0.16, 0.0, -0.3, -0.5, -0.55] : [0.64, 0.57, 0.4, 0.24, 0.08, -0.2, -0.36, -0.4])
       .map((v, i) => v + (P.hairline || 0) * Math.max(0, 1 - i / 4));   // сдвиг линии у лба (по фото)
     const hairline = (a) => {
@@ -1011,9 +1086,12 @@ export class ProceduralHead {
       shapeHead(px, py, pz, P, tmp);
       const a = Math.atan2(tmp[0], tmp[2]);
       let yh = hairline(a);
-      if (long) yh -= 0.1 * G(a, 0, -0.45, 0, 0.3, 1);                     // чёлка набок
-      let H = long ? 0.06 + 0.06 * smoothstep(0.2, 0.9, tmp[1]) + 0.05 * G(a, tmp[1], -0.5, 0.45, 0.4, 0.18) : 0.032 + 0.018 * smoothstep(0.3, 0.9, tmp[1]);
+      if (bangSide) yh -= bangDepth * G(a, 0, bangSide * 0.45, 0, 0.3, 1);  // чёлка набок (сторона и глубина — по фото)
+      let H = long ? 0.06 + 0.06 * smoothstep(0.2, 0.9, tmp[1]) + 0.05 * G(a, tmp[1], bangSide * 0.5 || -0.5, 0.45, 0.4, 0.18) : 0.032 + 0.018 * smoothstep(0.3, 0.9, tmp[1]);
       if (!long) H += 0.012 * G(a, tmp[1], 0, 0.6, 0.5, 0.1);               // лёгкий объём надо лбом
+      const v = volAt(tmp[0], tmp[1]);
+      // силуэт причёски с фото; к вискам и ниже — плавно к обычной толщине (иначе по бокам «поля шляпы»)
+      if (v !== null) H = lerp(H, Math.max(H * 0.6, long ? v : Math.min(v, 0.14)), smoothstep(-0.45, 0.3, tmp[1]) * (0.55 + 0.45 * smoothstep(-0.2, 0.5, tmp[1])));
       // у линии роста волосы сходят на нет, ниже неё поверхность уходит глубоко под кожу
       const off = H * (0.3 + 0.7 * smoothstep(yh, yh + 0.16, tmp[1])) - (0.25 + 0.3 * H) * (1 - smoothstep(yh - 0.1, yh, tmp[1]));
       const nx = px / prof(P.gx, py), ny = py, nz = pz;
@@ -1031,7 +1109,8 @@ export class ProceduralHead {
 
     if (long) {
       // "занавес" длинных волос сзади и по бокам
-      const cols = 64, rows = 30, a0 = 1.0, wk = prof(P.gx, 0) / 0.755;   // занавес по ширине головы
+      const side = volAt(1, HC - 0.17);                                      // объём у висков (θ ≈ 100°)
+      const cols = 64, rows = 30, a0 = 1.0, wk = prof(P.gx, 0) / 0.755 * (side === null ? 1 : clamp(1 + (side - 0.07) / 0.84, 0.92, 1.35));   // занавес по ширине головы и волос
       const g = this._track(dynamicGrid(cols, rows, true));
       const pos = g.attributes.position.array, c = g.attributes.color.array;
       for (let r = 0; r <= rows; r++) for (let i = 0; i <= cols; i++) {
@@ -1073,6 +1152,67 @@ export class ProceduralHead {
       ear.add(inner);
       this.headRoot.add(ear);
     }
+  }
+
+  /** Очки: оправа (трубка по суперэллипсу), перемычка, дужки до ушей, линзы. Двигаются с головой. */
+  _buildGlasses() {
+    if (!this.P.glasses) return;
+    const P = this.P, E = this.eye, g = { ...GLASSES.rect, ...P.glasses };
+    const rx = E.rs * 0.97 * (g.size ?? 1.55), ry = rx / (g.aspect ?? 1.3), th = g.thickness ?? 0.008;
+    const cy = E.y + (g.dy ?? 0.05) * E.rs;
+    // плоскость оправы перед веками и бровями; у переносицы — перед кожей носа
+    const zF = Math.max(E.z + E.rs + 0.04, this.hm.get(E.x, E.y + 0.12) + 0.015);
+    const zB = Math.max(zF - 0.01, this.hm.get(0, cy + ry * 0.3) + 0.02);
+    const frameMat = this._track(new THREE.MeshPhysicalMaterial({ color: g.color, roughness: g.metal ? 0.25 : 0.35, metalness: g.metal ? 0.85 : 0, clearcoat: g.metal ? 0 : 0.6, envMapIntensity: 1.2 }));
+    const lensMat = this._track(new THREE.MeshPhysicalMaterial({ color: g.tint || '#ffffff', transparent: true, opacity: g.tint ? 0.78 : 0.07, roughness: 0.04, clearcoat: 1, envMapIntensity: 1.6, depthWrite: false, side: THREE.DoubleSide }));
+    const n = g.style === 'round' ? 2 : g.style === 'rect' ? 4.2 : 3;
+    // контур линзы в своей плоскости (u — к виску, v — вверх)
+    const rim = (t) => {
+      const c = Math.cos(t), s = Math.sin(t);
+      let u = rx * Math.sign(c) * Math.abs(c) ** (2 / n), v = ry * Math.sign(s) * Math.abs(s) ** (2 / n);
+      if (g.style === 'cat') v += ry * 0.28 * Math.max(0, s) * Math.max(0, c) ** 2;           // приподнятый внешний верх
+      if (g.style === 'aviator') { if (s < 0) { v *= 1.18; u *= 1 + 0.12 * Math.max(0, c); } else v *= 0.85; }   // «капля»
+      return [u, v];
+    };
+    const group = new THREE.Group(), ends = [];
+    group.name = 'glasses';
+    for (const sg of [1, -1]) {
+      const pts = [];
+      for (let i = 0; i < 64; i++) {
+        const [u, v] = rim((i / 64) * Math.PI * 2), x = sg * (E.x + u);
+        // оправа огибает лицо и нигде не уходит в кожу (у фото-голов скулы и нос выступают по-разному)
+        const zz = Math.max(zF - 0.35 * u * u - 0.05 * Math.max(0, sg * x - E.x), this.hm.get(x, cy + v) + 0.03);
+        pts.push(new THREE.Vector3(x, cy + v, zz));
+      }
+      const curve = new THREE.CatmullRomCurve3(pts, true);
+      group.add(new THREE.Mesh(this._track(new THREE.TubeGeometry(curve, 96, th, 6, true)), frameMat));
+      // линза: веер треугольников от центра
+      const lp = [E.x * sg, cy, zF - 0.004], pos = [];
+      for (let i = 0; i < 64; i++) { const a = pts[i], b = pts[(i + 1) % 64]; pos.push(...lp, a.x, a.y, a.z - 0.003, b.x, b.y, b.z - 0.003); }
+      const lg = this._track(new THREE.BufferGeometry());
+      lg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      lg.computeVertexNormals();
+      const lens = new THREE.Mesh(lg, lensMat);
+      lens.renderOrder = 30;
+      group.add(lens);
+      // дужка: от внешнего края оправы назад к уху по боку головы
+      const h0 = pts[2], hx = h0.x, side = Math.sqrt(Math.max(0, 1 - cy * cy)) * prof(P.gx, cy) + 0.02, v0 = h0.y - cy;
+      ends.push(pts[Math.round(64 * 0.44)]);
+      const arm = new THREE.CatmullRomCurve3([
+        h0.clone(),
+        new THREE.Vector3(sg * Math.max(Math.abs(hx) + 0.02, side * 0.97), cy + v0 * 0.6, zF - 0.12),
+        new THREE.Vector3(sg * side, cy - 0.01, 0.2),
+        new THREE.Vector3(sg * side * 0.98, cy - 0.05, -0.05),
+      ]);
+      group.add(new THREE.Mesh(this._track(new THREE.TubeGeometry(arm, 24, th * 0.8, 5, false)), frameMat));
+    }
+    // перемычка над переносицей
+    const [a, b] = ends;
+    const bridge = new THREE.CatmullRomCurve3([a.clone(), new THREE.Vector3(0, (a.y + b.y) / 2 + ry * 0.12, Math.max(zB, this.hm.get(0, a.y + ry * 0.12) + 0.025)), b.clone()]);
+    group.add(new THREE.Mesh(this._track(new THREE.TubeGeometry(bridge, 16, th * 0.9, 6, false)), frameMat));
+    group.traverse((m) => { if (m.isMesh) m.userData.noShadow = m.material === lensMat; });
+    this.glasses = group;
+    this.headRoot.add(group);
   }
 
   _buildBody() {

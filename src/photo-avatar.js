@@ -20,7 +20,7 @@
  *
  * Модели грузятся с CDN при первом вызове (~4.5 МБ). Свои пути: fromPhoto(src, { assets: {...} }).
  */
-import { PRESETS, LAYOUT, upperLipProfile } from './head-model.js';
+import { PRESETS, LAYOUT, upperLipProfile, prof } from './head-model.js';
 
 const MP = '0.10.14';
 export const PHOTO_ASSETS = {
@@ -28,10 +28,13 @@ export const PHOTO_ASSETS = {
   wasm: `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP}/wasm`,
   face: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
   hair: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/latest/hair_segmenter.tflite',
+  // классы: фон, волосы, кожа тела, кожа лица, одежда, прочее (очки, украшения). 16 МБ — грузится только при accessories: true
+  multi: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite',
 };
 
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const lerp = (a, b, t) => a + (b - a) * t;
+const DEG = Math.PI / 180;
 const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: ((a.z || 0) + (b.z || 0)) / 2 });
 const hex = (c) => '#' + c.map((v) => clamp(Math.round(v * 255), 0, 255).toString(16).padStart(2, '0')).join('');
 const lum = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
@@ -144,8 +147,17 @@ export async function analyzePortrait(src, o = {}) {
       res.close?.();
     } catch (e) { /* без маски волос: цвет и длина по умолчанию */ }
   }
+  let multi = null;
+  if (o.accessories) {
+    say('Ищу очки и аксессуары…');
+    try {
+      const seg = await loadMulti(A), res = seg.segment(img), m = res.categoryMask;
+      multi = { data: m.getAsUint8Array().slice(), w: m.width, h: m.height };
+      res.close?.();
+    } catch (e) { /* без аксессуаров */ }
+  }
   say('Строю голову…');
-  return new Portrait(img, L, bs, hair);
+  return new Portrait(img, L, bs, hair, multi);
 }
 
 /** Точки лица на произвольном изображении (для метрики сходства): { L, bs } или null. */
@@ -168,14 +180,50 @@ const REGIONS = {
 };
 // размерные меры сравниваются в долях среднего, положения и углы — в абсолютных единицах головы
 const POS_MEAS = new Set(['browY', 'browArch', 'browTail', 'noseTip', 'chin', 'browX0', 'browX1', 'tilt', 'eyeCX']);
+// меры, которые рендер передаёт ненадёжно (MediaPipe на стилизованной голове): в «направление» не входят
+const NO_DIR = new Set(['upS', 'upF', 'loS', 'loF', 'noseProj']);
 const MEAS_SCALE = (k) => (POS_MEAS.has(k) ? 0.05 : Math.abs(MEAN_M[k]) || 1);
 
 /** Нормированные точки (координаты головы, симметризованные) для найденного лица. */
-function normalizedFace(det) {
+export function normalizedFace(det) {
   const p = Object.create(Portrait.prototype);
   p.px = det.L.map((q) => ({ x: q.x * det.w, y: q.y * det.h, z: q.z * det.w }));
   p._initFrame();
   return p;
+}
+
+/** Меры лица на рендере (те же, что у фото, плюс ширины овала в долях POP_W). */
+export function measureFace(det) {
+  const F = normalizedFace(det), M = measure(F.sym);
+  M.widths = WIDTH_YS.map((y, i) => {
+    const w = ovalHalfWidth(F.sym, y >= MY ? y : MY + ((y - MY) * (M.chin - MY)) / (MEAN_M.chin - MY));
+    return w && POP_W[i] ? w / POP_W[i] : 1;
+  });
+  return M;
+}
+
+/**
+ * Один шаг уточнения: поправки мер, чтобы рендер (R) пришёл к цели D = B + k·(Q − M),
+ * где B — рендер той же головы без шаржа, Q — лицо на фото, M — среднее лицо.
+ * @param {object} corr { meas, widths } — изменяется на месте
+ * @param {object} [target] своя цель вместо D (для калибровки основы): { meas, widths }
+ */
+export function refineStep(portrait, corr, R, B, k, o = {}) {
+  const a = o.alpha ?? 0.8, Q = portrait.meas, err = {};
+  corr.meas ||= {}; corr.widths ||= [0, 0, 0, 0, 0, 0];
+  for (const f of o.meas || REFINE_MEAS) {
+    const D = o.target ? o.target.meas[f] : B[f] + k * (Q[f] - MEAN_M[f]);
+    const e = D - R[f];
+    corr.meas[f] = (corr.meas[f] || 0) + a * e;
+    err[f] = e / MEAS_SCALE(f);
+  }
+  for (let i = 0; i < 6 && o.widths !== false; i++) {
+    const D = o.target ? o.target.widths[i] : B.widths[i] * (1 + k * (Q.widths[i] - 1));
+    const e = (D - R.widths[i]) / Math.max(0.3, (B || R).widths[i]);
+    if (i > 0) corr.widths[i] += a * e;                            // widths[0] (лоб) часто под волосами — не трогаем
+  }
+  const v = Object.values(err);
+  return Math.sqrt(v.reduce((s, x) => s + x * x, 0) / v.length);    // ошибка до шага (нормированная)
 }
 
 /**
@@ -196,7 +244,7 @@ export function likenessReport(portrait, render, base = null) {
   const Q = portrait.meas, MR = measure(R.sym), MB = B ? measure(B.sym) : null;
   let ab = 0, aa = 0, bb = 0;
   for (const k of Object.keys(MEAN_M)) {
-    if (typeof Q[k] !== 'number') continue;
+    if (typeof Q[k] !== 'number' || NO_DIR.has(k)) continue;
     const sc = MEAS_SCALE(k), a = (Q[k] - MEAN_M[k]) / sc;
     const row = { photo: +Q[k].toFixed(4), render: +MR[k].toFixed(4), mean: +MEAN_M[k].toFixed(4) };
     if (MB) {
@@ -211,6 +259,22 @@ export function likenessReport(portrait, render, base = null) {
     out.gain = +(ab / aa).toFixed(3);                              // во сколько раз отличия усилены (≈ caricature при честной передаче)
   }
   return out;
+}
+
+let _multi = null, _multiKey = '';
+/** Многоклассовый сегментатор (по запросу): маска «прочее» = очки и аксессуары. */
+async function loadMulti(A) {
+  if (_multi && _multiKey === A.multi) return _multi;
+  _multiKey = A.multi;
+  _multi = (async () => {
+    const V = await import(/* @vite-ignore */ A.module);
+    const fs = await V.FilesetResolver.forVisionTasks(A.wasm);
+    const opts = (delegate) => ({ baseOptions: { modelAssetPath: A.multi, delegate }, runningMode: 'IMAGE', outputCategoryMask: true, outputConfidenceMasks: false });
+    // CPU: GPU-делегат на тонких оправах даёт другую (худшую) маску; сеть 256×256 запускается один раз — CPU хватает
+    return V.ImageSegmenter.createFromOptions(fs, opts('CPU'));
+  })();
+  _multi.catch(() => { _multi = null; });
+  return _multi;
 }
 
 // ------------------------------------------------------------------ измерения
@@ -244,16 +308,39 @@ function measure(P) {
     noseProj: Math.max(0.02, P[4].z - (P[362].z + P[263].z) / 2),
     mouthHW: P[291].x, lipU: Math.max(0.005, P[0].y - P[13].y), lipL: Math.max(0.005, P[14].y - P[17].y),
     chin: P[152].y,
+    ...lidShape(P),
   };
+}
+
+// контур левого глаза персонажа: от внешнего угла (263) к внутреннему (362)
+const LID_UP = [263, 466, 388, 387, 386, 385, 384, 398, 362], LID_LO = [263, 249, 390, 373, 374, 380, 381, 382, 362];
+/** Форма разреза: перекос (смещение вершины дуги к внешнему углу, u ∈ −1…1) и полнота (высота у краёв / в середине). */
+function lidShape(P) {
+  const o = P[263], n = P[362], cx = (o.x + n.x) / 2, hw = (o.x - n.x) / 2 || 1e-4;
+  const side = (idx, sgn) => {
+    let sh = 0, shu = 0, mid = 0, edge = 0, ne = 0;
+    for (const i of idx) {
+      const u = (P[i].x - cx) / hw, h = sgn * (P[i].y - lerp(n.y, o.y, (u + 1) / 2));
+      if (h <= 0) continue;
+      sh += h; shu += h * u;
+      if (Math.abs(u) < 0.25) mid = Math.max(mid, h);
+      else if (Math.abs(u) > 0.45 && Math.abs(u) < 0.85) { edge += h; ne++; }
+    }
+    return { S: sh ? shu / sh : 0, F: mid ? edge / Math.max(1, ne) / mid : 0.7 };
+  };
+  const U = side(LID_UP, 1), L = side(LID_LO, -1);
+  return { upS: U.S, upF: U.F, loS: L.S, loF: L.F };
 }
 const CANON_M = measure(MEAN);
 // Калибровка «среднего» по реальным фото (canonical model MediaPipe — не среднее фото: глаза у неё прищурены,
 // овал шире видимого и т.д.). Множители к мерам canonical; tilt — абсолютное значение (рад).
 const CALIB = { eyeH: 1.65, eyeCX: 0.93, noseTip: 1.15, noseW: 1.13, noseProj: 0.95, mouthHW: 0.97, lipU: 0.8, lipL: 1.09,
   chin: 0.885, browY: 0.81, browArch: 1.85, browTail: 0.6, browTh: 0.83 };
-const MEAN_M = { ...CANON_M };
+export const MEAN_M = { ...CANON_M };
 for (const k in CALIB) MEAN_M[k] = CANON_M[k] * CALIB[k];
 MEAN_M.tilt = 0.09;
+// форма разреза: средние по калибровочным фото (canonical-модель здесь не годится — глаза у неё прищурены)
+Object.assign(MEAN_M, { upS: 0.06, upF: 0.643, loS: 0.201, loF: 0.575 });
 const POP_W = [null, 0.515, 0.548, 0.532, 0.47, 0.289];        // медиана видимой полуширины овала по калибровочным фото
 // Стилизованная голова шире настоящей (большой череп, широко посаженные крупные глаза, короткий подбородок).
 // В фото-режиме основа сдвигается к реальным пропорциям (o.realism), и уже от неё строится шарж.
@@ -263,6 +350,13 @@ const REAL_GX = {
   male: [0.85, 0.81, 0.76, 0.74, 0.77, 0.78, 0.78, 0.68, 0.68],
 };
 const REAL = { eyeX: 0.234, eyeW: 0.207, chinScale: 1 };
+// Калибровка основы через рендер (tests/calibrate.mjs): сдвиг мер при realism = 1, чтобы голова без шаржа
+// совпадала со «средним лицом» по положению бровей, носа, губ и т.п. (в единицах мер; widths — доли ширины).
+const BASE_CORR = {
+  female: { browY: -0.1098, browArch: 0.0183, browTail: 0.0529, browX0: -0.0018, browX1: 0.0196, browTh: -0.002, noseTip: -0.0405, noseW: 0.0299, mouthHW: -0.0154, lipU: -0.0159, lipL: 0.0162, widths: [0, 0.0871, -0.0319, -0.0334, -0.0698, 0.2957] },
+  male: { browY: -0.0858, browArch: 0.0281, browTail: 0.0505, browX0: -0.0035, browX1: 0.0092, browTh: -0.0045, noseTip: -0.0419, noseW: 0.0225, mouthHW: -0.017, lipU: -0.0154, lipL: 0.0267, widths: [0, 0.0541, -0.0499, -0.0453, -0.0831, 0.2947] },
+};
+export const REFINE_MEAS = ['eyeCX', 'eyeW', 'eyeH', 'tilt', 'browY', 'browArch', 'browTail', 'browX0', 'browX1', 'browTh', 'noseTip', 'noseW', 'mouthHW', 'lipU', 'lipL', 'chin'];
 const BOW_MEAN = { x: 0.29, rc: 0.866 };    // «лук Купидона» по калибровочным фото: пики на 0.29 полуширины рта, центр/пик = 0.87
 
 // ------------------------------------------------------------------ обработка изображения
@@ -378,8 +472,9 @@ function robustColor(samples) {
 // ------------------------------------------------------------------ портрет
 
 export class Portrait {
-  constructor(img, L, bs, hair) {
+  constructor(img, L, bs, hair, multi = null) {
     this.isPortrait = true;
+    this.multiMask = multi;
     this.img = img;
     this.bs = bs;
     this.hairMask = hair;
@@ -393,6 +488,7 @@ export class Portrait {
     this._measure();
     this._colors();
     this._hair();
+    this._glasses();
     this._texture();
     this._fits = new Map();
   }
@@ -454,6 +550,12 @@ export class Portrait {
     // абсолютная полуширина овала на высотах эталонной головы (ниже рта — пропорционально длине подбородка)
     M.widthsAbs = WIDTH_YS.map((y) => ovalHalfWidth(this.head, y >= MY ? y : MY + ((y - MY) * (M.chin - MY)) / (MEAN_M.chin - MY)));
     M.widths = M.widthsAbs.map((w, i) => (w && POP_W[i] ? w / POP_W[i] : 1));
+    // квадратность подбородка: ширина овала чуть выше низа подбородка относительно ширины на уровне челюсти;
+    // скулы: ширина на высоте скул относительно среднего висков и щёк под скулами
+    const wAt = (y) => ovalHalfWidth(this.head, y);
+    const c1 = wAt(M.chin + 0.1), c2 = wAt(M.chin + 0.3), k0 = wAt(-0.05), k1 = wAt(0.22), k2 = wAt(-0.35);
+    M.chinSq = c1 && c2 ? c1 / c2 : null;
+    M.cheekPr = k0 && k1 && k2 ? k0 / ((k1 + k2) / 2) : null;
     // «лук Купидона»: положение пиков (доля полуширины рта) и толщина губы в центре относительно пиков
     {
       const S = this.sym, ax = (i) => Math.abs(S[i].x), inner = [13, 312, 311, 310, 415, 308];
@@ -541,7 +643,7 @@ export class Portrait {
 
   _hair() {
     const M = this.hairMask;
-    this.hairStyle = null; this.hairColor = null; this.hairlineY = null;
+    this.hairStyle = null; this.hairColor = null; this.hairlineY = null; this.hairR = null; this.bang = null;
     if (!M) return;
     const W = this.img.width, H = this.img.height;
     const isHair = (x, y) => {
@@ -564,7 +666,26 @@ export class Portrait {
     this.hairBottom = bottom;
     this.hairStyle = top !== null && top < 0.12 ? 'none' : bottom !== null && bottom < -0.6 ? 'long' : 'short';
     // линия роста: первый пиксель волос вверх по средней линии от лба
-    for (let y = Math.max(0.25, this.head[10].y - 0.15); y < 1.25; y += 0.01) if (isHair(0, y)) { this.hairlineY = y; break; }
+    const lineAt = (x) => { for (let y = Math.max(0.25, this.head[10].y - 0.15); y < 1.25; y += 0.01) if (isHair(x, y)) return y; return null; };
+    this.hairlineY = lineAt(0);
+    // чёлка набок: линия роста заметно ниже с одной стороны лба
+    const yl = lineAt(-0.25), yr = lineAt(0.25);
+    this.bang = yl !== null && yr !== null && Math.abs(yl - yr) > 0.04 ? { side: yl < yr ? -1 : 1, depth: clamp(Math.abs(yl - yr), 0, 0.3) } : null;
+    // силуэт причёски: по лучам из (0, 0.15) — внешняя граница маски волос (с допуском разрывов) на углах 0…100°
+    this.hairR = [0, 20, 40, 60, 80, 100].map((deg) => {
+      const rs = [];
+      for (const sg of [1, -1]) {
+        const t = sg * deg * Math.PI / 180, dx = Math.sin(t), dy = Math.cos(t);
+        let last = null, gap = 0;
+        for (let r = 0.45; r < 2.2; r += 0.01) {
+          const v = isHair(dx * r, 0.15 + dy * r);
+          if (v === null) break;
+          if (v) { last = r; gap = 0; } else if (last !== null && (gap += 0.01) > 0.08) break;
+        }
+        if (last !== null) rs.push(last);
+      }
+      return rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : null;
+    });
     const cols = [], Wm = M.w, Hm = M.h;
     for (let y = 0; y < Hm; y += 2) for (let x = 0; x < Wm; x += 2) {
       if (!M.data[y * Wm + x]) continue;
@@ -575,6 +696,46 @@ export class Portrait {
       cols.sort((a, b) => lum(...a) - lum(...b));
       this.hairColor = robustColor(cols.slice(Math.floor(cols.length * 0.45), Math.floor(cols.length * 0.95)));
     }
+  }
+
+  /**
+   * Очки по маске «прочее» многоклассового сегментатора (только при accessories: true): доля пикселей класса
+   * вокруг глаз (на калибровочных фото без очков — ровно 0, в очках — 0.014–0.06), размер и форма оправы по
+   * их разбросу, цвет — по пикселям снимка. this.glasses = null, если сегментатор не запускали.
+   */
+  _glasses() {
+    this.glasses = null;
+    const M = this.multiMask;
+    if (!M) return;
+    const W = this.img.width, H = this.img.height, hd = this.head;
+    const cls = (x, y) => { const q = this.fromHead(x, y); if (q.x < 0 || q.y < 0 || q.x >= W || q.y >= H) return -1; return M.data[Math.floor((q.y / H) * M.h) * M.w + Math.floor((q.x / W) * M.w)]; };
+    const eyes = [[263, 362, 1], [33, 133, -1]].map(([o, i, sg]) => ({ c: mid(hd[o], hd[i]), hw: Math.abs(hd[o].x - hd[i].x) / 2, sg }));
+    let zone = 0, acc = 0;
+    const ext = { out: [], inn: [], top: [], bot: [] }, cols = [];
+    for (const e of eyes) for (let a = 0; a < 360; a += 5) for (let f = 0.6; f <= 2.4; f += 0.06) {
+      const dx = Math.cos(a * DEG) * e.hw * f, dy = Math.sin(a * DEG) * e.hw * 0.8 * f;
+      const v = cls(e.c.x + dx, e.c.y + dy);
+      zone++;
+      if (v !== 5) continue;
+      acc++;
+      const ox = (dx * e.sg) / e.hw, oy = dy / e.hw;                 // в долях полуширины глаза; ox > 0 — к виску
+      if (Math.abs(oy) < 0.35) (ox > 0 ? ext.out : ext.inn).push(Math.abs(ox));
+      if (Math.abs(ox) < 0.5) (oy > 0 ? ext.top : ext.bot).push(Math.abs(oy));
+      const q = this.fromHead(e.c.x + dx, e.c.y + dy), c = this._rgb(q.x, q.y);
+      if (c) cols.push(c);
+    }
+    const frac = acc / Math.max(1, zone), detected = frac > 0.006;
+    // тонкая оправа на маске 256×256 — считаные пиксели: при малой выборке размер по умолчанию
+    const far = (a, d) => { if (a.length < 8) return d; const b = a.sort((p, q) => p - q); return b[Math.floor(b.length * 0.85)]; };
+    if (!detected) { this.glasses = { detected: false, frac: +frac.toFixed(4) }; return; }
+    const rx = (far(ext.out, 1.5) + far(ext.inn, 1.3)) / 2, top = far(ext.top, 1.1), bot = far(ext.bot, 1.1);
+    const ry = (top + bot) / 2, color = cols.length > 8 ? robustColor(cols) : [0.15, 0.15, 0.15];
+    this.glasses = {
+      detected: true, frac: +frac.toFixed(4),
+      size: +clamp(rx, 1.3, 2.0).toFixed(3), aspect: +clamp(rx / Math.max(0.4, ry), 0.9, 1.5).toFixed(3), dy: +clamp((top - bot) / 2, -0.2, 0.25).toFixed(3),
+      color: hex(color.map((v) => v * 0.9)), light: lum(...color) > 0.45,
+    };
+    this.warnings.push('На фото очки: оправа добавлена к голове и убрана с кожи. Отключить: setLook({ glasses: false }).');
   }
 
   /** Текстура кожи: кадр лица, освещение снято, брови/губы/волосы закрашены, края уходят в общий тон. */
@@ -634,6 +795,14 @@ export class Portrait {
           const ix = x / k + x0, iy = y / k + y0;
           if (M.data[Math.floor((iy / img.height) * M.h) * M.w + Math.floor((ix / img.width) * M.w)]) hairHole[y * TW + x] = 1;
         }
+      }
+    }
+    // очки и прочие аксессуары на лице (маска сегментатора) — тоже дыры, кожа под ними восстанавливается push-pull
+    if (this.multiMask && this.glasses?.detected) {
+      const M = this.multiMask;
+      for (let y = 0; y < TH; y++) for (let x = 0; x < TW; x++) {
+        const ix = x / k + x0, iy = y / k + y0;
+        if (M.data[Math.floor((iy / img.height) * M.h) * M.w + Math.floor((ix / img.width) * M.w)] === 5) hairHole[y * TW + x] = 1;
       }
     }
     const hb = boxBlur(hairHole, TW, TH, faceW * 0.012);
@@ -740,8 +909,8 @@ export class Portrait {
    */
   fit(o = {}) {
     const k = o.caricature ?? 1.5, tex = clamp(o.texture ?? 0.9, 0, 1), gender = o.gender === 'male' ? 'male' : 'female';
-    const re = clamp(o.realism ?? 0.65, 0, 1);
-    const key = `${k}|${tex}|${gender}|${re}`;
+    const re = clamp(o.realism ?? 0.8, 0, 1);
+    const key = `${k}|${tex}|${gender}|${re}|${this._corrV || 0}`;
     if (this._fits.has(key)) return this._fits.get(key);
     const Q = this.meas, Mn = MEAN_M;
     // основа: пресет пола, сдвинутый к реальным пропорциям
@@ -754,7 +923,9 @@ export class Portrait {
       brow: { ...d0.brow, x0: 0.085 + (baseEyeX - 0.3) * 0.5, x1: 0.45 + (baseEyeX - 0.3) * 0.8 },
     };
     const baseChin = lerp(1, REAL.chinScale, re);
-    const car = (f) => Mn[f] + k * (Q[f] - Mn[f]);
+    // поправки: глобальная калибровка основы (× realism) и поправки этого лица, найденные через рендер (refine)
+    const GC = (!this.noBase && BASE_CORR[gender]) || {}, PC = this.corr?.meas || {};
+    const car = (f) => Mn[f] + k * (Q[f] - Mn[f]) + (GC[f] || 0) * re + (PC[f] || 0);
     const ratio = (f) => car(f) / Mn[f];
 
     const eyeX = clamp(baseEyeX + car('eyeCX') - Mn.eyeCX, 0.21, 0.36);
@@ -773,12 +944,19 @@ export class Portrait {
     };
     if (this.browColor) brow.color = hex(this.browColor.map((v) => v * 0.85));
     const gx = d.gx.slice();
-    const wr = Q.widths.map((r) => clamp(1 + k * (r - 1), 0.8, 1.25));
+    const GW = (!this.noBase && BASE_CORR[gender]?.widths) || [], PW = this.corr?.widths || [];
+    const wr = Q.widths.map((r, i) => clamp(1 + k * (r - 1) + (GW[i] || 0) * re + (PW[i] || 0), 0.75, 1.3));
     for (let i = 0; i < 6; i++) gx[i + 2] = d.gx[i + 2] * wr[i];
     gx[0] = d.gx[0] * lerp(1, wr[0], 0.5); gx[1] = d.gx[1] * lerp(1, wr[0], 0.8); gx[8] = d.gx[8] * wr[5];
+    // квадратный подбородок — шире низ овала и шире выступ подбородка; скулы — выраженнее «мышца» скулы
+    // (средние по калибровочным фото: chinSq 0.671, cheekPr 1.054)
+    const sq = typeof Q.chinSq === 'number' ? k * (Q.chinSq - 0.671) / 0.671 : 0;
+    gx[8] *= clamp(1 + 1.2 * sq, 0.8, 1.25);
+    const chinSX = d.chinSX * clamp(1 + 3 * sq, 0.6, 1.6);
+    const cheek = d.cheek * (typeof Q.cheekPr === 'number' ? clamp(1 + 40 * k * (Q.cheekPr - 1.054), 0.3, 2) : 1);
 
     const ov = {
-      gx, eyeX, eyeR, upperOpen, lowerOpen,
+      gx, eyeX, eyeR, upperOpen, lowerOpen, chinSX, cheek,
       eyeTilt: clamp(d.eyeTilt + car('tilt') - Mn.tilt, -0.12, 0.28),
       brow,
       noseTipY: clamp(-0.21 + car('noseTip') - Mn.noseTip, -0.3, -0.13),
@@ -788,6 +966,14 @@ export class Portrait {
       lipU: clamp(d.lipU * ratio('lipU'), 0.018, 0.085),
       lipL: clamp(d.lipL * ratio('lipL'), 0.022, 0.1),
       chinScale: clamp(baseChin * (car('chin') - MY) / (Mn.chin - MY), 0.8, 1.5),
+      // разрез: перекос и полнота век. Коэффициенты — из геометрии кромки (_shapeLid): 1° перекоса ≈ 0.0164 сдвига
+      // вершины дуги, 1° полноты ≈ −0.016 отношения «края/середина». По рендеру не калибруется: MediaPipe почти не видит форму век.
+      ...(typeof Q.upS === 'number' ? {
+        lidUpSkew: clamp((car('upS') - Mn.upS) / 0.0164, -8, 8),
+        lidUpFull: clamp(-(car('upF') - Mn.upF) / 0.016, -8, 8),
+        lidLoSkew: clamp((car('loS') - Mn.loS) / 0.0164, -8, 8),
+        lidLoFull: clamp(-(car('loF') - Mn.loF) / 0.016, -8, 8),
+      } : {}),
       ...(Q.bowX ? {
         bowX: clamp(lerp(0.2, BOW_MEAN.x, re) + k * (Q.bowX - BOW_MEAN.x), 0.12, 0.36),
         bowDip: clamp(0.2 + k * 1.09 * (BOW_MEAN.rc - Q.bowRC), 0.02, 0.45),
@@ -801,6 +987,28 @@ export class Portrait {
     if (this.beard > 0.05) ov.stubble = this.beard * 2.2;      // борода/щетина: затемнение челюсти и усов поверх текстуры
     if (this.hairColor) ov.hair = hex(this.hairColor.map((v) => v * 1.05));
     if (this.clothColor) ov.cloth = hex(this.clothColor);
+    if (this.hairR && this.hairStyle && this.hairStyle !== 'none') {
+      // толщина = граница волос на фото − силуэт нашего черепа на том же луче (силуэт анфас: √(1−y²)·gx(y))
+      const skull = (deg) => {
+        const t = deg * Math.PI / 180, dx = Math.sin(t), dy = Math.cos(t);
+        let lo = 0.3, hi = 1.6;
+        for (let it = 0; it < 30; it++) {
+          const r = (lo + hi) / 2, x = dx * r, y = 0.15 + dy * r;
+          if (y >= 1 || Math.abs(x) > Math.sqrt(Math.max(0, 1 - y * y)) * prof(gx, y)) hi = r; else lo = r;
+        }
+        return lo;
+      };
+      ov.hairVol = this.hairR.map((r, i) => (r === null ? 0.04 : clamp(r - skull(i * 20), 0.015, 0.32)));
+    }
+    if (this.glasses?.detected) {
+      const g = this.glasses;
+      const thin = g.frac < 0.02;                                    // мало пикселей оправы — тонкая (металлическая) оправа
+      // у тонкой оправы форма по маске ненадёжна — обычно это круглая/овальная проволочная оправа
+      ov.glasses = thin
+        ? { style: 'round', color: g.light ? g.color : '#5a5048', size: clamp(g.size, 1.35, 1.6), aspect: 1.1, dy: 0, metal: true, thickness: 0.0045 }
+        : { style: g.aspect > 1.2 ? 'rect' : 'round', color: g.color, size: g.size, aspect: g.aspect, dy: g.dy, metal: g.light, thickness: 0.009 };
+    }
+    if (this.bang && this.hairStyle !== 'none') { ov.bangSide = this.bang.side; ov.bangDepth = this.bang.depth; }
     if (this.hairStyle) {
       ov.hairStyle = this.hairStyle;
       if (this.hairStyle === 'long' && this.hairBottom !== null) ov.hairBottom = clamp(this.hairBottom, -1.7, -0.75);
@@ -837,7 +1045,8 @@ export class Portrait {
         const add = (x, y, i) => { S.push({ x, y }); D.push(typeof i === 'number' ? ph[i] : i); };
         // глаза: уголки и середины век
         const T = P.eyeTilt, cT = Math.cos(T), sT = Math.sin(T), c = eye.rs * 0.97;
-        const hU = eye.rs * Math.sin((P.upperOpen * Math.PI) / 180), hL = eye.rl * Math.sin((P.lowerOpen * Math.PI) / 180);
+        // середина кромки с учётом полноты разреза (перекос в центре = 0, см. _shapeLid)
+        const hU = eye.rs * Math.sin(((P.upperOpen + (P.lidUpFull || 0)) * Math.PI) / 180), hL = eye.rl * Math.sin(((P.lowerOpen - (P.lidLoFull || 0)) * Math.PI) / 180);
         for (const E of EYES) {
           const sg = E.sg, ex = sg * eye.x;
           add(ex + sg * c * cT, EY + c * sT, E.outer);
@@ -910,9 +1119,11 @@ export class Portrait {
       origin: [r4(c.x), r4(c.y)], lm: b64(new Uint8Array(lm.buffer)),
       meas, warnings: this.warnings, expression: Object.fromEntries(Object.entries(this.expression).map(([k, v]) => [k, r4(v)])),
       colors: { skinPhoto: rc(this.skinPhoto), skin: rc(this.skinTex), lip: rc(this.lipColor), brow: rc(this.browColor), iris: rc(this.irisColor), hair: rc(this.hairColor), cloth: rc(this.clothColor) },
-      lidTex: rc(this.lidTex), beard: r4(this.beard), grayscale: !!this.grayscale,
-      hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY) },
+      lidTex: rc(this.lidTex), beard: r4(this.beard), grayscale: !!this.grayscale, glasses: this.glasses || null,
+      bs: this.bs ? Object.fromEntries(Object.entries(this.bs).filter(([, v]) => v > 0.03).map(([k, v]) => [k, Math.round(v * 100) / 100])) : null,
+      hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY), r: this.hairR ? this.hairR.map(r4) : null, bang: this.bang ? { side: this.bang.side, depth: r4(this.bang.depth) } : null },
       tex: null,
+      corr: this.corr ? JSON.parse(JSON.stringify(this.corr, (k, v) => (typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v))) : null,
     };
     if (size > 0 && this.tex) {
       const { x0, y0, k, TW, TH } = this.crop, { R, G, B } = this.tex;
@@ -948,8 +1159,9 @@ export class Portrait {
     const C = d.colors || {};
     p.skinPhoto = C.skinPhoto || C.skin || [0.85, 0.68, 0.58]; p.skinTex = C.skin || p.skinPhoto;
     p.lipColor = C.lip; p.browColor = C.brow; p.irisColor = C.iris; p.hairColor = C.hair; p.clothColor = C.cloth;
-    p.lidTex = d.lidTex; p.beard = d.beard || 0; p.grayscale = !!d.grayscale;
+    p.lidTex = d.lidTex; p.beard = d.beard || 0; p.grayscale = !!d.grayscale; p.bs = d.bs || null; p.glasses = d.glasses || null;
     p.hairStyle = d.hair?.style ?? null; p.hairBottom = d.hair?.bottom ?? null; p.hairlineY = d.hair?.line ?? null;
+    p.hairR = d.hair?.r ?? null; p.bang = d.hair?.bang ?? null;
     p.tex = null;
     if (d.tex?.img) {
       const t = d.tex, bmp = await createImageBitmap(await (await fetch(t.img)).blob());
@@ -961,6 +1173,7 @@ export class Portrait {
       p.crop = { x0: t.x0, y0: t.y0, k: t.k, TW: t.w, TH: t.h };
       p.tex = { R, G, B, S: t.S || p.skinTex };
     }
+    p.corr = d.corr || null;
     p._fits = new Map();
     return p;
   }
@@ -969,7 +1182,7 @@ export class Portrait {
   get report() {
     const hx = (c) => (c ? hex(c) : null);
     return {
-      warnings: this.warnings, yaw: +this.yaw.toFixed(3), expression: this.expression,
+      warnings: this.warnings, yaw: +this.yaw.toFixed(3), expression: this.expression, glasses: this.glasses,
       hairStyle: this.hairStyle, colors: { skin: hx(this.skinTex), lip: hx(this.lipColor), brow: hx(this.browColor), iris: hx(this.irisColor), hair: hx(this.hairColor), cloth: hx(this.clothColor) },
       measures: Object.fromEntries(Object.entries(this.meas).filter(([, v]) => typeof v === 'number').map(([k, v]) => [k, +(v / MEAN_M[k]).toFixed(3)])),
       widths: this.meas.widths.map((v) => +v.toFixed(3)),

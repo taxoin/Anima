@@ -33,6 +33,10 @@ export const CASES = [
   { name: 'female-tongue', gender: 'female', channels: { jawOpen: 0.45, tongueOut: 0.7 }, framing: 'close' },
   { name: 'female-porcelain-blue', gender: 'female', look: { skin: 'porcelain', iris: 'blue' } },
   { name: 'male-deep-heterochromia', gender: 'male', look: { skin: 'deep', iris: 'amber', irisRight: 'green' }, framing: 'close' },
+  { name: 'female-eyes-round-glasses', gender: 'female', look: { eyeShape: 'round', glasses: 'round' }, framing: 'close' },
+  { name: 'male-eyes-downturned-rect', gender: 'male', look: { eyeShape: 'downturned', glasses: 'rect' }, framing: 'close', pose: { yaw: 0.35 } },
+  { name: 'female-tongue-up', gender: 'female', channels: { jawOpen: 0.3, tongueUp: 0.9 }, framing: 'close' },
+  { name: 'avatar-truman-glasses', avatar: '/tests/fixtures/truman.anima.json', gender: 'male' },
   { name: 'avatar-lincoln', avatar: '/tests/fixtures/lincoln.anima.json', gender: 'male' },
   { name: 'avatar-monalisa-smile', avatar: '/tests/fixtures/monalisa.anima.json', channels: SMILE, framing: 'close' },
 ];

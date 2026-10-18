@@ -15,7 +15,7 @@
  *   6. manual   — прямые значения каналов из setChannels() (перекрывают всё)
  */
 import * as THREE from 'three';
-import { ProceduralHead, SKIN_TONES, EYE_COLORS } from './head-model.js';
+import { ProceduralHead, SKIN_TONES, EYE_COLORS, EYE_SHAPES, GLASSES } from './head-model.js';
 import {
   CHANNELS, STATE_DEFAULTS, EMOTIONS, MICRO, GESTURES, ALIASES,
   resolveEmotion, applyRestraint, parseNarrative, parseEmotionString, expandChannels,
@@ -307,7 +307,7 @@ export class EmotionalHead {
     const { analyzePortrait } = await import('./photo-avatar.js');
     const portrait = src?.isPortrait ? src : await analyzePortrait(src, o);
     this._portrait = portrait;
-    this._photoOpts = { caricature: o.caricature ?? 1.5, texture: o.texture ?? 0.9, realism: o.realism ?? 0.65 };
+    this._photoOpts = { caricature: o.caricature ?? 1.5, texture: o.texture ?? 0.9, realism: o.realism ?? 0.8 };
     if (o.gender) this.gender = o.gender;
     this._rebuildRig();
     const report = portrait.report;
@@ -338,36 +338,83 @@ export class EmotionalHead {
    *   direction     — косинус между отличиями человека от среднего лица и отличиями головы от своей основы (1 — идеально)
    *   gain          — во сколько раз отличия усилены (≈ caricature)
    * Занимает ~0.5 с: две пересборки головы и два распознавания. Нужен фото-аватар.
-   * @param {object} [o] { base = true — считать direction/gain, size = 640 }
+   * @param {object} [o] { base = true — считать direction/gain, expression = true — рендер с мимикой фото, size = 640 }
    */
   async likeness(o = {}) {
     if (!this._portrait) throw new Error('likeness(): сначала fromPhoto() или importAvatar()');
-    const { detectFace, likenessReport } = await import('./photo-avatar.js');
-    const size = o.size ?? 640;
-    const cam = new THREE.PerspectiveCamera(11, 1, 1, 60);
-    const shot = async () => {
-      const W = this.renderer.domElement.width, H = this.renderer.domElement.height;
-      cam.aspect = W / H; cam.position.set(0, -0.3, 19); cam.lookAt(0, -0.3, 0); cam.updateProjectionMatrix();
-      this.renderStill({}, {}, cam);
-      const s = Math.min(W, H), c = document.createElement('canvas');
-      c.width = c.height = size;
-      const g = c.getContext('2d');
-      g.fillStyle = '#6b6f78'; g.fillRect(0, 0, size, size);
-      g.drawImage(this.renderer.domElement, (W - s) / 2, (H - s) / 2, s, s, 0, 0, size, size);
-      this._render();                                              // вернуть обычный кадр в том же тике (без мигания)
-      const d = await detectFace(c);
-      if (!d) throw new Error('likeness(): на рендере не нашлось лица');
-      return d;
-    };
-    const render = await shot();
+    const { likenessReport } = await import('./photo-avatar.js');
+    // выражение с фото (blendshapes MediaPipe = те же ARKit-каналы): точки сравниваются при одинаковой мимике
+    const channels = o.expression !== false && this._portrait.bs ? this._portrait.bs : {};
+    const render = await this._shotFace({ ...o, channels });
     let base = null;
-    if (o.base !== false) {
-      const saved = { ...this._photoOpts };
-      this._photoOpts = { ...saved, caricature: 0 };
-      this._rebuildRig();
-      try { base = await shot(); } finally { this._photoOpts = saved; this._rebuildRig(); }
-    }
+    if (o.base !== false) base = await this._withPhotoOpts({ caricature: 0 }, () => this._shotFace({ ...o, channels }));
     return likenessReport(this._portrait, render, base);
+  }
+
+  /**
+   * Уточнить фото-аватар через рендер: голова рендерится, на рендере измеряются те же черты, что на фото,
+   * и параметры подправляются, пока шарж не совпадёт с целью (см. refineStep в photo-avatar.js).
+   * Поправки хранятся в портрете и попадают в exportAvatar(). ~1 с на телефоне (3–4 рендера и распознавания).
+   * @param {object} [o] { iterations = 2, alpha = 0.8, onProgress }
+   * @returns {Promise<number[]>} ошибка по итерациям (нормированная; меньше — точнее)
+   */
+  async refinePhoto(o = {}) {
+    const P = this._portrait;
+    if (!P) throw new Error('refinePhoto(): сначала fromPhoto() или importAvatar()');
+    const { measureFace, refineStep } = await import('./photo-avatar.js');
+    const say = o.onProgress || (() => {});
+    const corr = { meas: {}, widths: [0, 0, 0, 0, 0, 0] };
+    const setCorr = (c) => { P.corr = c; P._corrV = (P._corrV || 0) + 1; };
+    setCorr(null);
+    say('Уточняю: основа…');
+    const B = measureFace(await this._withPhotoOpts({ caricature: 0 }, () => this._shotFace()));
+    const k = this._photoOpts.caricature ?? 1.5, errs = [], n = o.iterations ?? 2;
+    let best = { err: Infinity, corr: null };
+    // ошибка i-й итерации измерена с поправками i-го шага; оставляем лучшие (распознавание и ограничения параметров шумят)
+    for (let it = 0; it <= n; it++) {
+      say(it < n ? `Уточняю: шаг ${it + 1}…` : 'Уточняю: проверка…');
+      this._rebuildRig();
+      const R = measureFace(await this._shotFace());
+      const snap = P.corr;
+      const err = refineStep(P, corr, R, B, k, { ...o, alpha: it < n ? o.alpha ?? 0.6 : 0 });
+      errs.push(+err.toFixed(3));
+      if (err < best.err) best = { err, corr: snap };
+      if (it < n) setCorr({ ...corr, meas: { ...corr.meas }, widths: [...corr.widths], k });
+    }
+    setCorr(best.corr);
+    this._rebuildRig();
+    this._emit('photoAvatar', P.report);
+    return errs;
+  }
+
+  /** Временно другие настройки фото (с пересборкой), затем вернуть как было. */
+  async _withPhotoOpts(opts, fn) {
+    const saved = { ...this._photoOpts };
+    this._photoOpts = { ...saved, ...opts };
+    this._rebuildRig();
+    try { return await fn(); } finally { this._photoOpts = saved; this._rebuildRig(); }
+  }
+
+  /** Рендер анфас в нейтральном выражении → точки лица на рендере (detectFace). */
+  async _shotFace(o = {}) {
+    const { detectFace } = await import('./photo-avatar.js');
+    const size = o.size ?? 640;
+    const cam = this._faceCam ||= new THREE.PerspectiveCamera(11, 1, 1, 60);
+    const W = this.renderer.domElement.width, H = this.renderer.domElement.height;
+    cam.aspect = W / H; cam.position.set(0, -0.3, 19); cam.lookAt(0, -0.3, 0); cam.updateProjectionMatrix();
+    const gl = this.rig.glasses;                                   // очки мешают распознаванию — на снимке их нет
+    if (gl) gl.visible = false;
+    this.renderStill(o.channels || {}, {}, cam);
+    if (gl) gl.visible = true;
+    const s = Math.min(W, H), c = document.createElement('canvas');
+    c.width = c.height = size;
+    const g = c.getContext('2d');
+    g.fillStyle = '#6b6f78'; g.fillRect(0, 0, size, size);
+    g.drawImage(this.renderer.domElement, (W - s) / 2, (H - s) / 2, s, s, 0, 0, size, size);
+    this._render();                                                // вернуть обычный кадр в том же тике (без мигания)
+    const d = await detectFace(c);
+    if (!d) throw new Error('на рендере не нашлось лица');
+    return d;
   }
 
   /**
@@ -542,7 +589,7 @@ export class EmotionalHead {
    * @returns {HTMLCanvasElement}
    */
   renderStill(channels = {}, pose = {}, camera = this.camera) {
-    const ch = {};
+    const ch = { ...channels };                                    // + не-ARKit каналы (tongueUp)
     for (const c of CHANNELS) ch[c] = channels[c] || 0;
     this.rig.update(ch, { pitch: 0, yaw: 0, roll: 0, eyeYaw: 0, eyePitch: 0, breath: 0, focus: 8, ...pose });
     this.renderer.render(this.scene, camera);
@@ -846,7 +893,7 @@ export class EmotionalHead {
       const cur = this._speechSm[c];
       const rate = target > cur ? 26 : 16;
       this._speechSm[c] = cur + (target - cur) * Math.min(1, dt * rate);
-      out[c] = out[c] * (1 - 0.65 * this._speechW) + this._speechSm[c];
+      out[c] = (out[c] || 0) * (1 - 0.65 * this._speechW) + this._speechSm[c];   // tongueUp — вне CHANNELS
     }
     // улыбка во время речи растягивает "о/у" — компенсируем, чтобы рот не выворачивало
     if (this._speechW > 0.01) {
@@ -862,6 +909,7 @@ export class EmotionalHead {
     // 7. manual + clamp
     for (const k in this._manual) out[k] = this._manual[k];
     for (const c of CHANNELS) out[c] = clamp(out[c] || 0, 0, 1);
+    out.tongueUp = clamp(out.tongueUp || 0, 0, 1);
 
     // поза головы
     const hm = idle ? base['@headMotion'] : 0;
@@ -909,5 +957,5 @@ function mirrorName(k) {
 function mirrorChannels(ch) { const o = {}; for (const k in ch) o[mirrorName(k)] = ch[k]; return o; }
 
 // реэкспорт, чтобы хватало одного импорта
-export { SKIN_TONES, EYE_COLORS, CHANNELS, EMOTIONS, MICRO, GESTURES, ALIASES, VISEMES, WebSpeech, parseNarrative, parseEmotionString, parseMarkup, resolveEmotion };
+export { SKIN_TONES, EYE_COLORS, EYE_SHAPES, GLASSES, CHANNELS, EMOTIONS, MICRO, GESTURES, ALIASES, VISEMES, WebSpeech, parseNarrative, parseEmotionString, parseMarkup, resolveEmotion };
 export default EmotionalHead;

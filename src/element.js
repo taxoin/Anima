@@ -14,7 +14,7 @@ import { EmotionalHead } from './emotional-head.js';
 
 const METHODS = ['setEmotion', 'addEmotion', 'getEmotion', 'getState', 'micro', 'gesture', 'express', 'speak', 'speakAudio', 'listenStream',
   'stopSpeaking', 'setGender', 'lookAt', 'followPointer', 'setIdle', 'setChannels', 'clearChannels', 'setLighting', 'setBackground',
-  'setFraming', 'loadModel', 'useProcedural', 'snapshot', 'fromPhoto', 'setPhotoOptions', 'clearPhoto', 'exportAvatar', 'importAvatar', 'setLook', 'getLook', 'pause', 'resume', 'likeness'];
+  'setFraming', 'loadModel', 'useProcedural', 'snapshot', 'fromPhoto', 'setPhotoOptions', 'clearPhoto', 'exportAvatar', 'importAvatar', 'setLook', 'getLook', 'pause', 'resume', 'likeness', 'refinePhoto'];
 const EVENTS = ['emotionChange', 'speakStart', 'speakEnd', 'word', 'cue', 'gesture', 'micro', 'express', 'genderChange', 'blink', 'modelLoaded', 'photoAvatar', 'lookChange'];
 
 export class EmotionalHeadElement extends HTMLElement {
