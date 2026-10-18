@@ -201,12 +201,13 @@ const HAT_LINE = { beanie: 0.4, cap: 0.48, fedora: 0.5, bowler: 0.44, cloche: 0.
 
 /**
  * Уровни детализации геометрии. high — как было (ПК, ~200 тыс. треугольников); medium — телефоны (~95 тыс.);
- * low — слабые устройства (~55 тыс.). Сетки кожи и волос — основная нагрузка: у кожи ~30 морф-целей на вершину.
+ * low — слабые устройства (~55 тыс.). Сетки кожи и волос — основная нагрузка: у кожи 25 морф-целей на вершину
+ * (на low — 19, см. MORPH_LIST_LITE, и слабые веса < 0.015 отбрасываются: меньше выборок морф-текстуры).
  */
 export const DETAIL = {
   high: { skin: [240, 200], hair: [220, 160], eye: [48, 32], lid: 56, teeth: [12, 10], cards: 1, beard: 1, shadowMap: 1024 },
   medium: { skin: [168, 136], hair: [120, 88], eye: [32, 22], lid: 40, teeth: [10, 8], cards: 0.65, beard: 0.7, shadowMap: 1024 },
-  low: { skin: [128, 104], hair: [88, 64], eye: [24, 16], lid: 32, teeth: [8, 6], cards: 0.4, beard: 0.5, shadowMap: 512 },
+  low: { skin: [128, 104], hair: [88, 64], eye: [24, 16], lid: 32, teeth: [8, 6], cards: 0.4, beard: 0.5, shadowMap: 512, morphs: 'lite' },
 };
 /** 'auto' → medium на телефонах и планшетах (грубый указатель или мобильный UA), иначе high. */
 export function resolveDetail(d) {
@@ -388,6 +389,26 @@ const MORPH_LIST = [];
 for (const m in MORPHS) {
   if (SIDED.has(m)) { MORPH_LIST.push({ name: m + 'Left', fn: MORPHS[m], sg: 1 }, { name: m + 'Right', fn: MORPHS[m], sg: -1 }); }
   else MORPH_LIST.push({ name: m, fn: MORPHS[m], sg: 1, jaw: m.startsWith('jaw') });
+}
+/**
+ * Урезанный набор для detail: 'low' — 19 целей вместо 25. jawLeft/jawRight — одна цель jawSide со знаковым весом
+ * (точно); воронка губ, ямочки и растяжка рта сворачиваются в соседние цели (приближённо, см. foldLite).
+ */
+const LITE_DROP = new Set(['jawLeft', 'jawRight', 'mouthFunnel', 'mouthDimpleLeft', 'mouthDimpleRight', 'mouthStretchLeft', 'mouthStretchRight']);
+const MORPH_LIST_LITE = [{ name: 'jawSide', fn: MORPHS.jawLeft, sg: 1, jaw: true }, ...MORPH_LIST.filter((m) => !LITE_DROP.has(m.name))];
+const LITE_MIN = 0.015;
+/** Каналы → веса урезанного набора (out переиспользуется). Слабые веса — в ноль: цель не читается шейдером. */
+function foldLite(ch, out) {
+  const g = (k) => ch[k] || 0;
+  for (const m of MORPH_LIST_LITE) out[m.name] = g(m.name);
+  out.jawSide = g('jawLeft') - g('jawRight');
+  out.mouthPucker = Math.min(1, out.mouthPucker + 0.57 * g('mouthFunnel'));
+  for (const S of ['Left', 'Right']) {
+    out['mouthSmile' + S] = Math.min(1, out['mouthSmile' + S] + 0.3 * g('mouthDimple' + S));
+    out['mouthFrown' + S] = Math.min(1, out['mouthFrown' + S] + 0.6 * g('mouthStretch' + S));
+  }
+  for (const k in out) if (Math.abs(out[k]) < LITE_MIN) out[k] = 0;
+  return out;
 }
 
 // ------------------------------------------------------------------ текстуры (canvas, без файлов)
@@ -913,10 +934,8 @@ export class ProceduralHead {
       morphPos.push(new THREE.BufferAttribute(d, 3));
       names.push(name);
     };
-    for (const m in MORPHS) {
-      if (SIDED.has(m)) { addMorph(m + 'Left', MORPHS[m], 1); addMorph(m + 'Right', MORPHS[m], -1); }
-      else addMorph(m, MORPHS[m], 1);
-    }
+    this._morphList = this.L.morphs === 'lite' ? MORPH_LIST_LITE : MORPH_LIST;
+    for (const m of this._morphList) addMorph(m.name, m.fn, m.sg);
     geo.morphAttributes.position = morphPos;
     geo.morphTargetsRelative = true;
 
@@ -1921,7 +1940,8 @@ export class ProceduralHead {
   update(ch, pose) {
     // morph targets
     const inf = this.skin.morphTargetInfluences, dict = this.skin.morphTargetDictionary;
-    for (const name in dict) inf[dict[name]] = ch[name] || 0;
+    const cs = this._morphList === MORPH_LIST_LITE ? foldLite(ch, (this._chLite ||= {})) : ch;
+    for (const name in dict) inf[dict[name]] = cs[name] || 0;
 
     // голова
     this.headPivot.rotation.set(pose.pitch, pose.yaw, pose.roll);
@@ -1957,8 +1977,8 @@ export class ProceduralHead {
     }
 
     this._activeMorphs = [];
-    for (const m of MORPH_LIST) {
-      const w = ch[m.name] || 0;
+    for (const m of this._morphList) {
+      const w = cs[m.name] || 0;
       if (!m.jaw && w > 0.002) this._activeMorphs.push({ fn: m.fn, sg: m.sg, w });
     }
     this._updateBrows(ch);

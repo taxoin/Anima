@@ -53,6 +53,7 @@ export const CASES = [
   // детализация для телефонов
   { name: 'male-medium-beard', gender: 'male', detail: 'medium', look: { beard: 'full' }, channels: SMILE },
   { name: 'avatar-lincoln-low', avatar: '/tests/fixtures/lincoln-shape.anima.json', gender: 'male', detail: 'low' },
+  { name: 'female-low-contempt-jaw', gender: 'female', detail: 'low', channels: { mouthDimpleRight: 0.7, mouthSmileRight: 0.38, noseSneerRight: 0.1, jawOpen: 0.3, jawLeft: 0.5, mouthFunnel: 0.4 }, framing: 'close' },
 ];
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg' };
