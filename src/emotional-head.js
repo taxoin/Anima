@@ -15,7 +15,7 @@
  *   6. manual   — прямые значения каналов из setChannels() (перекрывают всё)
  */
 import * as THREE from 'three';
-import { ProceduralHead, SKIN_TONES, EYE_COLORS, EYE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS } from './head-model.js';
+import { ProceduralHead, SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS } from './head-model.js';
 import { MAKEUP } from './skin-decals.js';
 import {
   CHANNELS, STATE_DEFAULTS, EMOTIONS, MICRO, GESTURES, ALIASES,
@@ -302,6 +302,7 @@ export class EmotionalHead {
    * @param {number} [o.texture=0.9]     сила фото-текстуры кожи (0 — ровный тон)
    * @param {'female'|'male'} [o.gender] основа (шея, плечи, причёска по умолчанию)
    * @param {boolean} [o.shape=false]  сразу подогнать форму по точкам лица (refineShape, +1.5–3 с)
+   * @param {'full'} [o.detail]         очки и головные уборы по многоклассовому сегментатору (+16 МБ модель; = accessories: true)
    * @param {function} [o.onProgress]    (text) => void
    * @returns {Promise<object>} отчёт: предупреждения, цвета, меры лица относительно среднего
    */
@@ -998,5 +999,5 @@ function mirrorName(k) {
 function mirrorChannels(ch) { const o = {}; for (const k in ch) o[mirrorName(k)] = ch[k]; return o; }
 
 // реэкспорт, чтобы хватало одного импорта
-export { SKIN_TONES, EYE_COLORS, EYE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS, MAKEUP, CHANNELS, EMOTIONS, MICRO, GESTURES, ALIASES, VISEMES, WebSpeech, parseNarrative, parseEmotionString, parseMarkup, resolveEmotion };
+export { SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS, MAKEUP, CHANNELS, EMOTIONS, MICRO, GESTURES, ALIASES, VISEMES, WebSpeech, parseNarrative, parseEmotionString, parseMarkup, resolveEmotion };
 export default EmotionalHead;

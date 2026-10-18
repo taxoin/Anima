@@ -126,7 +126,7 @@ async function toCanvas(src, max = 1280) {
 /**
  * Распознать портрет. Возвращает Portrait: .fit({caricature, texture, gender}) → overrides для ProceduralHead.
  * @param {File|Blob|string|HTMLImageElement|HTMLCanvasElement|ImageBitmap} src
- * @param {object} [o] { assets, onProgress(text) }
+ * @param {object} [o] { assets, onProgress(text), detail: 'full' (= accessories: true) — очки и головные уборы, +16 МБ модель }
  */
 export async function analyzePortrait(src, o = {}) {
   const A = { ...PHOTO_ASSETS, ...(o.assets || {}) };
@@ -149,7 +149,7 @@ export async function analyzePortrait(src, o = {}) {
     } catch (e) { /* без маски волос: цвет и длина по умолчанию */ }
   }
   let multi = null;
-  if (o.accessories) {
+  if (o.accessories || o.detail === 'full') {
     say('Ищу очки и аксессуары…');
     try {
       const seg = await loadMulti(A), res = seg.segment(img), m = res.categoryMask;
@@ -340,7 +340,7 @@ function measure(P) {
     tilt: Math.atan2(P[263].y - P[362].y, P[263].x - P[362].x),
     browY: b0.y, browArch: b2.y - b0.y, browTail: b4.y - b0.y, browX0: b0.x, browX1: b4.x,
     browTh: [1, 2, 3].reduce((s, j) => s + P[BROWS[0].up[j]].y - P[BROWS[0].lo[j]].y, 0) / 3,
-    noseTip: P[4].y, noseW: P[358].x,
+    noseTip: P[4].y, noseW: P[358].x, noseBr: (P[351].x + P[419].x) / 2,
     noseProj: Math.max(0.02, P[4].z - (P[362].z + P[263].z) / 2),
     mouthHW: P[291].x, lipU: Math.max(0.005, P[0].y - P[13].y), lipL: Math.max(0.005, P[14].y - P[17].y),
     chin: P[152].y,
@@ -489,6 +489,7 @@ export class Portrait {
     this._hair();
     this._facialHair();
     this._glasses();
+    this._hat();
     this._texture();
     this._fits = new Map();
   }
@@ -763,6 +764,8 @@ export class Portrait {
     if (!M) return;
     const W = this.img.width, H = this.img.height, hd = this.head;
     const cls = (x, y) => { const q = this.fromHead(x, y); if (q.x < 0 || q.y < 0 || q.x >= W || q.y >= H) return -1; return M.data[Math.floor((q.y / H) * M.h) * M.w + Math.floor((q.x / W) * M.w)]; };
+    // поля и бока головного убора спускаются по вискам: пиксель, от которого вверх до y = 0.6 сплошь «прочее/одежда», — не оправа
+    const hatSide = (x, y) => { for (let yy = y + 0.02; yy < 0.6; yy += 0.02) { const v = cls(x, yy); if (v === 2 || v === 3) return false; } return true; };   // до кожи не дошли: убор, фон, волосы
     const eyes = [[263, 362, 1], [33, 133, -1]].map(([o, i, sg]) => ({ c: mid(hd[o], hd[i]), hw: Math.abs(hd[o].x - hd[i].x) / 2, sg }));
     let zone = 0, acc = 0;
     const ext = { out: [], inn: [], top: [], bot: [] }, cols = [];
@@ -770,7 +773,7 @@ export class Portrait {
       const dx = Math.cos(a * DEG) * e.hw * f, dy = Math.sin(a * DEG) * e.hw * 0.8 * f;
       const v = cls(e.c.x + dx, e.c.y + dy);
       zone++;
-      if (v !== 5) continue;
+      if (v !== 5 || hatSide(e.c.x + dx, e.c.y + dy)) continue;
       acc++;
       const ox = (dx * e.sg) / e.hw, oy = dy / e.hw;                 // в долях полуширины глаза; ox > 0 — к виску
       if (Math.abs(oy) < 0.35) (ox > 0 ? ext.out : ext.inn).push(Math.abs(ox));
@@ -790,6 +793,55 @@ export class Portrait {
       color: hex(color.map((v) => v * 0.9)), light: lum(...color) > 0.45,
     };
     this.warnings.push('На фото очки: оправа добавлена к голове и убрана с кожи. Отключить: setLook({ glasses: false }).');
+  }
+
+  /**
+   * Головной убор по многоклассовому сегментатору (accessories: true): классы «одежда» (4) и «прочее» (5) над лбом.
+   * На портретах без убора в полосе y 0.7–1.0 их ровно 0, в шляпах — 30–100 %. Борода сегментатором не видна
+   * (размечается как кожа лица), поэтому для неё остаётся эвристика _facialHair.
+   * Стиль: поля шире головы → котелок (купол сужается к верху) или федора; без полей → шапка или клош.
+   */
+  _hat() {
+    this.hat = null;
+    const M = this.multiMask;
+    if (!M) return;
+    const W = this.img.width, H = this.img.height;
+    const cls = (x, y) => { const q = this.fromHead(x, y); if (q.x < 0 || q.y < 0 || q.x >= W || q.y >= H) return -1; return M.data[Math.floor((q.y / H) * M.h) * M.w + Math.floor((q.x / W) * M.w)]; };
+    const isHat = (v) => v === 4 || v === 5;
+    const rows = [];
+    for (let y = 0.3; y <= 1.6; y += 0.03) {
+      let n = 0, c = 0, wmax = 0;
+      for (let x = -1.3; x <= 1.3; x += 0.02) {
+        const v = cls(x, y);
+        if (v < 0) continue;
+        if (Math.abs(x) <= 0.5) { n++; if (isHat(v)) c++; }
+        if (isHat(v)) wmax = Math.max(wmax, Math.abs(x));
+      }
+      rows.push({ y, f: n ? c / n : 0, w: wmax });
+    }
+    const band = rows.filter((r) => r.y >= 0.7 && r.y <= 1.0), cover = band.reduce((s, r) => s + r.f, 0) / Math.max(1, band.length);
+    if (cover < 0.3) return;
+    // нижний край: первая снизу строка, с которой убор идёт сплошняком; верх — последняя строка с заметной долей
+    let i0 = rows.findIndex((r, i) => r.f > 0.45 && (rows[i + 1]?.f ?? 0) > 0.45);
+    if (i0 < 0) i0 = rows.findIndex((r) => r.y >= 0.7);
+    let i1 = i0;
+    for (let i = i0; i < rows.length; i++) if (rows[i].f > 0.15) i1 = i;
+    const y0 = rows[i0].y, top = rows[i1].y;
+    const brim = Math.max(...rows.slice(Math.max(0, i0 - 2), i0 + 6).map((r) => r.w));
+    const crownLo = rows[Math.min(i1, i0 + 6)]?.w || 0, crownHi = rows[Math.max(i0, i1 - 3)]?.w || 0;
+    const sides = [0.05, 0.15, 0.25].reduce((s, y) => s + [0.62, 0.7].reduce((a, x) => a + (isHat(cls(x, y)) ? 1 : 0) + (isHat(cls(-x, y)) ? 1 : 0), 0), 0) / 12;
+    let style;
+    if (brim > 0.85) style = crownHi < crownLo * 0.8 ? 'bowler' : 'fedora';
+    else style = sides > 0.3 ? 'beanie' : 'cloche';
+    const cols = [];
+    for (const r of rows.slice(i0, i1 + 1)) for (let x = -0.4; x <= 0.4; x += 0.04) {
+      if (!isHat(cls(x, r.y))) continue;
+      const q = this.fromHead(x, r.y), c = this._rgb(q.x, q.y);
+      if (c) cols.push(c);
+    }
+    const color = robustColor(cols) || [0.2, 0.2, 0.2];
+    this.hat = { style, color: hex(color.map((v) => v * 1.1)), y0: +y0.toFixed(3), top: +top.toFixed(3), brim: +brim.toFixed(3), cover: +cover.toFixed(2) };
+    this.warnings.push(`На фото головной убор (${style}): добавлен к голове. Отключить: setLook({ hat: null }).`);
   }
 
   /** Текстура кожи: кадр лица, освещение снято, брови/губы/волосы закрашены, края уходят в общий тон. */
@@ -852,11 +904,11 @@ export class Portrait {
       }
     }
     // очки и прочие аксессуары на лице (маска сегментатора) — тоже дыры, кожа под ними восстанавливается push-pull
-    if (this.multiMask && this.glasses?.detected) {
-      const M = this.multiMask;
+    if (this.multiMask && (this.glasses?.detected || this.hat)) {
+      const M = this.multiMask, hat = !!this.hat;
       for (let y = 0; y < TH; y++) for (let x = 0; x < TW; x++) {
-        const ix = x / k + x0, iy = y / k + y0;
-        if (M.data[Math.floor((iy / img.height) * M.h) * M.w + Math.floor((ix / img.width) * M.w)] === 5) hairHole[y * TW + x] = 1;
+        const ix = x / k + x0, iy = y / k + y0, v = M.data[Math.floor((iy / img.height) * M.h) * M.w + Math.floor((ix / img.width) * M.w)];
+        if (v === 5 || (hat && v === 4)) hairHole[y * TW + x] = 1;   // убор: и «одежда» (кожаный шлем, вязаная шапка)
       }
     }
     const hb = boxBlur(hairHole, TW, TH, faceW * 0.012);
@@ -1015,6 +1067,7 @@ export class Portrait {
       brow,
       noseTipY: clamp(-0.21 + car('noseTip') - Mn.noseTip, -0.3, -0.13),
       noseW: clamp(0.07 * ratio('noseW'), 0.05, 0.1),
+      noseBridge: clamp(ratio('noseBr') ** 1.5, 0.7, 1.4),           // ширина спинки (MediaPipe по светотени — с осторожностью)
       nose: clamp(d.nose * ratio('noseProj') ** 0.6, 0.08, 0.24),
       mouthHW: clamp(d.mouthHW * ratio('mouthHW'), 0.13, 0.25),
       lipU: clamp(d.lipU * ratio('lipU'), 0.018, 0.085),
@@ -1067,6 +1120,7 @@ export class Portrait {
         ? { style: 'round', color: g.light ? g.color : '#5a5048', size: clamp(g.size, 1.35, 1.6), aspect: 1.1, dy: 0, metal: true, thickness: 0.0045 }
         : { style: g.aspect > 1.2 ? 'rect' : 'round', color: g.color, size: g.size, aspect: g.aspect, dy: g.dy, metal: g.light, thickness: 0.009 };
     }
+    if (this.hat) ov.hat = { style: this.hat.style, color: this.hat.color, y0: clamp(this.hat.y0 - 0.15, 0.3, 0.56) };   // край на фото выше нашей линии: наш убор сидит поверх волос
     if (this.bang && this.hairStyle !== 'none') { ov.bangSide = this.bang.side; ov.bangDepth = this.bang.depth; }
     if (this.hairStyle) {
       ov.hairStyle = this.hairStyle;
@@ -1179,7 +1233,7 @@ export class Portrait {
       origin: [r4(c.x), r4(c.y)], lm: b64(new Uint8Array(lm.buffer)),
       meas, warnings: this.warnings, expression: Object.fromEntries(Object.entries(this.expression).map(([k, v]) => [k, r4(v)])),
       colors: { skinPhoto: rc(this.skinPhoto), skin: rc(this.skinTex), lip: rc(this.lipColor), brow: rc(this.browColor), iris: rc(this.irisColor), hair: rc(this.hairColor), cloth: rc(this.clothColor) },
-      lidTex: rc(this.lidTex), beard: r4(this.beard), grayscale: !!this.grayscale, glasses: this.glasses || null, beardStyle: this.beardStyle || null,
+      lidTex: rc(this.lidTex), beard: r4(this.beard), grayscale: !!this.grayscale, glasses: this.glasses || null, beardStyle: this.beardStyle || null, hat: this.hat || null,
       bs: this.bs ? Object.fromEntries(Object.entries(this.bs).filter(([, v]) => v > 0.03).map(([k, v]) => [k, Math.round(v * 100) / 100])) : null,
       hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY), r: this.hairR ? this.hairR.map(r4) : null, bang: this.bang ? { side: this.bang.side, depth: r4(this.bang.depth) } : null },
       tex: null,
@@ -1220,7 +1274,7 @@ export class Portrait {
     const C = d.colors || {};
     p.skinPhoto = C.skinPhoto || C.skin || [0.85, 0.68, 0.58]; p.skinTex = C.skin || p.skinPhoto;
     p.lipColor = C.lip; p.browColor = C.brow; p.irisColor = C.iris; p.hairColor = C.hair; p.clothColor = C.cloth;
-    p.lidTex = d.lidTex; p.beard = d.beard || 0; p.grayscale = !!d.grayscale; p.bs = d.bs || null; p.glasses = d.glasses || null; p.beardStyle = d.beardStyle || null;
+    p.lidTex = d.lidTex; p.beard = d.beard || 0; p.grayscale = !!d.grayscale; p.bs = d.bs || null; p.glasses = d.glasses || null; p.beardStyle = d.beardStyle || null; p.hat = d.hat || null;
     p.hairStyle = d.hair?.style ?? null; p.hairBottom = d.hair?.bottom ?? null; p.hairlineY = d.hair?.line ?? null;
     p.hairR = d.hair?.r ?? null; p.bang = d.hair?.bang ?? null;
     p.tex = null;
@@ -1244,7 +1298,7 @@ export class Portrait {
   get report() {
     const hx = (c) => (c ? hex(c) : null);
     return {
-      warnings: this.warnings, yaw: +this.yaw.toFixed(3), expression: this.expression, glasses: this.glasses, beard: this.beardStyle,
+      warnings: this.warnings, yaw: +this.yaw.toFixed(3), expression: this.expression, glasses: this.glasses, beard: this.beardStyle, hat: this.hat || null,
       hairStyle: this.hairStyle, colors: { skin: hx(this.skinTex), lip: hx(this.lipColor), brow: hx(this.browColor), iris: hx(this.irisColor), hair: hx(this.hairColor), cloth: hx(this.clothColor) },
       measures: Object.fromEntries(Object.entries(this.meas).filter(([, v]) => typeof v === 'number').map(([k, v]) => [k, +(v / MEAN_M[k]).toFixed(3)])),
       widths: this.meas.widths.map((v) => +v.toFixed(3)),

@@ -96,6 +96,17 @@ export const EYE_SHAPES = {
   hooded: { hood: 0.8, lidCrease: 0.2, upperOpen: 22 },
   monolid: { hood: 0.55, lidCrease: 0, epicanthus: 0.85, upperOpen: 19, lowerOpen: -19, lidUpFull: -2, eyeTilt: 0.12 },
 };
+/** Формы носа (featureDz): look: { noseShape: 'roman' }. Свои noseBridge/noseHump/… из look важнее. */
+export const NOSE_SHAPES = {
+  straight: {},
+  roman: { noseHump: 0.7, noseUp: -0.5, noseBridge: 1.05 },
+  snub: { noseUp: 0.8, noseHump: -0.35, noseBridge: 0.85, noseBulb: 0.15 },
+  button: { noseUp: 0.45, noseBulb: 0.45, noseBridge: 0.8, noseRoot: -0.3 },
+  greek: { noseRoot: 1.2, noseHump: 0.1 },
+  bulbous: { noseBulb: 1, noseFlare: 0.35, noseBridge: 1.1 },
+  wide: { noseFlare: 0.7, noseBridge: 1.3, noseW: 0.085, noseRoot: -0.3 },
+  narrow: { noseBridge: 0.72, noseFlare: -0.35, noseW: 0.06 },
+};
 /**
  * Причёски на базе двух оболочек (short / long): объём по направлениям (hairVol, 0…100° от макушки), толщина,
  * кудри (шум), залысины, хвост или пучок. look: { hairStyle: 'afro' }. Свои параметры из look важнее пресета.
@@ -119,6 +130,8 @@ export const HATS = {
   beanie: { style: 'beanie', color: '#3a4a5a' },
   cap: { style: 'cap', color: '#24324a' },
   fedora: { style: 'fedora', color: '#4a3a2c' },
+  bowler: { style: 'bowler', color: '#1e1c1c' },
+  cloche: { style: 'cloche', color: '#b8a488' },
   headband: { style: 'headband', color: '#b03a48' },
 };
 /** Серьги: look.earrings = 'stud' | 'hoop' | 'drop' | { style, color, size }. */
@@ -152,7 +165,7 @@ export function resolveLook(look = {}) {
   // разрез — первым: пресет задаёт lid*/eyeTilt/upperOpen, явные значения из look важнее
   // пресеты разреза и причёски — первыми: явные значения из look важнее (иначе строки вроде skin: 'brown' затрут готовый цвет)
   const hs = typeof look.hairStyle === 'string' && HAIR_STYLES[look.hairStyle];
-  const o = { ...(typeof look.eyeShape === 'string' && EYE_SHAPES[look.eyeShape] || {}), ...(hs || {}), ...look };
+  const o = { ...(typeof look.eyeShape === 'string' && EYE_SHAPES[look.eyeShape] || {}), ...(typeof look.noseShape === 'string' && NOSE_SHAPES[look.noseShape] || {}), ...(hs || {}), ...look };
   if (hs) o.hairStyle = hs.hairStyle;
   if (typeof o.skin === 'string' && SKIN_TONES[o.skin]) {
     const t = SKIN_TONES[o.skin];
@@ -184,7 +197,7 @@ export function upperLipProfile(t, P) {
   return Math.pow(Math.max(0, 1 - at ** 2.4), 0.55) * bow;
 }
 
-const HAT_LINE = { beanie: 0.4, cap: 0.48, fedora: 0.5, headband: 0.42 };   // нижний край убора (y)
+const HAT_LINE = { beanie: 0.4, cap: 0.48, fedora: 0.5, bowler: 0.44, cloche: 0.34, headband: 0.42 };   // нижний край убора (y)
 
 export const LAYOUT = { eyeX: 0.3, eyeY: 0.03, mouthY: -0.52, pivot: new THREE.Vector3(0, -0.72, -0.1) };
 const JAW_THETA = 0.24;                       // угол раскрытия челюсти при jawOpen = 1
@@ -215,13 +228,19 @@ function featureDz(x, y, P) {
   dz -= 0.05 * G(ax, y, ex, 0.02, 0.13, 0.1);                       // мягкая глазница
   dz += P.browRidge * G(ax, y, ex - 0.03, 0.2, 0.16, 0.05);         // надбровье
   const yn = noseY(y, P);
+  // форма носа (4.4): ширина спинки, горбинка, глубина переносицы, вздёрнутость, «картошка», крылья (см. NOSE_SHAPES)
+  const br = P.noseBridge ?? 1, hump = P.noseHump || 0, root = P.noseRoot || 0, up = P.noseUp || 0, bulb = P.noseBulb || 0, flare = P.noseFlare || 0;
   const ny = smoothstep(0.2, -0.23, yn);                             // спинка носа растёт к кончику
-  const below = yn < -0.26 ? Math.exp(-(((yn + 0.26) / 0.03) ** 2)) : 1;
-  const nsx = (0.036 + 0.03 * smoothstep(0.1, -0.26, yn)) * lerp(1, nw, smoothstep(0.05, -0.2, yn));
-  dz += P.nose * ny * below * Math.exp(-(x * x) / (2 * nsx * nsx));
-  dz += 0.025 * G(ax, yn, 0, 0.12, 0.05, 0.08);                      // переносица
-  dz += 0.035 * G(x, yn, 0, -0.21, 0.05 * nw, 0.05);                 // кончик носа
-  dz += 0.042 * G(ax, yn, 0.07 * nw, -0.245, 0.032 * nw, 0.028);     // крылья носа
+  const below = yn < -0.26 + 0.012 * up ? Math.exp(-(((yn + 0.26 - 0.012 * up) / 0.03) ** 2)) : 1;
+  const nsx = (0.036 + 0.03 * smoothstep(0.1, -0.26, yn)) * lerp(br, nw, smoothstep(0.05, -0.2, yn));
+  const ridge = Math.exp(-(x * x) / (2 * nsx * nsx));
+  dz += P.nose * ny * below * ridge;
+  dz += P.nose * hump * 0.32 * ridge * Math.exp(-(((yn + 0.07) / 0.055) ** 2));   // горбинка (< 0 — вогнутая спинка)
+  dz += 0.025 * (1 + root) * G(ax, yn, 0, 0.12, 0.05 * br, 0.08);   // переносица (root > 0 — «греческий» профиль без ямки)
+  const tipY = -0.21 + 0.018 * up;
+  dz += 0.035 * (1 + 0.9 * bulb) * G(x, yn, 0, tipY, 0.05 * nw * (1 + 0.35 * bulb), 0.05 * (1 + 0.25 * bulb));   // кончик носа
+  dz -= 0.03 * Math.max(0, up) * G(x, yn, 0, -0.262, 0.045 * nw, 0.022);           // вздёрнутый: колумелла уходит вверх
+  dz += 0.042 * (1 + 0.6 * flare) * G(ax, yn, 0.07 * nw * (1 + 0.15 * flare), -0.245, 0.032 * nw * (1 + 0.2 * flare), 0.028);   // крылья носа
   dz += 0.05 * G(x, y, 0, -0.5, 0.2, 0.14);                          // зона рта
   dz -= 0.02 * G(x, y, 0, -0.635, 0.12, 0.025);                      // ямка под губой
   dz += P.chin * G(x, y, 0, -0.78, P.chinSX, 0.07);                  // подбородок
@@ -360,7 +379,7 @@ function eyeTexture(P) {
   c.width = W; c.height = H;
   const ctx = c.getContext('2d'), img = ctx.createImageData(W, H), d = img.data;
   const ci = new THREE.Color(P.iris[0]), co = new THREE.Color(P.iris[1]);
-  const pupil = 0.19, iris = 0.53, limbus = 0.6;
+  const pupil = P.pupil ?? 0.155, iris = 0.53, limbus = 0.6;          // роговица увеличивает радужку и зрачок примерно в 1.2 раза
   const rnd = [];
   for (let j = 0; j < W; j++) rnd.push(Math.random());
   for (let y = 0; y < H; y++) {
@@ -391,6 +410,64 @@ function eyeTexture(P) {
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
   return tex;
+}
+
+const CORNEA_A = 0.6;                          // угловой радиус роговицы (= лимб в eyeTexture), рад
+const CORNEA_H = 0.06;                         // выпуклость роговицы над сферой яблока, доля радиуса
+
+/**
+ * Глазное яблоко с роговицей: в пределах лимба сфера выпячивается (блик едет как по настоящей роговице),
+ * а радужка в шейдере — плоский диск на глубине лимба: луч взгляда преломляется на роговице (n = 1.376)
+ * и находит точку радужки. Отсюда параллакс при взгляде сбоку и «линза» над радужкой без лишнего прохода рендера.
+ * Нормали — аналитические (у полюса сферы швы и вырожденные треугольники).
+ */
+function eyeballGeometry(R) {
+  const geo = new THREE.SphereGeometry(R, 48, 32);
+  geo.rotateX(Math.PI / 2);                                         // полюс (зрачок) → +Z
+  const p = geo.attributes.position, n = geo.attributes.normal, A = CORNEA_A, H = CORNEA_H;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i), a = Math.acos(clamp(z / R, -1, 1));
+    if (a >= A) continue;
+    const u = 1 - (a / A) ** 2, f = u * u, df = (-4 * a * u) / (A * A), rr = 1 + H * f;
+    const rxy = Math.hypot(x, y), cx = rxy > 1e-9 ? x / rxy : 1, cy = rxy > 1e-9 ? y / rxy : 0;
+    const sa = Math.sin(a), ca = Math.cos(a), k = (H * df) / rr;    // n ∝ r̂ − (r'/r)·â
+    const nx = sa * cx - k * ca * cx, ny = sa * cy - k * ca * cy, nz = ca + k * sa, nl = Math.hypot(nx, ny, nz);
+    p.setXYZ(i, x * rr, y * rr, z * rr);
+    n.setXYZ(i, nx / nl, ny / nl, nz / nl);
+  }
+  return geo;
+}
+
+/** Преломление в роговице для материала глаза (см. eyeballGeometry). */
+function corneaShader(mat, R) {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uEyeR = { value: R };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vEyeP;\nvarying vec3 vEyeN;\nvarying vec3 vEyeCam;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvEyeP = position; vEyeN = normal; vEyeCam = (inverse(modelMatrix) * vec4(cameraPosition, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+uniform float uEyeR;
+varying vec3 vEyeP;
+varying vec3 vEyeN;
+varying vec3 vEyeCam;`).replace('#include <map_fragment>', `
+#ifdef USE_MAP
+	vec4 sampledDiffuseColor = texture2D( map, vMapUv );
+	float eyeA = acos( clamp( vEyeP.z / length( vEyeP ), -1.0, 1.0 ) );
+	if ( eyeA < ${CORNEA_A.toFixed(3)} ) {
+		vec3 rd = refract( normalize( vEyeP - vEyeCam ), normalize( vEyeN ), ${(1 / 1.376).toFixed(4)} );
+		if ( rd.z < -1e-3 ) {
+			vec3 q = vEyeP + rd * ( ( uEyeR * ${Math.cos(CORNEA_A).toFixed(4)} - vEyeP.z ) / rd.z );   // плоскость радужки
+			float th = asin( clamp( length( q.xy ) / uEyeR, 0.0, 1.0 ) );
+			float ph = atan( -q.y, -q.x );
+			if ( ph < 0.0 ) ph += 6.2831853;
+			vec4 ir = textureGrad( map, vec2( ph / 6.2831853, 1.0 - th / 3.1415927 ), dFdx( vMapUv ), dFdy( vMapUv ) );
+			sampledDiffuseColor = mix( ir, sampledDiffuseColor, smoothstep( ${(CORNEA_A - 0.05).toFixed(3)}, ${CORNEA_A.toFixed(3)}, eyeA ) );
+		}
+	}
+	diffuseColor *= sampledDiffuseColor;
+#endif`);
+  };
+  mat.customProgramCacheKey = () => 'eye-cornea';
+  mat.needsUpdate = true;
 }
 
 /**
@@ -871,8 +948,9 @@ export class ProceduralHead {
   // ---------------- глаза и веки
   _buildEyes() {
     const P = this.P, E = this.eye;
-    const ballGeo = this._track(new THREE.SphereGeometry(E.r, 48, 32));
-    ballGeo.rotateX(Math.PI / 2);                     // полюс (зрачок) → +Z
+    const ballGeo = this._track(eyeballGeometry(E.r));
+    corneaShader(this.mat.eye, E.r);
+    if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r);
     const phiS = Math.PI / 2 - 1.75, phiL = 3.5;
     const upGeo = this._track(new THREE.SphereGeometry(E.rs, 56, 14, phiS, phiL, 0, Math.PI / 2));
     const loGeo = this._track(new THREE.SphereGeometry(E.rl, 56, 10, phiS, phiL, Math.PI / 2, Math.PI / 2));
@@ -1317,7 +1395,7 @@ export class ProceduralHead {
         const nz = Math.sin(tmp[0] * 47 + Math.sin(tmp[1] * 29) * 2.5) + Math.sin(tmp[1] * 43 + tmp[2] * 31) + Math.sin(tmp[2] * 37 + tmp[0] * 19);
         H += P.hairCurl * Math.abs(nz) * 0.6 * smoothstep(-0.2, 0.5, tmp[1]);
       }
-      if (P.hat) H = lerp(H, Math.min(H, 0.03), smoothstep(HAT_LINE[P.hat.style] - 0.08, HAT_LINE[P.hat.style], tmp[1]));   // под шапкой волосы примяты
+      if (P.hat) { const hl = P.hat.y0 ?? HAT_LINE[P.hat.style] ?? 0.45; H = lerp(H, Math.min(H, 0.03), smoothstep(hl - 0.08, hl, tmp[1])); }   // под шапкой волосы примяты
       // у линии роста волосы сходят на нет, ниже неё поверхность уходит глубоко под кожу
       const off = H * (0.3 + 0.7 * smoothstep(yh, yh + 0.16, tmp[1])) - (0.25 + 0.3 * H) * (1 - smoothstep(yh - 0.1, yh, tmp[1]));
       const nx = px / prof(P.gx, py), ny = py, nz = pz;
@@ -1365,7 +1443,7 @@ export class ProceduralHead {
   _buildHat() {
     const P = this.P, h = P.hat;
     if (!h) return;
-    const st = h.style || 'beanie', y0 = HAT_LINE[st] ?? 0.45, tmp = [0, 0, 0];
+    const st = h.style || 'beanie', y0 = h.y0 ?? HAT_LINE[st] ?? 0.45, tmp = [0, 0, 0], brimmed = st === 'fedora' || st === 'bowler';
     const hairT = P.hairStyle === 'none' ? 0.005 : 0.035;
     // полуоси головы на высоте y: ширина (x) и глубина вперёд/назад (z), центр по z
     const ell = (y) => {
@@ -1380,17 +1458,18 @@ export class ProceduralHead {
     group.name = 'hat';
     // купол: кольца по высоте от края до макушки (поверх волос), для fedora — выше и с заломом
     const rows = 22, segs = 72, pos = [], idx = [];
-    const topY = st === 'fedora' ? 1.32 : st === 'headband' ? y0 + 0.13 : 1.0 + hairT + 0.1;
+    const topY = st === 'fedora' ? 1.32 : st === 'bowler' ? 1.3 : st === 'headband' ? y0 + 0.13 : 1.0 + hairT + (st === 'cloche' ? 0.08 : 0.1);
     for (let r = 0; r <= rows; r++) {
       const t = r / rows, y = lerp(y0, topY, t);
       const e = ell(Math.min(y, 0.8)), pad = hairT + (st === 'beanie' ? 0.03 + 0.012 * (r < 5 ? 1 : 0) : 0.02);   // выше 0.8 — эллипс купола, а не черепа
       let k = 1;
       if (st !== 'headband' && y > 0.8) k = Math.sqrt(Math.max(0, 1 - ((y - 0.8) / (topY - 0.8)) ** 2));   // скругление к макушке (с запасом над волосами)
       if (st === 'fedora') k = y < 1.2 ? 1 - 0.05 * t : Math.sqrt(Math.max(0, 1 - ((y - 1.2) / 0.12) ** 2));
+      if (st === 'bowler') k = y < 0.95 ? 1 : Math.sqrt(Math.max(0, 1 - ((y - 0.95) / (topY - 0.95)) ** 2));   // купол котелка
       for (let c = 0; c <= segs; c++) {
         const a = (c / segs) * Math.PI * 2, sx = Math.sin(a), cz = Math.cos(a);
         let rx = (e.ax + pad) * k, rz = (e.az + pad) * k;
-        if (st === 'fedora') { rx = Math.max(rx, 0.62 * k); rz = Math.max(rz, 0.72 * k); }
+        if (brimmed) { rx = Math.max(rx, 0.62 * k); rz = Math.max(rz, 0.72 * k); }
         let yy = y;
         if (st === 'fedora' && y > 1.15) yy -= 0.06 * Math.exp(-((sx / 0.25) ** 2)) * (1 - Math.abs(cz) * 0.3);   // залом тульи
         if (st === 'beanie') { const rib = 0.004 * Math.sin(a * 48); rx += rib * (r < 5 ? 1 : 0.4); rz += rib * (r < 5 ? 1 : 0.4); }
@@ -1403,24 +1482,29 @@ export class ProceduralHead {
     dome.setIndex(idx); dome.computeVertexNormals();
     group.add(new THREE.Mesh(dome, mat));
     // козырёк (cap) или поля (fedora)
-    if (st === 'cap' || st === 'fedora') {
-      const e = ell(y0), pts = [], bi = [];
+    if (st === 'cap' || brimmed || st === 'cloche') {
+      const e = ell(y0), pts = [], bi = [], rim = [];
       const n = 48, W = st === 'cap' ? Math.PI * 0.55 : Math.PI * 2, a0 = st === 'cap' ? -W / 2 : 0;
       for (let i = 0; i <= n; i++) {
         const a = a0 + (i / n) * W, sx = Math.sin(a), cz = Math.cos(a);
         const rx = e.ax + hairT + 0.02, rz = e.az + hairT + 0.02;
-        const ext = st === 'cap' ? 0.42 * Math.cos((a / W) * Math.PI) ** 0.6 : 0.3;
+        const ext = st === 'cap' ? 0.42 * Math.cos((a / W) * Math.PI) ** 0.6 : st === 'bowler' ? 0.19 : st === 'cloche' ? 0.1 : 0.3;
         const ix = rx * sx, iz = e.cz + rz * cz, ox = (rx + ext) * sx, oz = e.cz + (rz + ext) * cz;
-        const droop = st === 'cap' ? -0.06 : 0.04 * (1 - Math.abs(cz)) - 0.03 * Math.max(0, cz);    // козырёк вниз; поля: бока вверх
+        const droop = st === 'cap' ? -0.06 : st === 'cloche' ? -0.08 : st === 'bowler' ? 0.08 * (1 - Math.abs(cz)) - 0.015 : 0.04 * (1 - Math.abs(cz)) - 0.03 * Math.max(0, cz);    // козырёк вниз; поля: бока вверх
         pts.push(ix, y0 + 0.005, iz, ox, y0 + droop, oz);
+        if (i < n) rim.push(new THREE.Vector3(ox, y0 + droop, oz));
         if (i) { const b = (i - 1) * 2; bi.push(b, b + 1, b + 2, b + 1, b + 3, b + 2); }
       }
       const brim = this._track(new THREE.BufferGeometry());
       brim.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
       brim.setIndex(bi); brim.computeVertexNormals();
       group.add(new THREE.Mesh(brim, mat));
+      if (st !== 'cap') {                                           // завёрнутый край полей: читается и на тёмном фетре
+        const tube = this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rim, true), 96, st === 'bowler' ? 0.02 : 0.009, 6, true));
+        group.add(new THREE.Mesh(tube, mat));
+      }
     }
-    if (st === 'fedora') {                                          // лента на тулье
+    if (brimmed) {                                                  // лента на тулье
       const band = this._track(new THREE.TorusGeometry(1, 0.035, 6, 64));
       band.rotateX(Math.PI / 2);
       const e = ell(y0 + 0.08), m = new THREE.Mesh(band, this._track(new THREE.MeshStandardMaterial({ color: '#1a1410', roughness: 0.6 })));
