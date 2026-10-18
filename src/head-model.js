@@ -17,6 +17,7 @@
  */
 import * as THREE from 'three';
 import { hasDecals, drawDecals, resolveMakeup, DECAL_BOUNDS } from './skin-decals.js';
+import { thinPlate } from './tps.js';
 
 // ------------------------------------------------------------------ утилиты
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
@@ -594,7 +595,32 @@ export class ProceduralHead {
     this.object3D.name = 'ProceduralHead';
     this._disposables = [];
     this._v3 = [0, 0, 0];
+    this._initWarp();
     this._build();
+  }
+
+  /**
+   * Деформация по точкам лица (P.warp, см. Portrait.refineShape): смещение (dx, dy) в плоскости анфас, TPS по
+   * опорным точкам. Сдвигается база кожи (и волос, ушей, бороды), морфы считаются уже от сдвинутой базы.
+   * Черты с параметрами (глаза, брови, губы) — неподвижные якоря, поэтому параметрические части остаются на месте.
+   *   P.warp = { pts: [[x, y, dx, dy], …], scale = 1, win: [cx, cy, rx, ry] }
+   * Вне эллипса win поле берётся с его границы: силуэт, уши и волосы сдвигаются вместе с контуром лица.
+   */
+  _initWarp() {
+    const W = this.P.warp;
+    this._warpF = null;
+    if (!W?.pts?.length || !(W.scale ?? 1)) return;
+    const sc = W.scale ?? 1, S = [], D = [];
+    for (const [x, y, dx, dy] of W.pts) { S.push({ x, y }); D.push({ x: dx * sc, y: dy * sc }); }
+    const f = thinPlate(S, D, W.lambda ?? 3e-4), t = { x: 0, y: 0 }, [cx, cy, rx, ry] = W.win || [0, -0.2, 0.75, 0.78];
+    this._warpF = (p) => {
+      const w = smoothstep(-0.6, 0, p[2]);
+      if (w <= 0) return p;
+      const e = Math.hypot((p[0] - cx) / rx, (p[1] - cy) / ry), c = e > 1 ? 1 / e : 1;
+      f(cx + (p[0] - cx) * c, cy + (p[1] - cy) * c, t);
+      p[0] += t.x * w; p[1] += t.y * w;
+      return p;
+    };
   }
 
   _track(x) { this._disposables.push(x); return x; }
@@ -670,6 +696,13 @@ export class ProceduralHead {
   _buildSkin() {
     const P = this.P;
     const geo = this._track(sphereGrid(240, 200, (px, py, pz, out) => shapeHead(px, py, pz, P, out), 0.36, 0.6));
+    // деформация по точкам лица: UV фото и декалей считаются по несдвинутой базе — рисунок едет вместе с кожей
+    let base = geo.attributes.position.array;
+    if (this._warpF) {
+      const a = geo.attributes.position.array, q = [0, 0, 0];
+      base = Float32Array.from(a);
+      for (let k = 0; k < a.length; k += 3) { q[0] = a[k]; q[1] = a[k + 1]; q[2] = a[k + 2]; this._warpF(q); a[k] = q[0]; a[k + 1] = q[1]; }
+    }
     // проход 2: глазницы облегают глазное яблоко
     const hm0 = new HeightMap(geo);
     const eyeR = P.eyeR, rs = eyeR * 1.08;
@@ -780,10 +813,11 @@ export class ProceduralHead {
 
     // текстура кожи с фотографии (photo-avatar.js): UV = проекция лица на снимок
     if (P.photo) {
-      P.photo.prepare?.({ pos, hm: this.hm, eye: this.eye, P });
+      const hmB = base === pos ? this.hm : new HeightMap({ attributes: { position: { array: base } }, index: geo.index });
+      P.photo.prepare?.({ pos: base, hm: hmB, eye: this.eye, P });
       const uv = geo.attributes.uv.array, t = [0, 0];
       for (let k = 0, i = 0; k < pos.length; k += 3, i += 2) {
-        P.photo.uv(pos[k], pos[k + 1], pos[k + 2], t);
+        P.photo.uv(base[k], base[k + 1], pos[k + 2], t);
         uv[i] = t[0]; uv[i + 1] = t[1];
       }
       geo.attributes.uv.needsUpdate = true;
@@ -804,15 +838,15 @@ export class ProceduralHead {
     mesh.frustumCulled = false;
     this.skin = mesh;
     this.headRoot.add(mesh);
-    if (hasDecals(P)) this._applyDecals(geo);
+    if (hasDecals(P)) this._applyDecals(geo, base);
   }
 
   /**
    * Слой декалей (skin-decals.js): фронтальная проекция (x, y) → UV второго канала, цвет кожи × рисунок.
    * Инъекция в шейдер MeshPhysicalMaterial: отдельный атрибут decalUv, текстура decalMap.
    */
-  _applyDecals(geo) {
-    const B = DECAL_BOUNDS, pos = geo.attributes.position.array, uv = new Float32Array((pos.length / 3) * 2);
+  _applyDecals(geo, pos = geo.attributes.position.array) {
+    const B = DECAL_BOUNDS, uv = new Float32Array((pos.length / 3) * 2);
     for (let k = 0, i = 0; k < pos.length; k += 3, i += 2) {
       const front = pos[k + 2] > 0.02;                              // затылок — в угол (белый пиксель)
       uv[i] = front ? (pos[k] - B.x0) / (B.x1 - B.x0) : 0.001;
@@ -1269,6 +1303,7 @@ export class ProceduralHead {
     const tmp = [0, 0, 0];
     const geo = this._track(sphereGrid(220, 160, (px, py, pz, out) => {
       shapeHead(px, py, pz, P, tmp);
+      if (this._warpF) this._warpF(tmp);
       const a = Math.atan2(tmp[0], tmp[2]);
       let yh = hairline(a);
       if (bangSide) yh -= bangDepth * G(a, 0, bangSide * 0.45, 0, 0.3, 1);  // чёлка набок (сторона и глубина — по фото)
@@ -1456,6 +1491,7 @@ export class ProceduralHead {
     for (const sg of [1, -1]) {
       const ear = new THREE.Mesh(geo, this.mat.neck);
       ear.position.set(sg * (w + 0.02), -0.06, -0.06);
+      if (this._warpF) ear.position.fromArray(this._warpF(ear.position.toArray()));
       ear.scale.set(0.06 * es, 0.17 * es, 0.11 * es);
       ear.rotation.y = sg * -0.35;
       const inner = new THREE.Mesh(inGeo, inMat);
@@ -1486,8 +1522,10 @@ export class ProceduralHead {
       const geo = this._track(dynamicGrid(cols, rows, false));
       const n = (cols + 1) * (rows + 1), col = new Float32Array(n * 4), rest = new Float32Array(n * 3), w = new Float32Array(n);
       for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
-        const i = r * (cols + 1) + c, x = lerp(x0, x1, c / cols), y = lerp(y1, y0, r / rows), t = clamp(mask(x, y), 0, 1);
-        const z0 = this.hm.get(x, y);
+        const i = r * (cols + 1) + c, t = clamp(mask(lerp(x0, x1, c / cols), lerp(y1, y0, r / rows)), 0, 1);
+        const q = [lerp(x0, x1, c / cols), lerp(y1, y0, r / rows), 0.5];
+        if (this._warpF) this._warpF(q);                           // маска — по параметрическим губам, положение — по сдвинутой коже
+        const x = q[0], y = q[1], z0 = this.hm.get(x, y);
         rest[i * 3] = x; rest[i * 3 + 1] = y - (extra.droop || 0) * t; rest[i * 3 + 2] = depth(t, x, y);
         w[i] = jaw ? jawWeight(x, y, z0) : 0;
         const v = lerp(0.55, 1, t) * (0.9 + 0.1 * Math.sin(c * 2.3 + r * 1.7));

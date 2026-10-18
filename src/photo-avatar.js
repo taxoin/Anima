@@ -21,6 +21,7 @@
  * Модели грузятся с CDN при первом вызове (~4.5 МБ). Свои пути: fromPhoto(src, { assets: {...} }).
  */
 import { PRESETS, LAYOUT, upperLipProfile, prof } from './head-model.js';
+import { thinPlate } from './tps.js';
 
 const MP = '0.10.14';
 export const PHOTO_ASSETS = {
@@ -261,6 +262,41 @@ export function likenessReport(portrait, render, base = null) {
   return out;
 }
 
+// ------------------------------------------------------------------ деформация по точкам (refineShape)
+
+// ведущие точки: овал (без верха лба — он под волосами) и нос; якоря с нулевым смещением — черты с параметрами
+const WARP_DRIVE = [...REGIONS.oval, ...NOSE];
+const WARP_FIX = [...new Set([...EYE_RINGS.flat(), ...BROWS.flatMap((b) => [...b.up, ...b.lo]), ...LIPS_OUT, 10, 338, 109, 297, 67])];
+const WARP_WIN = [0, -0.2, 0.75, 0.78];                       // эллипс по контуру лица: снаружи поле берётся с границы (ProceduralHead._initWarp)
+const WARP_MAX = 0.12;
+
+/**
+ * Один шаг деформации: смещения ведущих точек, чтобы точки рендера R пришли к цели
+ * D = lerp(B, M, realism) + k·(Q − M): B — рендер без шаржа, Q — фото, M — среднее лицо.
+ * realism = 1 — цель «как на фото» (при k = 1), 0 — сохраняется стилизация основы.
+ * Источники TPS — положения точек на первом рендере (до деформации); смещения накапливаются в portrait.warp.
+ * @returns {number} ошибка ведущих точек до шага, % расстояния глаза–рот
+ */
+export function shapeStep(portrait, render, base, k, o = {}) {
+  const a = o.alpha ?? 0.7, re = base ? clamp(o.realism ?? 0.8, 0, 1) : 1;
+  const Q = portrait.sym, R = normalizedFace(render).sym, B = base ? normalizedFace(base).sym : null;
+  let W = portrait.warp;
+  if (!W) {
+    W = portrait.warp = { k, n: WARP_DRIVE.length, win: WARP_WIN, pts: [] };
+    for (const i of WARP_DRIVE) W.pts.push([R[i].x, R[i].y, 0, 0]);
+    for (const i of WARP_FIX) W.pts.push([R[i].x, R[i].y, 0, 0]);
+  }
+  let se = 0;
+  WARP_DRIVE.forEach((i, j) => {
+    const m = MEAN[i], bx = B ? lerp(B[i].x, m.x, re) : m.x, by = B ? lerp(B[i].y, m.y, re) : m.y;
+    const ex = bx + k * (Q[i].x - m.x) - R[i].x, ey = by + k * (Q[i].y - m.y) - R[i].y;
+    se += ex * ex + ey * ey;
+    const p = W.pts[j];
+    p[2] = clamp(p[2] + a * ex, -WARP_MAX, WARP_MAX); p[3] = clamp(p[3] + a * ey, -WARP_MAX, WARP_MAX);
+  });
+  return Math.sqrt(se / WARP_DRIVE.length) * 100 / (EY - MY);
+}
+
 let _multi = null, _multiKey = '';
 /** Многоклассовый сегментатор (по запросу): маска «прочее» = очки и аксессуары. */
 async function loadMulti(A) {
@@ -420,43 +456,6 @@ function pushPull(ch, w, W, H) {
     }
   }
   return ch;
-}
-
-/** Тонкопластинчатый сплайн R² → R²: src[i] ↦ dst[i]. */
-function thinPlate(src, dst, lambda = 1e-5) {
-  const n = src.length, N = n + 3;
-  const A = Array.from({ length: N }, () => new Float64Array(N + 2));
-  const U = (r2) => (r2 > 1e-12 ? r2 * Math.log(r2) : 0);
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < n; j++) A[i][j] = U((src[i].x - src[j].x) ** 2 + (src[i].y - src[j].y) ** 2) + (i === j ? lambda : 0);
-    A[i][n] = 1; A[i][n + 1] = src[i].x; A[i][n + 2] = src[i].y;
-    A[n][i] = 1; A[n + 1][i] = src[i].x; A[n + 2][i] = src[i].y;
-    A[i][N] = dst[i].x; A[i][N + 1] = dst[i].y;
-  }
-  // Гаусс с выбором главного элемента, две правые части
-  for (let c = 0; c < N; c++) {
-    let p = c;
-    for (let r = c + 1; r < N; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
-    [A[c], A[p]] = [A[p], A[c]];
-    const d = A[c][c] || 1e-12;
-    for (let r = 0; r < N; r++) {
-      if (r === c) continue;
-      const f = A[r][c] / d;
-      if (f) for (let k = c; k < N + 2; k++) A[r][k] -= f * A[c][k];
-    }
-  }
-  const wx = new Float64Array(N), wy = new Float64Array(N);
-  for (let i = 0; i < N; i++) { wx[i] = A[i][N] / A[i][i]; wy[i] = A[i][N + 1] / A[i][i]; }
-  const sx = Float64Array.from(src, (p) => p.x), sy = Float64Array.from(src, (p) => p.y);
-  return (x, y, out) => {
-    let u = wx[n] + wx[n + 1] * x + wx[n + 2] * y, v = wy[n] + wy[n + 1] * x + wy[n + 2] * y;
-    for (let i = 0; i < n; i++) {
-      const k = U((x - sx[i]) ** 2 + (y - sy[i]) ** 2);
-      u += wx[i] * k; v += wy[i] * k;
-    }
-    out.x = u; out.y = v;
-    return out;
-  };
 }
 
 /** Робастный цвет: среднее средних 50% по яркости. */
@@ -1075,6 +1074,7 @@ export class Portrait {
       ov.ears = this.hairStyle !== 'long';
       if (this.hairlineY !== null) ov.hairline = clamp(this.hairlineY - (this.hairStyle === 'long' ? 0.6 : 0.64), -0.2, 0.22);
     }
+    if (this.warp && k > 0) ov.warp = { pts: this.warp.pts, win: this.warp.win, scale: k / this.warp.k };
     if (tex > 0 && this.tex) ov.photo = this._photoMapping(ov, this._textureCanvas(tex));
     this._fits.set(key, ov);
     return ov;
@@ -1184,6 +1184,7 @@ export class Portrait {
       hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY), r: this.hairR ? this.hairR.map(r4) : null, bang: this.bang ? { side: this.bang.side, depth: r4(this.bang.depth) } : null },
       tex: null,
       corr: this.corr ? JSON.parse(JSON.stringify(this.corr, (k, v) => (typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v))) : null,
+      warp: this.warp ? { k: this.warp.k, n: this.warp.n, win: this.warp.win, pts: this.warp.pts.map((p) => p.map(r4)) } : null,
     };
     if (size > 0 && this.tex) {
       const { x0, y0, k, TW, TH } = this.crop, { R, G, B } = this.tex;
@@ -1234,6 +1235,7 @@ export class Portrait {
       p.tex = { R, G, B, S: t.S || p.skinTex };
     }
     p.corr = d.corr || null;
+    p.warp = d.warp || null;
     p._fits = new Map();
     return p;
   }

@@ -128,7 +128,7 @@
       <div class="row"><label style="width:84px" for="photoTex">кожа с фото</label><input type="range" id="photoTex" min="0" max="1" step="0.05" value="0.9"><span class="val" id="photoTexV">0.9</span></div>
       <div class="row"><label style="width:84px" for="realism">реализм</label><input type="range" id="realism" min="0" max="1" step="0.05" value="0.8"><span class="val" id="realismV">0.8</span></div>
       <div class="row"><label><input type="checkbox" id="photoAcc"> искать очки (+16 МБ модель)</label></div>
-      <div class="row"><button id="photoClear" disabled>Стандартная голова</button><button id="photoRefine" disabled title="Рендер → распознать → подправить параметры (~1–3 с)">Уточнить по рендеру</button><span class="hint" id="photoStatus"></span></div>
+      <div class="row"><button id="photoClear" disabled>Стандартная голова</button><button id="photoRefine" disabled title="Рендер → те же точки лица → сдвинуть овал и нос под фото (~2–4 с)">Подогнать форму</button><span class="hint" id="photoStatus"></span></div>
       <div class="row"><button id="avatarSave" disabled>Сохранить аватар</button><label class="filebtn" for="avatarFile">Открыть аватар</label><input type="file" id="avatarFile" accept=".json,application/json" hidden></div>
       <div class="hint">Файл аватара весит около 10 КБ: точки лица, цвета и кожа, без исходного фото. Его можно переслать на другой телефон и открыть там, распознавание не нужно.</div>
     </details>
@@ -360,9 +360,9 @@ $('#photoRefine').onclick = async () => {
   photoBusy = true; $('#photoRefine').disabled = true;
   try {
     const t0 = performance.now();
-    const errs = await api('await head.refinePhoto()', () => head.refinePhoto({ onProgress: status }));
-    status(`Уточнено за ${((performance.now() - t0) / 1000).toFixed(1)} с, ошибка ${errs[0]} → ${Math.min(...errs)}`);
-    log(`⟵ refinePhoto ${fmt(errs)}`);
+    const errs = await api('await head.refineShape()', () => head.refineShape({ onProgress: status }));
+    status(`Форма подогнана за ${((performance.now() - t0) / 1000).toFixed(1)} с, расхождение контура ${errs[0]} % → ${Math.min(...errs)} %`);
+    log(`⟵ refineShape ${fmt(errs)}`);
   } catch (e) { status(''); log('✕ ' + (e.message || e), 'err'); }
   finally { photoBusy = false; $('#photoRefine').disabled = false; }
 };

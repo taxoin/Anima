@@ -301,6 +301,7 @@ export class EmotionalHead {
    * @param {number} [o.caricature=1.5]  0 — стандартные пропорции, 1 — как на фото, 1.5–2.5 — шарж
    * @param {number} [o.texture=0.9]     сила фото-текстуры кожи (0 — ровный тон)
    * @param {'female'|'male'} [o.gender] основа (шея, плечи, причёска по умолчанию)
+   * @param {boolean} [o.shape=false]  сразу подогнать форму по точкам лица (refineShape, +1.5–3 с)
    * @param {function} [o.onProgress]    (text) => void
    * @returns {Promise<object>} отчёт: предупреждения, цвета, меры лица относительно среднего
    */
@@ -311,6 +312,7 @@ export class EmotionalHead {
     this._photoOpts = { caricature: o.caricature ?? 1.5, texture: o.texture ?? 0.9, realism: o.realism ?? 0.8 };
     if (o.gender) this.gender = o.gender;
     this._rebuildRig();
+    if (o.shape) await this.refineShape({ onProgress: o.onProgress });   // деформация по точкам (+1.5–3 с)
     const report = portrait.report;
     this._emit('photoAvatar', report);
     return report;
@@ -383,6 +385,43 @@ export class EmotionalHead {
       if (it < n) setCorr({ ...corr, meas: { ...corr.meas }, widths: [...corr.widths], k });
     }
     setCorr(best.corr);
+    this._rebuildRig();
+    this._emit('photoAvatar', P.report);
+    return errs;
+  }
+
+  /**
+   * Деформация по точкам лица: овал и нос головы подгоняются под фото по всем точкам контура, а не только
+   * по мерам. Голова рендерится с мимикой фото, на рендере ищутся те же точки, и база кожи сдвигается TPS-полем
+   * (глаза, брови, губы — неподвижные якоря, морфы и мимика не ломаются). Смещения хранятся в портрете,
+   * попадают в exportAvatar() и масштабируются вместе с шаржем. ~1.5 с (4–5 рендеров и распознаваний).
+   * Цель: lerp(основа, среднее лицо, realism) + caricature·(фото − среднее); при realism = 1 и caricature = 1 — как на фото.
+   * @param {object} [o] { iterations = 3, alpha = 0.7, realism = photoOptions.realism ?? 0.8, onProgress }
+   * @returns {Promise<number[]>} ошибка ведущих точек по итерациям, % расстояния глаза–рот
+   */
+  async refineShape(o = {}) {
+    const P = this._portrait;
+    if (!P) throw new Error('refineShape(): сначала fromPhoto() или importAvatar()');
+    const { shapeStep } = await import('./photo-avatar.js');
+    const say = o.onProgress || (() => {});
+    const setWarp = (w) => { P.warp = w; P._corrV = (P._corrV || 0) + 1; };
+    const k = this._photoOpts.caricature ?? 1.5, channels = P.bs || {}, errs = [], n = o.iterations ?? 3;
+    setWarp(null);
+    if (!(k > 0)) { this._rebuildRig(); return errs; }
+    say('Форма: основа…');
+    const re = o.realism ?? this._photoOpts.realism ?? 0.8;
+    const B = re >= 1 ? null : await this._withPhotoOpts({ caricature: 0 }, () => this._shotFace({ channels }));
+    let best = { err: Infinity, warp: null };
+    for (let it = 0; it <= n; it++) {
+      say(it < n ? `Форма: шаг ${it + 1}…` : 'Форма: проверка…');
+      const R = await this._shotFace({ channels });
+      const snap = P.warp && JSON.parse(JSON.stringify(P.warp));
+      const err = shapeStep(P, R, B, k, { ...o, realism: re, alpha: it < n ? o.alpha ?? 0.7 : 0 });
+      errs.push(+err.toFixed(2));
+      if (err < best.err) best = { err, warp: snap };
+      if (it < n) { setWarp(P.warp); this._rebuildRig(); }
+    }
+    setWarp(best.warp);
     this._rebuildRig();
     this._emit('photoAvatar', P.report);
     return errs;

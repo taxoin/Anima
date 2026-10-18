@@ -4,6 +4,7 @@
  *   npm run test:likeness                    портреты из docs/samples
  *   npm run test:likeness -- path/to/dir     все .jpg/.png из папки (внутри репозитория)
  *   npm run test:likeness -- --k=0,1,1.5,2.5 значения шаржа;  --realism=0.8 — основа ближе к реальным пропорциям
+ *   npm run test:likeness -- --shape          с деформацией по точкам (refineShape; --shape=1 — своя realism цели)
  * Пол для известных имён (obama, lincoln…) — мужской, иначе женский.
  *
  * Колонки: rms — расхождение точек в % расстояния глаза–рот (меньше — ближе), по зонам: овал, глаза, брови, нос, губы;
@@ -19,6 +20,7 @@ import puppeteer from 'puppeteer-core';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
+const SHAPE = args.find((a) => a.startsWith('--shape'))?.split('=')[1] ?? (args.includes('--shape') ? 'default' : null);
 const RE = +(args.find((a) => a.startsWith('--realism='))?.slice(10) || NaN);
 const K = (args.find((a) => a.startsWith('--k='))?.slice(4) || '0,1,1.5,2.5').split(',').map(Number);
 const dir = path.resolve(args.find((a) => !a.startsWith('--')) || path.join(ROOT, 'docs/samples'));
@@ -45,19 +47,23 @@ console.log(`${'фото'.padEnd(16)} ${'k'.padStart(4)} ${pad('rms')} ${pad('о
 const sum = {};
 for (const ph of photos) {
   for (const k of K) {
-    const r = await page.evaluate(async (ph, k, re) => {
+    const r = await page.evaluate(async (ph, k, re, sh) => {
       try {
         const male = /obama|biden|clinton|einstein|lincoln|tesla|truman|gandhi|roosevelt|twain/i.test(ph), o = { caricature: k, gender: male ? 'male' : 'female' };
         if (re === re) o.realism = re;
         if (!head.portrait || head.__src !== ph) { await head.fromPhoto(ph, o); head.__src = ph; }
         else head.setPhotoOptions(o);
-        return await head.likeness({ base: k !== 0 });
+        let shape = null;
+        if (sh) shape = await head.refineShape(sh === 'default' ? {} : { realism: +sh });
+        const r = await head.likeness({ base: k !== 0 });
+        if (shape) r.shape = shape;
+        return r;
       } catch (e) { return { error: e.message }; }
-    }, ph, k, RE);
+    }, ph, k, RE, SHAPE);
     const name = path.basename(ph).padEnd(16);
     if (r.error) { console.log(`${name} ${pad(k, 4)}  ошибка: ${r.error}`); continue; }
     const g = r.regions;
-    console.log(`${name} ${pad(k, 4)} ${pad(r.rms)} ${pad(g.oval)} ${pad(g.eyes)} ${pad(g.brows)} ${pad(g.nose)} ${pad(g.lips)} ${pad(r.direction)} ${pad(r.gain)}`);
+    console.log(`${name} ${pad(k, 4)} ${pad(r.rms)} ${pad(g.oval)} ${pad(g.eyes)} ${pad(g.brows)} ${pad(g.nose)} ${pad(g.lips)} ${pad(r.direction)} ${pad(r.gain)}${r.shape ? '  форма ' + r.shape.join('→') : ''}`);
     const s = (sum[k] ||= { n: 0, rms: 0, dir: 0, nd: 0, reg: {} });
     s.n++; s.rms += r.rms;
     for (const z in g) s.reg[z] = (s.reg[z] || 0) + g[z]; if (r.direction !== null) { s.dir += r.direction; s.nd++; }
