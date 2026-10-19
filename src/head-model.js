@@ -782,13 +782,14 @@ function hairCardTexture(T) {
   let seed = 3;
   const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
   const sx = T.streak > 0 ? W * (0.25 + 0.5 * rnd()) : -W;             // пучок мелирования на карточке
-  for (let i = 0; i < 46; i++) {
-    const x = W * (0.1 + 0.8 * rnd()), l = 0.975 + T.vari * (rnd() - 0.5) * 0.35, y0 = H * 0.12 * rnd(), end = H * (0.5 + 0.5 * rnd()), sway = (rnd() - 0.5) * 14;
-    const col = strandColor(T, T.gray > 0 ? rnd() : 1, Math.abs(x - sx) < W * 0.25 * T.streak, l), a = 0.5 + 0.5 * rnd();
+  // 8.1: волосков больше и они тоньше, разброс яркости меньше, альфа мягче — пряди сливаются в массу, а не лежат пятнами
+  for (let i = 0; i < 96; i++) {
+    const x = W * (0.08 + 0.84 * rnd()), l = 0.975 + T.vari * (rnd() - 0.5) * 0.16, y0 = H * 0.12 * rnd(), end = H * (0.5 + 0.5 * rnd()), sway = (rnd() - 0.5) * 14;
+    const col = strandColor(T, T.gray > 0 ? rnd() : 1, Math.abs(x - sx) < W * 0.25 * T.streak, l), a = 0.35 + 0.35 * rnd();
     const g = ctx.createLinearGradient(0, y0, 0, end);
     const rgb = rgbOf(col);
     g.addColorStop(0, `rgba(${rgb},0)`); g.addColorStop(0.15, `rgba(${rgb},${a})`); g.addColorStop(0.7, `rgba(${rgb},${a})`); g.addColorStop(1, `rgba(${rgb},0)`);   // у корня и к кончику — на нет
-    ctx.strokeStyle = g; ctx.lineWidth = 0.9 + 1.4 * rnd();
+    ctx.strokeStyle = g; ctx.lineWidth = 0.6 + 0.8 * rnd();
     ctx.beginPath(); ctx.moveTo(x, y0); ctx.bezierCurveTo(x + sway * 0.3, end * 0.35, x + sway, end * 0.7, x + sway * 1.3, end); ctx.stroke();
   }
   // края карточки растворяются (иначе видна прямоугольная лента)
@@ -961,7 +962,8 @@ export class ProceduralHead {
       this.mat.hair.color.setRGB(lerp(1, sc.r / Math.max(0.03, hc.r), k * 0.35), lerp(1, sc.g / Math.max(0.03, hc.g), k * 0.35), lerp(1, sc.b / Math.max(0.03, hc.b), k * 0.35));
     }
     // пряди-карточки: блик как у оболочки, альфа по текстуре прядей (alpha-to-coverage — без сортировки прозрачности)
-    this.mat.hairCards = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairCardTexture(hairTone(P))), roughness: 0.6, anisotropy: (P.hairAniso ?? 0.6) * 0.5, anisotropyRotation: Math.PI / 2, sheen: 0.3, sheenColor: hairMean(hairTone(P)).multiplyScalar(1.3), sheenRoughness: 0.5, vertexColors: true, alphaToCoverage: true, alphaTest: 0.02, side: THREE.DoubleSide, envMapIntensity: 0.22 }));
+    this.mat.hairCards = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairCardTexture(hairTone(P))), roughness: 0.72,   // без анизотропии: блики карточек под разными углами давали светлые пятна — блик волос даёт оболочка
+       sheen: 0.3, sheenColor: hairMean(hairTone(P)).multiplyScalar(1.3), sheenRoughness: 0.5, vertexColors: true, alphaToCoverage: true, alphaTest: 0.02, side: THREE.DoubleSide, envMapIntensity: 0.22 }));
     this._hairU = { uHairSwing: { value: new THREE.Vector3() } };
     const S2 = P.hairSpec2 === false ? null : { k: P.hairSpec2 ?? 0.35, shift: 0.3, exp: 18, axis: P.hairSpec2Axis || 'T' };
     hairSwayShader(this.mat.hair, this._hairU, 'hair-sway', S2);
@@ -1732,7 +1734,7 @@ export class ProceduralHead {
       if (v !== null && v < 0.025) continue;                                  // выбритые зоны (андеркат) — без прядей
       k++;
       const len = (long ? 0.55 : 0.32) * (0.7 + 0.5 * rnd()), w = (long ? 0.075 : 0.06) * (0.75 + 0.5 * rnd()), lift = 0.003 + 0.01 * rnd();
-      const shade = 0.8 + 0.3 * rnd(), base = pos.length / 3, pts = [];
+      const shade = 0.93 + 0.11 * rnd(), base = pos.length / 3, pts = [];   // небольшой разброс: сильный давал пятна
       // шагаем по сфере направлений: от макушки, у лица — в сторону пробора, по бокам длинных — вниз
       const step = len / seg / 0.9;
       let onCurtain = false, ca = 0, ct = 0;
