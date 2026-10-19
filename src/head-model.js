@@ -1088,6 +1088,7 @@ export class ProceduralHead {
     this._buildEarrings();
     this._buildHeadphones();
     this._buildMask();
+    this._contactAO();
 
     this._batchAll();
     root.traverse((o) => {
@@ -2054,6 +2055,7 @@ export class ProceduralHead {
    */
   _buildMask() {
     const mk = this.P.mask;
+    this._maskStraps = [];
     if (!mk) return;
     const P = this.P, style = mk.style || 'medical', hm = this.hm;
     const cols = Math.round(44 * (this.L.beard + 0.3) / 1.3), rows = Math.round(34 * (this.L.beard + 0.3) / 1.3);
@@ -2101,13 +2103,12 @@ export class ProceduralHead {
     this.maskPart = { mesh, rest, w: wj, cols, rows };
     // резинки к ушам
     const w = prof(P.gx, -0.06) * 0.998, strapMat = this._track(new THREE.MeshStandardMaterial({ color: style === 'cloth' ? mk.color || '#30343c' : '#f4f4f2', roughness: 0.7 }));
-    this._maskStraps = [];
     for (const sg of [1, -1]) for (const [vy, ey] of [[0.12, 0.02], [0.88, -0.17]]) {
       const c = sg > 0 ? cols : 0, r = Math.round(vy * rows), i = r * (cols + 1) + c;
       const a = new THREE.Vector3(rest[i * 3], rest[i * 3 + 1], hm.get(rest[i * 3], rest[i * 3 + 1]) + rest[i * 3 + 2]);
       const b = new THREE.Vector3(sg * (w + 0.02), ey, -0.12), m = new THREE.Vector3(sg * (w - 0.02), lerp(a.y, ey, 0.5), lerp(a.z, -0.05, 0.6));
       const s2 = new THREE.Mesh(this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([a, m, b]), 16, 0.006, 5, false)), strapMat);
-      s2.renderOrder = 30; s2.userData.batch = true; this.headRoot.add(s2);
+      s2.renderOrder = 30; s2.userData.batch = true; this.headRoot.add(s2); this._maskStraps.push(s2);
     }
     void eyeY;
   }
@@ -2147,6 +2148,85 @@ export class ProceduralHead {
     const m = new THREE.Mesh(geo, this.mat.hair);
     m.name = 'hairTail';
     this.headRoot.add(m);
+  }
+
+  /**
+   * Контактные тени аксессуаров (8.4): затемнение кожи и ушей там, где к ним прилегают очки, наушники, маска,
+   * резинки, убор. Запекается в цвет вершин (работает и без карты теней, ничего не стоит в кадре):
+   * точки аксессуаров ближе D к коже собираются в ячейки, каждая — мягкое пятно затенения; пятна складываются
+   * с насыщением, чтобы край маски не чернел. look.contactShadows — сила (по умолчанию 1, false — выкл.).
+   */
+  _contactAO() {
+    const P = this.P, A = P.contactShadows === false ? 0 : P.contactShadows ?? 1;
+    // [объект, дальность D, сила]: без карты теней (low) очки дают и мягкую тень оправы на щёки и переносицу — дальность больше;
+    // с картой теней тень оправы уже есть — остаётся слабый контакт (иначе «круги» под ободками)
+    const occ = [[this.glasses, ...(this.shadows ? [0.06, 0.5] : [0.12, 1])], [this.headphones, 0.06, 1], [this.hat, 0.06, 1], ...(this._maskStraps || []).map((s) => [s, 0.06, 1])].filter((o) => o[0]);
+    if (!A || (!occ.length && !this.maskPart)) return;
+    this.headRoot.updateMatrixWorld(true);
+    const inv = this.headRoot.matrixWorld.clone().invert(), M4 = new THREE.Matrix4(), v = new THREE.Vector3();
+    // цели: кожа (в координатах headRoot) и уши (у каждого — своя копия сетки с цветом вершин)
+    const targets = [{ mesh: this.skin, M: null }];
+    const ears = this.headRoot.children.filter((o) => o.isMesh && o.geometry?.type === 'SphereGeometry' && o.material === this.mat.neck && o.userData.batch);
+    if (ears.length) {
+      const earMat = this._track(Object.assign(this.mat.neck.clone(), { vertexColors: true }));
+      for (const pt of this.mat.neck.userData.patches || []) if (pt.fn) addShaderPatch(earMat, pt.key, pt.fn, pt.safe);
+      for (const e of ears) {
+        e.geometry = this._track(e.geometry.clone());
+        e.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(e.geometry.attributes.position.count * 3).fill(1), 3));
+        e.material = earMat;
+        targets.push({ mesh: e, M: M4.clone().multiplyMatrices(inv, e.matrixWorld) });
+      }
+    }
+    const tp = [];                                                      // точки целей: [x, y, z, цель, индекс]
+    for (const [ti, t] of targets.entries()) {
+      const pa = t.mesh.geometry.attributes.position;
+      for (let i = 0; i < pa.count; i++) { v.fromBufferAttribute(pa, i); if (t.M) v.applyMatrix4(t.M); tp.push(v.x, v.y, v.z, ti, i); }
+    }
+    const CELL = 0.06, key = (x, y, z) => `${Math.floor(x / CELL)},${Math.floor(y / CELL)},${Math.floor(z / CELL)}`;
+    const grid = new Map();
+    for (let k = 0; k < tp.length; k += 5) { const h = key(tp[k], tp[k + 1], tp[k + 2]); if (!grid.has(h)) grid.set(h, []); grid.get(h).push(k); }
+    const near = (x, y, z, fn, n = 1) => {
+      const cx = Math.floor(x / CELL), cy = Math.floor(y / CELL), cz = Math.floor(z / CELL);
+      for (let a = -n; a <= n; a++) for (let b = -n; b <= n; b++) for (let c = -n; c <= n; c++) for (const k of grid.get(`${cx + a},${cy + b},${cz + c}`) || []) fn(k);
+    };
+    // точки аксессуаров → ячейки 0.025 у кожи
+    const VC = 0.025, cells = new Map();
+    const addPt = (x, y, z, D = 0.06, k = 1) => {
+      let d2 = D * D;
+      near(x, y, z, (k) => { const dx = tp[k] - x, dy = tp[k + 1] - y, dz = tp[k + 2] - z; d2 = Math.min(d2, dx * dx + dy * dy + dz * dz); }, Math.ceil(D / CELL));
+      if (d2 >= D * D) return;
+      const h = `${Math.round(x / VC)},${Math.round(y / VC)},${Math.round(z / VC)}`;
+      const c = cells.get(h) || cells.set(h, { x: 0, y: 0, z: 0, n: 0, w: 0 }).get(h);
+      c.x += x; c.y += y; c.z += z; c.n++; c.w = Math.max(c.w, k * (1 - Math.sqrt(d2) / D) ** 1.5 * (0.06 / D) ** 0.5);   // дальние — слабее
+    };
+    for (const [g, D, k] of occ) g.traverse((o) => {
+      if (!o.isMesh || o.material === HIDDEN_MAT || !o.visible) return;
+      M4.multiplyMatrices(inv, o.matrixWorld);
+      const pa = o.geometry.attributes.position;
+      for (let i = 0; i < pa.count; i++) { v.fromBufferAttribute(pa, i).applyMatrix4(M4); addPt(v.x, v.y, v.z, D, k); }
+    });
+    if (this.maskPart) {                                                // маска: только кромка (под тканью кожи не видно)
+      const { rest, cols, rows } = this.maskPart;
+      for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
+        if (r && c && r < rows && c < cols) continue;
+        const i = r * (cols + 1) + c, x = rest[i * 3], y = rest[i * 3 + 1];
+        addPt(x, y, this.hm.get(x, y) + rest[i * 3 + 2]);
+      }
+    }
+    if (!cells.size) return;
+    // пятна → затенение вершин: occ = Σ s·exp(−d²/r²), ao = 1 − K·(1 − e^−occ)
+    const R = 0.06, K = clamp(0.55 * A, 0, 0.85), spots = [...cells.values()].map((c) => ({ x: c.x / c.n, y: c.y / c.n, z: c.z / c.n, s: 0.5 * c.w }));
+    const ao = new Float32Array(tp.length / 5);
+    for (const s of spots) near(s.x, s.y, s.z, (k) => {
+      const dx = tp[k] - s.x, dy = tp[k + 1] - s.y, dz = tp[k + 2] - s.z, d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < 9 * R * R) ao[k / 5] += s.s * Math.exp(-d2 / (R * R));
+    }, Math.ceil(2 * R / CELL));
+    for (let k = 0, j = 0; k < tp.length; k += 5, j++) {
+      if (!ao[j]) continue;
+      const col = targets[tp[k + 3]].mesh.geometry.attributes.color, i = tp[k + 4], f = 1 - K * (1 - Math.exp(-ao[j]));
+      col.setXYZ(i, col.getX(i) * f, col.getY(i) * f, col.getZ(i) * (f * 0.97 + 0.03 * f * f));
+    }
+    for (const t of targets) t.mesh.geometry.attributes.color.needsUpdate = true;
   }
 
   _buildEars() {
