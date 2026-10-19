@@ -781,7 +781,22 @@ export class Portrait {
     // ч/б и тонированные (сепия) снимки: цветность почти одна по всему кадру — кожу от ткани по цвету не отличить
     const spread = (() => { const q = []; for (let y = 0.6; y >= -2.2; y -= 0.1) for (let x = -1.4; x <= 1.4; x += 0.1) { const p = this.fromHead(x, y), c = this._rgb(p.x, p.y); if (c && lum(...c) > 0.06) q.push(chroma(c)); }
       const m = [0, 1].map((k) => q.reduce((a, v) => a + v[k], 0) / Math.max(1, q.length)); return Math.sqrt(q.reduce((a, v) => a + (v[0] - m[0]) ** 2 + (v[1] - m[1]) ** 2, 0) / Math.max(1, q.length)); })();
-    const bw = sat(sk) < 0.04 || spread < 0.065;   // сепия 0.025–0.05, цветные портреты ≥ 0.08
+    // концентрация оттенков (1 — все одинаковы): у тонированных снимков ≥ 0.979, у цветных ≤ 0.96. Тёплые цветные
+    // (беж, кожа, коричневый фон) тоже дают высокую концентрацию, но разброс цветности у них ≥ 0.069 (у сепии ≤ 0.054).
+    // Подобрано на 136 размеченных портретах (npm run test:detect): было 16 ложных «ч/б», стало 0, пропуск 1 из 17.
+    const hueR = (() => {
+      let cx = 0, cy = 0, n = 0;
+      for (let y = 0.6; y >= -2.2; y -= 0.05) for (let x = -1.4; x <= 1.4; x += 0.05) {
+        const p = this.fromHead(x, y), c = this._rgb(p.x, p.y);
+        if (!c || sat(c) <= 0.15 || lum(...c) <= 0.12) continue;
+        const [r, g, b] = c, M = Math.max(r, g, b), m = Math.min(r, g, b), d = M - m || 1;
+        const h = (M === r ? ((g - b) / d) % 6 : M === g ? (b - r) / d + 2 : (r - g) / d + 4) * Math.PI / 3;
+        cx += Math.cos(h); cy += Math.sin(h); n++;
+      }
+      return n ? Math.hypot(cx, cy) / n : 1;
+    })();
+    const bw = sat(sk) < 0.04 || spread < 0.03 || (hueR > 0.975 && spread < 0.062);
+    this._bwFeat = { spread, hueR, satSkin: sat(sk) };
     const skC = chroma(sk), skL = lum(...sk);
     // кожа — по цветности (шея и грудь в тени темнее лица); на ч/б снимке кожу от ткани не отличить
     const isSkin = (c) => { if (bw) return false; const q = chroma(c), r = lum(...c) / skL; return Math.hypot(q[0] - skC[0], q[1] - skC[1]) < 0.03 && r > 0.3 && r < 1.4 && sat(c) > 0.12; };
@@ -868,7 +883,7 @@ export class Portrait {
   _hairTone(cols) {
     this.hairGray = 0; this.hairGrayColor = null; this.hairVar = null;
     const sat = (c) => { const M = Math.max(...c), m = Math.min(...c); return M > 0 ? (M - m) / M : 0; };
-    const bw = cols.reduce((a, c) => a + sat(c), 0) / cols.length < 0.025;
+    const bw = !!this.outfitRaw?.bw || cols.reduce((a, c) => a + sat(c), 0) / cols.length < 0.025;   // общее решение ч/б/сепия (см. _outfit)
     // мелкий контраст по окнам внутри маски (окно целиком в волосах — без края с фоном)
     const M = this.hairMask, W = this.img.width, H = this.img.height, r = Math.max(1, Math.round(0.012 / this.frame.s));
     let cs = 0, cn = 0;
@@ -923,12 +938,17 @@ export class Portrait {
       chin: sample(0, 0.15, -0.84, bot - 0.04),
       jaw: (() => { const ow = ovalHalfWidth(hd, -0.52) || 0.5; return sample(ow * 0.55, ow * 0.78, -0.62, -0.42); })(),   // внутри овала: снаружи — волосы и фон
     };
-    // пороги подобраны на 15 портретах: маска волос бороду почти не видит, решают контраст и текстура.
+    // пороги усов и уголков — на 15 портретах; подбородок и челюсть — на 136 размеченных (см. score). Маска волос бороду почти не видит.
     // Белые усы на ч/б фото (Эйнштейн) так не находятся; тени под губой на контрастных снимках — частая ложная «борода».
     const TH = { stache: [0.45, 1.95], corner: [0.3, 2.6], chin: [0.55, 9], jaw: [0.45, 9] };
     const score = (z, k) => {
       const dark = (ref.lum - z.lum) / Math.max(0.05, ref.lum), tex = z.tex / Math.max(0.004, ref.tex);
-      const [d0, t0] = TH[k], on = z.hair > 0.35 || dark > d0 || tex > t0 || (k === 'corner' && dark > d0 && tex > 1.6);
+      const [d0, t0] = TH[k];
+      // подбородок и челюсть: борода бывает и светлее щеки (седая, белая), поэтому |затемнение|, а не затемнение;
+      // ln(текстура) + 2·|затемнение| > 0.72 — подобрано на 136 размеченных портретах (половина — подбор, половина —
+      // проверка: точность 0.71 / 0.77, полнота 0.53 / 0.62; прежние пороги давали полноту 0.06)
+      const on = k === 'chin' || k === 'jaw' ? Math.log(Math.max(0.3, tex)) + 2 * Math.abs(dark) > 0.72
+        : z.hair > 0.35 || dark > d0 || tex > t0 || (k === 'corner' && dark > d0 && tex > 1.6);
       return { hair: +z.hair.toFixed(2), dark: +dark.toFixed(2), tex: +tex.toFixed(2), on };
     };
     const F = {};
