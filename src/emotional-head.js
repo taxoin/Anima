@@ -469,6 +469,7 @@ export class EmotionalHead {
    */
   setDetail(detail = 'auto') {
     this.options.detail = detail;
+    this._applyShadows();
     if (this.rig instanceof ProceduralHead) this._rebuildRig();
     return this;
   }
@@ -708,6 +709,7 @@ export class EmotionalHead {
     const hemi = new THREE.HemisphereLight('#ffffff', '#444444', 0.4);
     this.scene.add(key, key.target, fill, rim, hemi);
     this.lights = { key, fill, rim, hemi };
+    this._applyShadows();
 
     this.setFraming(this.options.framing);
     this._ro = new ResizeObserver(() => this._resize());
@@ -737,7 +739,22 @@ export class EmotionalHead {
     const look = this.options.look || {};
     let overrides = look.female || look.male ? look[gender] || {} : look;   // { skin, hair } или { female: {...}, male: {...} }
     if (this._portrait) overrides = { ...this._portrait.fit({ ...this._photoOpts, gender }), ...overrides };
-    return new ProceduralHead({ gender, shadows: this.options.shadows, overrides, detail: this.options.detail });
+    const shadows = this._applyShadows();                         // уровень детализации мог смениться через options.detail
+    return new ProceduralHead({ gender, shadows, overrides, detail: this.options.detail });
+  }
+
+  /**
+   * Тени по уровню детализации (6.4): на low (shadowMap: 0) прохода теней нет совсем — он почти удваивал вызовы;
+   * вместо тени под подбородком голова запекает затенение шеи (ProceduralHead при shadows: false).
+   */
+  _applyShadows() {
+    const sm = DETAIL[resolveDetail(this.options.detail)].shadowMap, on = !!this.options.shadows && sm > 0, key = this.lights?.key;
+    this._shadowsOn = on;
+    this.renderer.shadowMap.enabled = on;
+    if (!key) return on;
+    key.castShadow = on;
+    if (on && key.shadow.mapSize.x !== sm) { key.shadow.mapSize.set(sm, sm); key.shadow.map?.dispose(); key.shadow.map = null; }
+    return on;
   }
 
   _initState() {

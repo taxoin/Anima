@@ -214,9 +214,9 @@ const HAT_LINE = { beanie: 0.4, cap: 0.48, fedora: 0.5, bowler: 0.44, cloche: 0.
  * (на low — 19, см. MORPH_LIST_LITE, и слабые веса < 0.015 отбрасываются: меньше выборок морф-текстуры).
  */
 export const DETAIL = {
-  high: { skin: [240, 200], hair: [220, 160], eye: [48, 32], lid: 56, teeth: [12, 10], cards: 1, beard: 1, shadowMap: 1024 },
-  medium: { skin: [168, 136], hair: [120, 88], eye: [32, 22], lid: 40, teeth: [10, 8], cards: 0.65, beard: 0.7, shadowMap: 1024 },
-  low: { skin: [128, 104], hair: [88, 64], eye: [24, 16], lid: 32, teeth: [8, 6], cards: 0.4, beard: 0.5, shadowMap: 512, morphs: 'lite' },
+  high: { skin: [240, 200], hair: [220, 160], eye: [48, 32], lid: 56, teeth: [12, 10], cards: 1, beard: 1, acc: 1, shadowMap: 1024 },
+  medium: { skin: [168, 136], hair: [120, 88], eye: [32, 22], lid: 40, teeth: [10, 8], cards: 0.65, beard: 0.7, acc: 0.65, shadowMap: 1024 },
+  low: { skin: [128, 104], hair: [88, 64], eye: [24, 16], lid: 32, teeth: [8, 6], cards: 0.4, beard: 0.5, acc: 0.4, shadowMap: 0, morphs: 'lite' },
 };
 /** 'auto' → medium на телефонах и планшетах (грубый указатель или мобильный UA), иначе high. */
 export function resolveDetail(d) {
@@ -1786,7 +1786,7 @@ export class ProceduralHead {
     const group = new THREE.Group();
     group.name = 'hat';
     // купол: кольца по высоте от края до макушки (поверх волос), для fedora — выше и с заломом
-    const rows = 22, segs = 72, pos = [], idx = [];
+    const rows = this._q(22, 10), segs = this._q(72, 24), pos = [], idx = [];
     const topY = st === 'fedora' ? 1.32 : st === 'bowler' ? 1.3 : st === 'headband' ? y0 + 0.13 : 1.0 + hairT + (st === 'cloche' ? 0.08 : 0.1);
     for (let r = 0; r <= rows; r++) {
       const t = r / rows, y = lerp(y0, topY, t);
@@ -1813,7 +1813,7 @@ export class ProceduralHead {
     // козырёк (cap) или поля (fedora)
     if (st === 'cap' || brimmed || st === 'cloche') {
       const e = ell(y0), pts = [], bi = [], rim = [];
-      const n = 48, W = st === 'cap' ? Math.PI * 0.55 : Math.PI * 2, a0 = st === 'cap' ? -W / 2 : 0;
+      const n = this._q(48, 16), W = st === 'cap' ? Math.PI * 0.55 : Math.PI * 2, a0 = st === 'cap' ? -W / 2 : 0;
       for (let i = 0; i <= n; i++) {
         const a = a0 + (i / n) * W, sx = Math.sin(a), cz = Math.cos(a);
         const rx = e.ax + hairT + 0.02, rz = e.az + hairT + 0.02;
@@ -1829,12 +1829,12 @@ export class ProceduralHead {
       brim.setIndex(bi); brim.computeVertexNormals();
       group.add(new THREE.Mesh(brim, mat));
       if (st !== 'cap') {                                           // завёрнутый край полей: читается и на тёмном фетре
-        const tube = this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rim, true), 96, st === 'bowler' ? 0.02 : 0.009, 6, true));
+        const tube = this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rim, true), this._q(96, 24), st === 'bowler' ? 0.02 : 0.009, this._q(6, 4), true));
         group.add(new THREE.Mesh(tube, mat));
       }
     }
     if (brimmed) {                                                  // лента на тулье
-      const band = this._track(new THREE.TorusGeometry(1, 0.035, 6, 64));
+      const band = this._track(new THREE.TorusGeometry(1, 0.035, this._q(6, 4), this._q(64, 20)));
       band.rotateX(Math.PI / 2);
       const e = ell(y0 + 0.08), m = new THREE.Mesh(band, this._track(new THREE.MeshStandardMaterial({ color: '#1a1410', roughness: 0.6 })));
       m.scale.set(Math.max(e.ax + 0.06, 0.62) * 0.97, 1, Math.max(e.az + 0.06, 0.72) * 0.97); m.position.set(0, y0 + 0.08, e.cz);
@@ -1854,14 +1854,14 @@ export class ProceduralHead {
       const g = new THREE.Group();
       g.position.set(sg * (w + 0.03), -0.06 - 0.155 * es, -0.03);
       if (er.style === 'hoop') {
-        const m = new THREE.Mesh(this._track(new THREE.TorusGeometry(0.05 * k, 0.0055 * k, 8, 40)), mat);
+        const m = new THREE.Mesh(this._track(new THREE.TorusGeometry(0.05 * k, 0.0055 * k, this._q(8, 4), this._q(40, 14))), mat);
         m.rotation.y = Math.PI / 2; m.position.y = -0.045 * k; g.add(m);
       } else if (er.style === 'drop') {
         const chain = new THREE.Mesh(this._track(new THREE.CylinderGeometry(0.0025, 0.0025, 0.05 * k, 6)), this._track(new THREE.MeshStandardMaterial({ color: '#d9b45a', metalness: 0.9, roughness: 0.3 })));
         chain.position.y = -0.025 * k; g.add(chain);
-        const gem = new THREE.Mesh(this._track(new THREE.SphereGeometry(0.018 * k, 20, 14)), mat);
+        const gem = new THREE.Mesh(this._track(new THREE.SphereGeometry(0.018 * k, this._q(20, 8), this._q(14, 6))), mat);
         gem.scale.y = 1.35; gem.position.y = -0.068 * k; g.add(gem);
-      } else g.add(new THREE.Mesh(this._track(new THREE.SphereGeometry(0.014 * k, 16, 12)), mat));
+      } else g.add(new THREE.Mesh(this._track(new THREE.SphereGeometry(0.014 * k, this._q(16, 8), this._q(12, 6))), mat));
       g.userData.batch = true; this.headRoot.add(g);
     }
   }
@@ -1898,8 +1898,8 @@ export class ProceduralHead {
     if (style === 'earbuds') {
       for (const sg of [1, -1]) {
         const b = new THREE.Group(); b.position.set(sg * (w + 0.035), -0.08, -0.02);
-        const bud = new THREE.Mesh(this._track(new THREE.SphereGeometry(0.03 * es, 16, 12)), mat); bud.scale.set(0.8, 1, 1.1); b.add(bud);
-        const stem = new THREE.Mesh(this._track(new THREE.CapsuleGeometry(0.011 * es, 0.09 * es, 4, 10)), mat); stem.position.set(sg * 0.008, -0.065 * es, 0.012); stem.rotation.z = sg * 0.12; b.add(stem);
+        const bud = new THREE.Mesh(this._track(new THREE.SphereGeometry(0.03 * es, this._q(16, 8), this._q(12, 6))), mat); bud.scale.set(0.8, 1, 1.1); b.add(bud);
+        const stem = new THREE.Mesh(this._track(new THREE.CapsuleGeometry(0.011 * es, 0.09 * es, this._q(4, 2), this._q(10, 6))), mat); stem.position.set(sg * 0.008, -0.065 * es, 0.012); stem.rotation.z = sg * 0.12; b.add(stem);
         g.add(b);
       }
       g.userData.batch = true; this.headRoot.add(g); this.headphones = g; return;
@@ -1911,9 +1911,9 @@ export class ProceduralHead {
       const d = new THREE.Vector3(sg, -0.12, 0.04).normalize(), o = this._outline(d, 0.99);
       const cup = new THREE.Group(); cup.position.set(o.x + sg * 0.03, o.y, o.z); cup.rotation.z = sg * -0.04;
       const R = (style === 'headset' ? 0.13 : 0.165) * es;
-      const shell = new THREE.Mesh(this._track(new THREE.CylinderGeometry(R, R * 1.04, 0.075, 32)), mat); shell.rotation.z = Math.PI / 2; shell.position.x = sg * 0.05; cup.add(shell);
-      const cap = new THREE.Mesh(this._track(new THREE.SphereGeometry(R * 0.98, 24, 10, 0, Math.PI * 2, 0, 0.5)), mat); cap.rotation.z = -sg * Math.PI / 2; cap.position.x = sg * 0.085; cap.scale.y = 0.6; cup.add(cap);
-      const pad = new THREE.Mesh(this._track(new THREE.TorusGeometry(R * 0.82, 0.032, 10, 32)), soft); pad.rotation.y = Math.PI / 2; pad.position.x = sg * 0.006; cup.add(pad);
+      const shell = new THREE.Mesh(this._track(new THREE.CylinderGeometry(R, R * 1.04, 0.075, this._q(32, 12))), mat); shell.rotation.z = Math.PI / 2; shell.position.x = sg * 0.05; cup.add(shell);
+      const cap = new THREE.Mesh(this._track(new THREE.SphereGeometry(R * 0.98, this._q(24, 12), this._q(10, 4), 0, Math.PI * 2, 0, 0.5)), mat); cap.rotation.z = -sg * Math.PI / 2; cap.position.x = sg * 0.085; cap.scale.y = 0.6; cup.add(cap);
+      const pad = new THREE.Mesh(this._track(new THREE.TorusGeometry(R * 0.82, 0.032, this._q(10, 5), this._q(32, 12))), soft); pad.rotation.y = Math.PI / 2; pad.position.x = sg * 0.006; cup.add(pad);
       g.add(cup); cupAt[sg] = cup.position.clone().add(new THREE.Vector3(sg * 0.05, 0, 0));
     }
     // оголовье: дуга поверх волос от чашки к чашке (в плоскости чуть впереди ушей)
@@ -1924,8 +1924,8 @@ export class ProceduralHead {
       pts.push(o);
     }
     pts.unshift(cupAt[-1].clone().add(new THREE.Vector3(0.0, 0.17 * es, 0))); pts.push(cupAt[1].clone().add(new THREE.Vector3(0, 0.17 * es, 0)));
-    const band = new THREE.Mesh(this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 80, 0.022, 10, false)), mat); band.scale.z = 1; g.add(band);
-    const cushion = new THREE.Mesh(this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.slice(6, -6)), 48, 0.018, 8, false)), soft);
+    const band = new THREE.Mesh(this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), this._q(80, 24), 0.022, this._q(10, 5), false)), mat); band.scale.z = 1; g.add(band);
+    const cushion = new THREE.Mesh(this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.slice(6, -6)), this._q(48, 16), 0.018, this._q(8, 4), false)), soft);
     cushion.position.y = -0.012; g.add(cushion);
     if (style === 'headset') {
       // штанга микрофона: от левой чашки вперёд и вниз к уголку рта
@@ -1937,8 +1937,8 @@ export class ProceduralHead {
         path.push(new THREE.Vector3(x, y, (z > -1 ? z : c.z) + 0.06 + 0.02 * Math.sin(Math.PI * t)));
       }
       path.push(tip);
-      g.add(new THREE.Mesh(this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(path), 48, 0.009, 8, false)), mat));
-      const mic = new THREE.Mesh(this._track(new THREE.CapsuleGeometry(0.02, 0.035, 6, 12)), soft); mic.position.copy(tip); mic.rotation.z = Math.PI / 2 - 0.3; g.add(mic);
+      g.add(new THREE.Mesh(this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(path), this._q(48, 16), 0.009, this._q(8, 4), false)), mat));
+      const mic = new THREE.Mesh(this._track(new THREE.CapsuleGeometry(0.02, 0.035, this._q(6, 2), this._q(12, 6))), soft); mic.position.copy(tip); mic.rotation.z = Math.PI / 2 - 0.3; g.add(mic);
     }
     g.userData.batch = true; this.headRoot.add(g); this.headphones = g;
   }
@@ -2046,8 +2046,8 @@ export class ProceduralHead {
 
   _buildEars() {
     if (this.P.hairStyle === 'long' && !this.P.ears) return;
-    const geo = this._track(new THREE.SphereGeometry(1, 24, 16));
-    const inGeo = this._track(new THREE.SphereGeometry(1, 16, 12));
+    const geo = this._track(new THREE.SphereGeometry(1, this._q(24, 12), this._q(16, 8)));
+    const inGeo = this._track(new THREE.SphereGeometry(1, this._q(16, 8), this._q(12, 6)));
     const inMat = this._track(this.mat.neck.clone());
     inMat.color = new THREE.Color(this.P.skin).multiplyScalar(0.6);
     const w = prof(this.P.gx, -0.06) * 0.998, es = clamp(w / 0.785, 0.85, 1.1);   // уши на силуэте головы
@@ -2185,7 +2185,7 @@ export class ProceduralHead {
         pts.push(new THREE.Vector3(x, cy + v, zz));
       }
       const curve = new THREE.CatmullRomCurve3(pts, true);
-      group.add(new THREE.Mesh(this._track(new THREE.TubeGeometry(curve, 96, th, 6, true)), frameMat));
+      group.add(new THREE.Mesh(this._track(new THREE.TubeGeometry(curve, this._q(96), th, this._q(6, 4), true)), frameMat));
       // линза: веер треугольников от центра
       const lp = [E.x * sg, cy, zF - 0.004], pos = [];
       for (let i = 0; i < 64; i++) { const a = pts[i], b = pts[(i + 1) % 64]; pos.push(...lp, a.x, a.y, a.z - 0.003, b.x, b.y, b.z - 0.003); }
@@ -2204,12 +2204,12 @@ export class ProceduralHead {
         new THREE.Vector3(sg * side, cy - 0.01, 0.2),
         new THREE.Vector3(sg * side * 0.98, cy - 0.05, -0.05),
       ]);
-      group.add(new THREE.Mesh(this._track(new THREE.TubeGeometry(arm, 24, th * 0.8, 5, false)), frameMat));
+      group.add(new THREE.Mesh(this._track(new THREE.TubeGeometry(arm, this._q(24, 8), th * 0.8, this._q(5, 4), false)), frameMat));
     }
     // перемычка над переносицей
     const [a, b] = ends;
     const bridge = new THREE.CatmullRomCurve3([a.clone(), new THREE.Vector3(0, (a.y + b.y) / 2 + ry * 0.12, Math.max(zB, this.hm.get(0, a.y + ry * 0.12) + 0.025)), b.clone()]);
-    group.add(new THREE.Mesh(this._track(new THREE.TubeGeometry(bridge, 16, th * 0.9, 6, false)), frameMat));
+    group.add(new THREE.Mesh(this._track(new THREE.TubeGeometry(bridge, this._q(16, 6), th * 0.9, this._q(6, 4), false)), frameMat));
     group.traverse((m) => { if (m.isMesh) m.userData.noShadow = m.material === lensMat; });
     this.glasses = group;
     this.headRoot.add(group);
@@ -2234,9 +2234,21 @@ export class ProceduralHead {
     const neckPts = (outfit && outfit !== 'crew' && outfit !== 'turtleneck' && outfit !== 'hoodie'
       ? [[r, -0.45], [r * 0.97, -0.9], [r * 1.05, -1.25], [r * 1.5, -1.5], ...[-1.62, -1.74, -1.9, -2.15, -2.6].map((y) => [Math.max(r * 1.5, Rof(y) * 0.965), y])]
       : [[r, -0.45], [r * 0.97, -0.9], [r * 1.05, -1.25], [r * 1.5, -1.5], [r * 2.6, -1.72], [r * 3.6, -1.92]]).map(([x, y]) => new THREE.Vector2(x, y));
-    const neckGeo = this._track(new THREE.LatheGeometry(neckPts, 48));
+    const neckGeo = this._track(new THREE.LatheGeometry(neckPts, 48));   // шея и ворот — одинаковые грани на всех уровнях (иначе кожа просвечивает у ворота)
     neckGeo.scale(1, 1, 0.6);
-    const neck = new THREE.Mesh(neckGeo, this.mat.neck);
+    let neckMat = this.mat.neck;
+    if (!this.shadows) {
+      // без карты теней (low, shadows: false): тень головы на шее запекается в цвет вершин — темнее под подбородком спереди
+      const p = neckGeo.attributes.position, col = new Float32Array(p.count * 3);
+      for (let i = 0; i < p.count; i++) {
+        const y = p.getY(i), z = p.getZ(i) / 0.6, front = smoothstep(-0.2, 0.25, z / Math.max(0.05, Math.hypot(p.getX(i), z)));
+        const k = 1 - 0.42 * front * smoothstep(-1.45, -0.95, y) * smoothstep(-0.45, -0.85, y) - 0.12 * smoothstep(-1.35, -1.6, y) * front;
+        col.set([k, k, k * 0.98], i * 3);
+      }
+      neckGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      neckMat = this._track(Object.assign(this.mat.neck.clone(), { vertexColors: true }));
+    }
+    const neck = new THREE.Mesh(neckGeo, neckMat);
     neck.position.set(0, 0, -0.15);
     this.body.add(neck);
     if (!outfit) {                                                      // по умолчанию — прежний круглый ворот (тело вращения)
@@ -2277,7 +2289,7 @@ export class ProceduralHead {
     };
     // торс с вырезом topFn; k — масштаб радиуса (нижний слой — чуть внутри)
     const torso = (topFn, k = 1, mat = this.mat.cloth, phiMax = Math.PI) => {
-      const N = 112, ROWS = 44, rows = [];
+      const N = this._q(112, 40), ROWS = this._q(44, 18), rows = [];
       const full = phiMax >= Math.PI;
       for (let i = 0; i <= ROWS; i++) {
         const v = i / ROWS, row = [];
@@ -2299,7 +2311,7 @@ export class ProceduralHead {
       for (let j = 0; j <= 96; j++) { const phi = lerp(phiA, phiB, j / 96); pts.push(surf(phi, topFn(phi), k, 0.004)); }
       const closed = phiB - phiA >= Math.PI * 2 - 1e-6;
       if (closed) pts.pop();
-      return add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, closed), 160, rad, 6, closed), mat);
+      return add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, closed), this._q(160, 48), rad, this._q(6, 4), closed), mat);
     };
     // воротник рубашки: стойка + отворот, к переду — уголки; phi0 — половина ширины выреза спереди
     const collar = (topFn, mat, phi0, k = 1, h = 0.085, fall = 0.12, point = 0.13) => {
@@ -2323,7 +2335,7 @@ export class ProceduralHead {
     }
     if (outfit === 'turtleneck') {
       const pts = [[r * 1.12, -0.9], [r * 1.22, -0.93], [r * 1.17, -0.98], [r * 1.2, -1.1], [r * 1.3, -1.22], [topR * 0.93, top + 0.06]].map(([x, y]) => new THREE.Vector2(x, y));
-      const g = new THREE.LatheGeometry(pts, 48); g.scale(1, 1, 0.6); g.translate(0, 0, -0.15);
+      const g = new THREE.LatheGeometry(pts, this._q(48, 24)); g.scale(1, 1, 0.6); g.translate(0, 0, -0.15);
       add(g, this.mat.clothSide ||= this._track(Object.assign(this.mat.cloth.clone(), { side: THREE.DoubleSide })));
     }
     if (outfit === 'vneck' || outfit === 'scoop') {
@@ -2393,6 +2405,9 @@ export class ProceduralHead {
     }
     this.torso = this.body.children[1] || null;
   }
+
+  /** Разрешение сеток одежды и аксессуаров по уровню детализации (6.3): n·acc, не меньше min. */
+  _q(n, min = 3) { return Math.max(min, Math.round(n * (this.L.acc ?? 1))); }
 
   /**
    * Склейка мешей ради числа вызовов отрисовки (6.2). Меши с одним материалом сливаются в один: неподвижные
@@ -2477,6 +2492,7 @@ export class ProceduralHead {
 
   /** Все склейки головы: глаза (веки — кости), зубы и дёсны (нижняя челюсть — кость), неподвижные аксессуары, очки, тело. */
   _batchAll() {
+    if (this.P.batch === false) return;                          // отладка: look.batch = false — без склейки
     const eyeMovers = new Set(), eyeMeshes = [];
     for (const e of this.eyes) { eyeMovers.add(e.up); eyeMovers.add(e.lo); e.group.traverse((o) => { if (o.isMesh && o !== e.ball) eyeMeshes.push(o); }); }
     let saved = this._batch(this.headRoot, eyeMeshes, eyeMovers, { colorMerge: true });
