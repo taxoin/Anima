@@ -1259,6 +1259,7 @@ export class ProceduralHead {
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 4;
     const m = this.mat.skin;
+    m.userData.decal = { tex, attr: 'decalUv' };                 // для экспорта в glTF (export-glb.js)
     addShaderPatch(m, 'skin-decals', (sh) => {
       sh.uniforms.decalMap = { value: tex };
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec2 decalUv;\nvarying vec2 vDecalUv;')

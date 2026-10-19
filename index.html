@@ -151,6 +151,7 @@
       <div class="row"><label><input type="checkbox" id="photoAcc"> искать очки и шапки (+16 МБ модель)</label></div>
       <div class="row"><button id="photoClear" disabled>Стандартная голова</button><button id="photoRefine" disabled title="Рендер → те же точки лица → сдвинуть овал и нос под фото (~2–4 с)">Подогнать форму</button><span class="hint" id="photoStatus"></span></div>
       <div class="row"><button id="avatarSave" disabled>Сохранить аватар</button><label class="filebtn" for="avatarFile">Открыть аватар</label><input type="file" id="avatarFile" accept=".json,application/json" hidden></div>
+      <div class="row"><button id="glbSave" title="Сетка, материалы и 52 ARKit-морфа — для Blender, Unity, Unreal">Скачать .glb</button><select id="glbDetail" title="Детализация файла"><option value="high">high</option><option value="medium" selected>medium</option><option value="low">low</option></select></div>
       <div class="hint">Файл аватара весит около 10 КБ: точки лица, цвета и кожа, без исходного фото. Его можно переслать на другой телефон и открыть там, распознавание не нужно.</div>
     </details>
 
@@ -469,6 +470,18 @@ $('#avatarSave').onclick = async () => {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(file); a.download = file.name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+$('#glbSave').onclick = async () => {
+  const detail = $('#glbDetail').value;
+  $('#glbSave').disabled = true; status('Экспорт .glb…');
+  try {
+    const buf = await api(`await head.exportGLB({ detail: '${detail}' })`, () => head.exportGLB({ detail }));
+    const file = new File([buf], `anima-${detail}.glb`, { type: 'model/gltf-binary' });
+    status(`.glb: ${(file.size / 1048576).toFixed(1)} МБ`);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file); a.download = file.name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch (e) { status('Экспорт не удался: ' + e.message); } finally { $('#glbSave').disabled = false; }
 };
 async function openAvatar(f) {
   try {

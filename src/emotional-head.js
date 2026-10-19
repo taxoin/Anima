@@ -695,6 +695,26 @@ export class EmotionalHead {
   /** Вернуться к процедурной голове. */
   useProcedural(gender = this.gender) { this._customModel = true; this._portrait = null; return this.setGender(gender); }
 
+  /**
+   * Экспорт процедурной головы в glTF/GLB (9.2): сетка, материалы, текстуры, 52 ARKit-морфа. См. export-glb.js.
+   * @param {object} [o]  { detail — уровень детализации файла (по умолчанию текущий), morphs = true, scale = 0.115 (м), binary = true }
+   * @returns {Promise<ArrayBuffer>}  .glb (или JSON glTF при binary: false)
+   */
+  async exportGLB(o = {}) {
+    if (this._customModel && !(this.rig instanceof ProceduralHead)) throw new Error('exportGLB: только для процедурной головы');
+    const { exportHeadGLB } = await import('./export-glb.js');
+    const detail = o.detail ? resolveDetail(o.detail) : null;
+    let rig = this.rig, temp = false;
+    if (detail && detail !== this._detailNow()) {                  // другой уровень — отдельная сборка, сцену не трогаем
+      const look = this.options.look || {};
+      let overrides = look.female || look.male ? look[this.gender] || {} : look;
+      if (this._portrait) overrides = { ...this._portrait.fit({ ...this._photoOpts, gender: this.gender }), ...overrides };
+      rig = new ProceduralHead({ gender: this.gender, shadows: DETAIL[detail].shadowMap > 0, overrides, detail });
+      temp = true;
+    }
+    try { return await exportHeadGLB(rig, o); } finally { if (temp) rig.dispose(); }
+  }
+
   /** Скриншот текущего кадра (data URL). */
   snapshot(type = 'image/png') { this._render(); return this.renderer.domElement.toDataURL(type); }
 
