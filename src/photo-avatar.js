@@ -1212,11 +1212,30 @@ export class Portrait {
       const low = boxBlur(C, TW, TH, faceW * 0.03);
       for (let i = 0; i < n; i++) C[i] = low[i] + (C[i] - low[i]) * 0.55;
     }
+    // 7.3: тон низа лица — полоса вдоль линии челюсти и подбородка (внутри овала), только похожие на кожу пиксели
+    // (без бороды и теней). Ниже рта заливка вне лица уходит в него, и шея красится им же — без шва «лицо — шея».
+    const JAW = [172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397], cMouth = T(P[13]), cChin = T(P[152]);
+    const chr = (c) => { const t = c[0] + c[1] + c[2] || 1; return [c[0] / t, c[1] / t]; }, sC = chr(S), sL = lum(...S);
+    const low = [];
+    for (const j of JAW) {
+      const q = T(P[j]), cx = q.x + (cMouth.x - q.x) * 0.14, cy = q.y + (cMouth.y - q.y) * 0.14, r = Math.max(2, faceW * 0.035);
+      for (let y = Math.round(cy - r); y <= cy + r; y++) for (let x = Math.round(cx - r); x <= cx + r; x++) {
+        if (x < 0 || y < 0 || x >= TW || y >= TH) continue;
+        const i = y * TW + x; if (valid[i] < 0.95) continue;
+        const c = [R[i], G[i], B[i]], cc = chr(c), lr = lum(...c) / Math.max(0.05, sL);
+        if (Math.hypot(cc[0] - sC[0], cc[1] - sC[1]) < 0.04 && lr > 0.55 && lr < 1.3) low.push(c);
+      }
+    }
+    const SL = low.length > 20 ? robustColor(low) : S.map((v) => v * 0.95);
     const out = [R, G, B];
     for (let ci = 0; ci < 3; ci++) {
       const F = filled[ci], O = out[ci];
-      for (let i = 0; i < n; i++) O[i] = lerp(S[ci], F[i], fade[i]);
+      for (let i = 0; i < n; i++) {
+        const y = (i / TW) | 0, wl = smoothstep(cMouth.y, cChin.y, y);   // 0 — выше рта, 1 — от подбородка вниз
+        O[i] = lerp(lerp(S[ci], SL[ci], wl), F[i], fade[i]);
+      }
     }
+    this.skinLow = SL;
     // рамка в 2 px = общий тон (туда смотрят UV затылка)
     for (let y = 0; y < TH; y++) for (let x = 0; x < TW; x++) {
       if (x > 1 && y > 1 && x < TW - 2 && y < TH - 2) continue;
@@ -1330,6 +1349,7 @@ export class Portrait {
         bowDip: clamp(0.2 + k * 1.09 * (BOW_MEAN.rc - Q.bowRC), 0.02, 0.45),
       } : {}),
       skin: hex(this.skinTex.map((v) => v * TEX_GAIN)),
+      ...(this.skinLow && tex > 0 ? { neckSkin: hex(this.skinTex.map((v, k) => lerp(v, this.skinLow[k], tex) * TEX_GAIN)) } : {}),
       blush: d.blush * 0.15, stubble: 0,
     };
     if (this.lipColor && !this.grayscale) ov.lip = hex(this.lipColor);
@@ -1485,7 +1505,7 @@ export class Portrait {
       format: 'anima-portrait', v: 1,
       origin: [r4(c.x), r4(c.y)], lm: b64(new Uint8Array(lm.buffer)),
       meas, warnings: this.warnings, expression: Object.fromEntries(Object.entries(this.expression).map(([k, v]) => [k, r4(v)])),
-      colors: { skinPhoto: rc(this.skinPhoto), skin: rc(this.skinTex), lip: rc(this.lipColor), brow: rc(this.browColor), iris: rc(this.irisColor), hair: rc(this.hairColor), cloth: rc(this.clothColor) },
+      colors: { skinPhoto: rc(this.skinPhoto), skin: rc(this.skinTex), skinLow: rc(this.skinLow), lip: rc(this.lipColor), brow: rc(this.browColor), iris: rc(this.irisColor), hair: rc(this.hairColor), cloth: rc(this.clothColor) },
       teeth: this.teethTone ? { d: r4(this.teethTone.d) } : null,
       outfit: this.outfitRaw ? { ...this.outfitRaw, spread: undefined, Cs: rc(this.outfitRaw.Cs), Csh: rc(this.outfitRaw.Csh), Ct: rc(this.outfitRaw.Ct) } : null,
       lidTex: rc(this.lidTex), beard: r4(this.beard), grayscale: !!this.grayscale, glasses: this.glasses || null, beardStyle: this.beardStyle || null, hat: this.hat || null,
@@ -1529,7 +1549,7 @@ export class Portrait {
     p._lipAsym();
     p.meas = d.meas; p.warnings = d.warnings || []; p.expression = d.expression || {};
     const C = d.colors || {};
-    p.skinPhoto = C.skinPhoto || C.skin || [0.85, 0.68, 0.58]; p.skinTex = C.skin || p.skinPhoto;
+    p.skinPhoto = C.skinPhoto || C.skin || [0.85, 0.68, 0.58]; p.skinTex = C.skin || p.skinPhoto; p.skinLow = C.skinLow || null;
     p.lipColor = C.lip; p.browColor = C.brow; p.irisColor = C.iris; p.hairColor = C.hair; p.clothColor = C.cloth;
     p.lidTex = d.lidTex; p.beard = d.beard || 0; p.grayscale = !!d.grayscale; p.bs = d.bs || null; p.glasses = d.glasses || null; p.beardStyle = d.beardStyle || null; p.hat = d.hat || null;
     p.hairStyle = d.hair?.style ?? null; p.hairBottom = d.hair?.bottom ?? null; p.hairlineY = d.hair?.line ?? null;

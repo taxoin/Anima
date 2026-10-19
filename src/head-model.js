@@ -958,7 +958,7 @@ export class ProceduralHead {
     if (mk?.gloss !== undefined) { this.mat.lip.clearcoat = 0.2 + 0.7 * mk.gloss; this.mat.lip.clearcoatRoughness = 0.4 - 0.32 * mk.gloss; this.mat.lip.roughness = 0.42 - 0.2 * mk.gloss; }
     this.mat.neck = this._track(this.mat.skin.clone());
     this.mat.neck.vertexColors = false;
-    this.mat.neck.color = new THREE.Color(P.skin).multiplyScalar(0.92);
+    this.mat.neck.color = P.neckSkin ? new THREE.Color(P.neckSkin) : new THREE.Color(P.skin).multiplyScalar(0.92);   // по фото — тон низа лица (7.3)
 
     // --- иерархия: root → body; root → headPivot → headRoot → части лица
     this.body = new THREE.Group();
