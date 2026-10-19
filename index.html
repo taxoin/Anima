@@ -226,6 +226,7 @@ head.on('emotionChange', (e) => { $('#hudEmotion').textContent = typeof e.emotio
 head.on('speakStart', (e) => { $('#hudSpeak').textContent = 'говорит…'; $('#hudSpeak').classList.add('speaking'); log('⟵ speakStart'); });
 head.on('speakEnd', () => { $('#hudSpeak').textContent = 'тишина'; $('#hudSpeak').classList.remove('speaking'); log('⟵ speakEnd'); });
 head.on('cue', (c) => log(`⟵ cue ${c.type}: ${c.value}`));
+head.on('genderChange', (e) => { document.querySelectorAll('[data-gender]').forEach((x) => x.classList.toggle('on', x.dataset.gender === e.gender)); log(`⟵ genderChange ${e.gender}${e.source ? ' (' + e.source + ')' : ''}`); });
 head.on('gesture', (g) => log(`⟵ gesture ${g.name}`));
 
 // ---- сцена
@@ -368,7 +369,7 @@ async function usePhoto(src, label) {
     const t0 = performance.now();
     const rep = await api(`await head.fromPhoto(${typeof src === 'string' ? `'${src}'` : 'file'}, ${fmt({ ...photoOpts(), ...photoExtra() })})`, () => head.fromPhoto(src, { ...photoOpts(), ...photoExtra(), onProgress: status }));
     const c = rep.colors;
-    $('#photoInfo').innerHTML = `${label}<br>причёска: ${({ short: 'короткая', long: 'длинная', none: 'без волос' })[rep.hairStyle] || '—'}<br>`
+    $('#photoInfo').innerHTML = `${label}<br>пол: ${rep.gender?.guess ? `${rep.gender.value === 'male' ? 'мужской' : 'женский'}${rep.gender.guess.confident ? '' : ' (не уверен — оставлен текущий)'}` : (rep.gender?.value === 'male' ? 'мужской' : 'женский')}<br>причёска: ${({ short: 'короткая', long: 'длинная', none: 'без волос' })[rep.hairStyle] || '—'}<br>`
       + ['skin', 'hair', 'iris', 'lip'].filter((k) => c[k]).map((k) => `<span title="${k}" style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;background:${c[k]}"></span>`).join(' ')
       + rep.warnings.map((w) => `<div class="warn">${w}</div>`).join('');
     status(`Готово за ${((performance.now() - t0) / 1000).toFixed(1)} с`);

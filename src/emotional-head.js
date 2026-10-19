@@ -306,7 +306,7 @@ export class EmotionalHead {
    * @param {object} [o]
    * @param {number} [o.caricature=1.5]  0 — стандартные пропорции, 1 — как на фото, 1.5–2.5 — шарж
    * @param {number} [o.texture=0.9]     сила фото-текстуры кожи (0 — ровный тон)
-   * @param {'female'|'male'} [o.gender] основа (шея, плечи, причёска по умолчанию)
+   * @param {'female'|'male'|'auto'|'keep'} [o.gender='auto'] основа (шея, плечи, причёска по умолчанию); auto — по фото, если модель уверена (иначе текущий пол и предупреждение); keep — текущий
    * @param {boolean} [o.shape=false]  сразу подогнать форму по точкам лица (refineShape, +1.5–3 с)
    * @param {'full'} [o.detail]         очки и головные уборы по многоклассовому сегментатору (+16 МБ модель; = accessories: true)
    * @param {function} [o.onProgress]    (text) => void
@@ -317,10 +317,16 @@ export class EmotionalHead {
     const portrait = src?.isPortrait ? src : await analyzePortrait(src, o);
     this._portrait = portrait;
     this._photoOpts = { caricature: o.caricature ?? 1.5, texture: o.texture ?? 0.9, realism: o.realism ?? 0.8 };
-    if (o.gender) this.gender = o.gender;
+    let guess = null;
+    if (o.gender === 'female' || o.gender === 'male') this.gender = o.gender;
+    else if (o.gender !== 'keep') {                                  // 7.2: пол по фото
+      guess = portrait.genderGuess?.() || null;
+      if (guess?.confident && guess.gender !== this.gender) { this.gender = guess.gender; this._emit('genderChange', { gender: this.gender, source: 'photo' }); }
+    }
     this._rebuildRig();
     if (o.shape) await this.refineShape({ onProgress: o.onProgress });   // деформация по точкам (+1.5–3 с)
-    const report = portrait.report;
+    const report = { ...portrait.report, gender: { value: this.gender, guess } };
+    if (guess && !guess.confident) report.warnings = [...report.warnings, `Пол по фото не определён уверенно (вероятность женского ${guess.p}) — оставлен текущий (${this.gender}). Задать явно: fromPhoto(src, { gender: 'male' | 'female' }).`];
     this._emit('photoAvatar', report);
     return report;
   }

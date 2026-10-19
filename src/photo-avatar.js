@@ -624,6 +624,35 @@ export class Portrait {
     return out;
   }
 
+  /**
+   * Пол по фото (7.2): логистическая модель по признакам, которые распознавание уже считает — борода и усы, длина
+   * волос, насыщенность и краснота губ относительно кожи, «тень щетины» на подбородке и над губой, пропорции лица
+   * (брови, глаза, губы, нос, подбородок, ширина низа овала), галстук и открытый вырез. Обучена на 136 размеченных
+   * портретах; проверка «по одному»: верно 91 % (всегда «мужской» — 78 %), уверенные ответы (p < 0.3 или > 0.7) —
+   * 83 % снимков, из них верно 94 %. Возвращает { gender, p (вероятность женского), confident } или null.
+   */
+  genderGuess() {
+    if (!this.meas || !this.facial) return null;
+    const o = this.outfitRaw || {}, bw = !!o.bw, f = this.facial, m = this.meas;
+    const sat = (c) => { if (!c) return 0; const M = Math.max(...c), n = Math.min(...c); return M > 0 ? (M - n) / M : 0; };
+    const lip = this.lipColor, sk = this.skinPhoto, r = (k) => (typeof m[k] === 'number' && MEAN_M[k] ? m[k] / MEAN_M[k] : 1);
+    const x = {
+      beard: this.beardStyle?.style && this.beardStyle.style !== 'none' ? 1 : 0, moustache: this.beardStyle?.moustache ? 1 : 0,
+      long: this.hairStyle === 'long' ? 1 : 0,
+      lipSat: bw ? 0 : sat(lip) - sat(sk), redness: bw || !lip || !sk ? 0 : (lip[0] - lip[1]) - (sk[0] - sk[1]),
+      chinTex: Math.log(Math.max(0.3, f.chin?.tex ?? 1)), jawTex: Math.log(Math.max(0.3, f.jaw?.tex ?? 1)), stacheDark: f.stache?.dark ?? 0,
+      browY: r('browY'), browTh: r('browTh'), eyeH: r('eyeH'), lipU: r('lipU'), lipL: r('lipL'), noseW: r('noseW'), chin: r('chin'),
+      chinSq: typeof m.chinSq === 'number' ? m.chinSq : 0, w4: m.widths?.[4] || 0, w5: m.widths?.[5] || 0,
+      tie: o.tie || 0, skinA: bw ? 0 : o.skinA || 0,
+    };
+    const W = { beard: -0.3373, moustache: -0.6442, long: 1.7952, lipSat: 2.4908, redness: 6.5038, chinTex: -0.5672, jawTex: 0.8693, stacheDark: -1.8026,
+      browY: 2.7683, browTh: -7.3379, eyeH: 4.1997, lipU: -0.183, lipL: 1.9179, noseW: 3.4783, chin: -5.5209, chinSq: 2.7622, w4: -1.7348, w5: -0.1847, tie: -1.1836, skinA: 2.6803 };
+    let z = -0.042;
+    for (const k in W) z += W[k] * x[k];
+    const p = 1 / (1 + Math.exp(-z));
+    return { gender: p > 0.5 ? 'female' : 'male', p: Math.round(p * 100) / 100, confident: p > 0.7 || p < 0.3 };
+  }
+
   /** Одежда → look (5.11): открытый вырез, пиджак с рубашкой и галстуком, иначе — круглый ворот (как раньше, без outfit). */
   _outfitOv(gender) {
     const o = this.outfitRaw;

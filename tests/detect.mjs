@@ -51,6 +51,7 @@ const predict = (p) => page.evaluate(async (id, gender) => {
       teeth: !!P.teethTone,
       outfit: ov.outfit === 'blazer' ? 'blazer' : ov.outfit === 'scoop' || ov.outfit === 'vneck' ? 'open' : 'other',
       tie: !!ov.tie,
+      female: P.genderGuess ? (P.genderGuess()?.p ?? 0) > 0.5 : false, genderConfident: !!P.genderGuess?.()?.confident,
     };
   } catch (e) { return { error: String(e.message || e).slice(0, 120) }; }
 }, p.id, p.labels.gender);
@@ -67,6 +68,7 @@ const DET = {
   open: { get: (o) => o.outfit === 'open', color: true },
   tie: { get: (o) => !!o.tie, male: true },
   bw: { get: (o) => !!o.bw },
+  female: { get: (o) => o.female === undefined ? o.gender === 'female' : !!o.female, label: (L) => L.gender === 'female' },   // пол (7.2): модель обучена на этом же наборе — цифры завышены, честная оценка в ROADMAP
 };
 const names = Object.keys(DET).filter((k) => !only.length || only.includes(k));
 
@@ -86,10 +88,10 @@ console.log(`\nСнимков: ${rows.length}, не распознано: ${repo
 console.log('детектор     n    да  точность  полнота   верно   ошибки' + (base0 ? '   Δ верно к базе' : ''));
 for (const k of names) {
   const d = DET[k];
-  const use = rows.filter((r) => !r.pred.error && (!d.color || !r.labels.bw) && (!d.male || r.labels.gender === 'male') && r.labels[k === 'blazer' || k === 'open' ? 'outfit' : k] !== undefined);
+  const use = rows.filter((r) => !r.pred.error && (!d.color || !r.labels.bw) && (!d.male || r.labels.gender === 'male') && (d.label || r.labels[k === 'blazer' || k === 'open' ? 'outfit' : k] !== undefined));
   let tp = 0, fp = 0, fn = 0, tn = 0; const errs = [];
   for (const r of use) {
-    const L = k === 'blazer' || k === 'open' ? DET[k].get({ outfit: r.labels.outfit }) : d.get(r.labels), P = d.get(r.pred);
+    const L = d.label ? d.label(r.labels) : k === 'blazer' || k === 'open' ? DET[k].get({ outfit: r.labels.outfit }) : d.get(r.labels), P = d.get(r.pred);
     if (L && P) tp++; else if (!L && P) { fp++; errs.push(`+ ${r.id} ${r.title}`); } else if (L && !P) { fn++; errs.push(`− ${r.id} ${r.title}`); } else tn++;
   }
   const prec = tp + fp ? tp / (tp + fp) : null, rec = tp + fn ? tp / (tp + fn) : null, acc = use.length ? (tp + tn) / use.length : null;
