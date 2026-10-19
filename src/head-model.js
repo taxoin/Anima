@@ -546,9 +546,12 @@ function buildDentition(P, zFront, upper, seg = [12, 10]) {
   const AO = [1, 0.93, 0.82, 0.66, 0.52, 0.42];                     // задние зубы в тени полости
   const yEdge0 = upper ? MY - 0.026 : MY - 0.017;
   const unit = new THREE.SphereGeometry(1, seg[0], seg[1]), up = unit.attributes.position, un = up.count, uidx = unit.index.array;
-  const pos = [], col = [], idx = [], gum = [];
+  const pos = [], col = [], idx = [], gum = [], brk = [];
+  // опции зубов (3.9): щель между верхними резцами, кривизна (детерминированный разброс поворотов и сдвигов)
+  const gap = upper ? clamp(P.teethGap ?? 0, 0, 1) * 0.014 * sc : 0, crook = clamp(P.teethCrooked ?? 0, 0, 1);
+  const hash = (i, sg, k) => { const v = Math.sin((i + 1) * 12.9898 + sg * 78.233 + k * 37.719 + (upper ? 0 : 5.1)) * 43758.5453; return (v - Math.floor(v)) * 2 - 1; };
   for (const sg of [1, -1]) {
-    let s = 0.0004 * sc;                                           // длина дуги от центра
+    let s = 0.0004 * sc + gap / 2;                                 // длина дуги от центра
     for (let i = 0; i < 6; i++) {
       const w = W[i], h = H[i], t = T[i];
       // центр зуба по длине дуги → x (приближённо, дуга пологая)
@@ -560,6 +563,18 @@ function buildDentition(P, zFront, upper, seg = [12, 10]) {
       const ca = Math.cos(ang), sa = Math.sin(ang);
       const yEdge = yEdge0 + (upper ? 1 : -1) * 0.0035 * i * i * 0.5;   // режущий край поднимается к задним зубам
       const base = pos.length / 3, tint = 1 + (((i * 7 + (sg > 0 ? 3 : 0)) % 5) - 2) * 0.012;   // зубы чуть различаются по тону
+      // кривизна: передние зубы сильнее — поворот вокруг оси зуба, наклон, сдвиг вперёд/назад
+      const cw = crook * (i < 3 ? 1 : 0.35), rY = cw * 0.5 * hash(i, sg, 1), rZ = cw * 0.1 * hash(i, sg, 2), dz = cw * 0.006 * sc * hash(i, sg, 3);
+      const cY = Math.cos(rY), sY = Math.sin(rY), cZ = Math.cos(rZ), sZ = Math.sin(rZ), yMid = upper ? yEdge + h / 2 : yEdge - h / 2;
+      const place = (lx, ly, lz) => {
+        if (cw) {
+          const ox = lx, oz = lz + t / 2;                          // вокруг центра зуба
+          lx = ox * cY + oz * sY; lz = -ox * sY + oz * cY - t / 2 + dz;
+          const rx = lx, ry = ly - yMid;
+          lx = rx * cZ - ry * sZ; ly = yMid + rx * sZ + ry * cZ;
+        }
+        return [x + lx * ca + lz * sa, ly, arch(x) - lx * sa + lz * ca];   // lx — по касательной к дуге, lz — по нормали
+      };
       for (let v = 0; v < un; v++) {
         const nx = up.getX(v), ny = up.getY(v), nz = up.getZ(v);
         const ex = Math.sign(nx) * Math.abs(nx) ** 0.45, ey = Math.sign(ny) * Math.abs(ny) ** 0.6, ez = Math.sign(nz) * Math.abs(nz) ** 0.5;
@@ -572,14 +587,19 @@ function buildDentition(P, zFront, upper, seg = [12, 10]) {
         if (i === 2) ly += (upper ? -1 : 1) * 0.006 * sc * Math.max(0, 1 - Math.abs(ex)) ** 1.6 * e ** 3;   // клык чуть заострён
         let lz = ez * (t / 2) * tf - t / 2;
         if (ez > 0) lz += 0.004 * sc * (1 - ex * ex);              // выпуклая губная поверхность
-        // в координаты головы
-        pos.push(x + lx * ca + lz * sa, ly, arch(x) - lx * sa + lz * ca);   // lx — по касательной к дуге, lz — по нормали
+        pos.push(...place(lx, ly, lz));
         const ao = AO[i] * lerp(0.72, 1, smoothstep(0, 0.6, e)) * (upper ? 1 : 0.9);
         const trans = smoothstep(0.82, 1, e) * (i < 3 ? 1 : 0.3);  // полупрозрачный режущий край: холоднее
         col.push(ao * tint * (1 - 0.1 * trans), ao * tint * (1 - 0.06 * trans), ao * tint * (1 + 0.02 * trans) * 0.98);
       }
       for (let k = 0; k < uidx.length; k++) idx.push(base + uidx[k]);
       gum.push({ x, w, h, yEdge });
+      if (P.braces && i < 5) {
+        // брекет — по центру губной поверхности (e = 0.55 от шейки)
+        const e = 0.55, tf = i < 2 ? lerp(1, 0.32, e ** 1.4) : i === 2 ? lerp(1, 0.55, e) : lerp(1, 0.85, e);
+        const ly = upper ? yEdge + (1 - e) * h : yEdge - (1 - e) * h, lz = (t / 2) * tf - t / 2 + 0.004 * sc;
+        brk.push({ c: place(0, ly, lz + 0.0022 * sc), f: place(0, ly, lz + 0.0045 * sc), ang: ang - (cw ? rY : 0), sg, x });
+      }
     }
   }
   unit.dispose();
@@ -615,7 +635,44 @@ function buildDentition(P, zFront, upper, seg = [12, 10]) {
   gums.setAttribute('color', new THREE.Float32BufferAttribute(gcol, 3));
   gums.setIndex(gidx);
   gums.computeVertexNormals();
-  return { teeth, gums };
+  let braces = null;
+  if (brk.length) {
+    const parts = [];
+    for (const b of brk) {
+      const bx = new THREE.BoxGeometry(0.011 * sc, 0.0095 * sc, 0.0044 * sc);
+      bx.rotateY(-b.ang); bx.translate(...b.c);
+      parts.push(bx);
+    }
+    // дуга: через лицевые стороны брекетов, от правого к левому
+    const pts = brk.slice().sort((p, q) => p.x - q.x).map((b) => new THREE.Vector3(...b.f));
+    parts.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length * 6, 0.0011 * sc, 5, false));
+    braces = mergeGeos(parts);
+  }
+  return { teeth, gums, braces };
+}
+
+/** Склейка геометрий (позиции + нормали + индексы) в одну — меньше draw calls. */
+function mergeGeos(list) {
+  const pos = [], nor = [], idx = [];
+  for (const g of list) {
+    const base = pos.length / 3, p = g.attributes.position.array, n = g.attributes.normal.array;
+    for (let i = 0; i < p.length; i++) { pos.push(p[i]); nor.push(n[i]); }
+    if (g.index) for (const v of g.index.array) idx.push(base + v); else for (let i = 0; i < p.length / 3; i++) idx.push(base + i);
+    g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  out.setIndex(idx);
+  return out;
+}
+
+/** Цвет зубов: look.teethColor — имя пресета или цвет. */
+export const TEETH_COLORS = { white: '#f7f5f0', natural: '#efe8da', ivory: '#ece0c4', yellow: '#e6d8b0', gray: '#d4d0c6' };
+/** Брекеты: look.braces — true / 'metal' / 'ceramic' / цвет. */
+function bracesMaterial(b) {
+  const ceramic = b === 'ceramic', col = typeof b === 'string' && b !== 'metal' && !ceramic ? b : ceramic ? '#ebe6dc' : '#c9cdd2';
+  return new THREE.MeshPhysicalMaterial({ color: col, metalness: ceramic || col !== '#c9cdd2' ? 0 : 0.9, roughness: ceramic ? 0.35 : 0.28, clearcoat: ceramic ? 0.6 : 0, envMapIntensity: 0.9 });
 }
 
 /** Normal-карта губ: вертикальные бороздки (сетка губ: u — по ширине рта, v — от внутренней кромки к внешней). */
@@ -1303,7 +1360,8 @@ export class ProceduralHead {
     const cavMat = this._track(new THREE.MeshBasicMaterial({ vertexColors: true, depthTest: true, depthFunc: THREE.AlwaysDepth, depthWrite: true, ...stencilWrite }));
     cavMat.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace('#include <dithering_fragment>', '#include <dithering_fragment>\n\tgl_FragDepth = 1.0;'); };
     const inner = { depthTest: true, depthWrite: true, ...stencilTest };
-    const teethMat = this._track(new THREE.MeshPhysicalMaterial({ color: '#efe8da', roughness: 0.3, clearcoat: 0.5, clearcoatRoughness: 0.25, vertexColors: true, envMapIntensity: 0.5, ...inner }));
+    M.teethColor = new THREE.Color(TEETH_COLORS[P.teethColor] || P.teethColor || TEETH_COLORS.natural);
+    const teethMat = this._track(new THREE.MeshPhysicalMaterial({ color: M.teethColor, roughness: 0.3, clearcoat: 0.5, clearcoatRoughness: 0.25, vertexColors: true, envMapIntensity: 0.5, ...inner }));
     const gumMat = this._track(new THREE.MeshPhysicalMaterial({ color: '#c4646c', roughness: 0.42, clearcoat: 0.4, clearcoatRoughness: 0.3, vertexColors: true, envMapIntensity: 0.4, ...inner }));
     const tongueMat = this._track(new THREE.MeshStandardMaterial({ color: '#b5525a', roughness: 0.5, vertexColors: true, side: THREE.DoubleSide, ...inner }));   // сетка языка обходится «изнанкой» к камере
     M.teethMat = teethMat; M.gumMat = gumMat; M.cavMat = cavMat; M.tongueMat = tongueMat;
@@ -1323,12 +1381,19 @@ export class ProceduralHead {
     M.jaw.add(jawInner);
     M.teethL = new THREE.Mesh(dL.teeth, teethMat); M.gumsL = new THREE.Mesh(dL.gums, gumMat);
     jawInner.add(M.teethL, M.gumsL);
+    if (dU.braces) {
+      const bm = this._track(bracesMaterial(P.braces)); Object.assign(bm, inner);
+      M.bracesMat = bm; M.bracesColor = bm.color.clone();
+      M.bracesU = new THREE.Mesh(this._track(dU.braces), bm); M.bracesL = new THREE.Mesh(this._track(dL.braces), bm);
+      jawInner.add(M.bracesL);
+    }
     this.headRoot.add(M.jaw);
     M.lipU = new THREE.Mesh(this._track(dynamicGrid(M.N, 7, true)), this.mat.lip);
     M.lipL = new THREE.Mesh(this._track(dynamicGrid(M.N, 7, true)), this.mat.lip);
     let order = 10;
-    for (const k of ['cav', 'tongue', 'gumsL', 'teethL', 'gumsU', 'teethU', 'lipU', 'lipL']) {
+    for (const k of ['cav', 'tongue', 'gumsL', 'teethL', 'bracesL', 'gumsU', 'teethU', 'bracesU', 'lipU', 'lipL']) {
       const m = M[k];
+      if (!m) continue;
       m.renderOrder = order++;
       m.frustumCulled = false;
       if (k !== 'lipU' && k !== 'lipL') m.userData.noShadow = true;
@@ -1471,7 +1536,8 @@ export class ProceduralHead {
     // свет во рту: чем шире раскрыт рот, тем светлее зубы и полость (узкая щель — почти темнота)
     const gap = clamp(J.open * 1.6 + smile * 0.55 + 0.4 * (upL + upR) / 2 - 0.5 * press, 0, 1);
     const lit = lerp(0.5, 1, smoothstep(0, 0.6, gap));
-    M.teethMat.color.set('#efe8da').multiplyScalar(lit);
+    M.teethMat.color.copy(M.teethColor).multiplyScalar(lit);
+    if (M.bracesMat) { M.bracesMat.color.copy(M.bracesColor).multiplyScalar(lit); M.bracesMat.envMapIntensity = 0.9 * lit; }
     M.gumMat.color.set('#c4646c').multiplyScalar(lit);
     M.tongueMat.color.set('#b5525a').multiplyScalar(lerp(0.6, 1, smoothstep(0, 0.6, gap)));
 

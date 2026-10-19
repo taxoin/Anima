@@ -15,7 +15,7 @@
  *   6. manual   — прямые значения каналов из setChannels() (перекрывают всё)
  */
 import * as THREE from 'three';
-import { ProceduralHead, DETAIL, resolveDetail, SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS } from './head-model.js';
+import { ProceduralHead, DETAIL, resolveDetail, SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS, TEETH_COLORS } from './head-model.js';
 import { MAKEUP } from './skin-decals.js';
 import {
   CHANNELS, STATE_DEFAULTS, EMOTIONS, MICRO, GESTURES, ALIASES,
@@ -1028,5 +1028,5 @@ function mirrorName(k) {
 function mirrorChannels(ch) { const o = {}; for (const k in ch) o[mirrorName(k)] = ch[k]; return o; }
 
 // реэкспорт, чтобы хватало одного импорта
-export { SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS, MAKEUP, CHANNELS, EMOTIONS, MICRO, GESTURES, ALIASES, VISEMES, WebSpeech, parseNarrative, parseEmotionString, parseMarkup, resolveEmotion };
+export { SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, TEETH_COLORS, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS, MAKEUP, CHANNELS, EMOTIONS, MICRO, GESTURES, ALIASES, VISEMES, WebSpeech, parseNarrative, parseEmotionString, parseMarkup, resolveEmotion };
 export default EmotionalHead;

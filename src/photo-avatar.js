@@ -552,6 +552,38 @@ export class Portrait {
   }
 
   /**
+   * Цвет зубов (3.9), если они видны: пиксели внутри внутреннего контура губ — светлые и малонасыщенные
+   * (тёмная полость и красный язык отсеиваются). Желтизна ((r+g)/2 − b)/L сравнивается с белком глаза
+   * того же снимка — так снимается цветовой оттенок света и камеры.
+   */
+  _teeth() {
+    this.teethTone = null;
+    const px = this.px, W = this.img.width, H = this.img.height;
+    const INNER = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95];
+    const EYES = [[33, 246, 161, 160, 159, 158, 157, 173, 133, 155, 154, 153, 145, 144, 163, 7], [263, 466, 388, 387, 386, 385, 384, 398, 362, 382, 381, 380, 374, 373, 390, 249]];
+    const inside = (poly, x, y) => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const a = px[poly[i]], b = px[poly[j]]; if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) c = !c; } return c; };
+    const sample = (poly) => {
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const i of poly) { x0 = Math.min(x0, px[i].x); x1 = Math.max(x1, px[i].x); y0 = Math.min(y0, px[i].y); y1 = Math.max(y1, px[i].y); }
+      const out = [], st = Math.max(1, Math.round((x1 - x0) / 60));
+      for (let y = Math.max(0, Math.floor(y0)); y <= Math.min(H - 1, y1); y += st) for (let x = Math.max(0, Math.floor(x0)); x <= Math.min(W - 1, x1); x += st) if (inside(poly, x, y)) { const c = this._rgb(x, y); if (c) out.push(c); }
+      return out;
+    };
+    const sat = (c) => { const M = Math.max(...c), m = Math.min(...c); return M > 0 ? (M - m) / M : 0; };
+    const yel = (c) => ((c[0] + c[1]) / 2 - c[2]) / Math.max(0.05, lum(...c));
+    const light = (arr) => { arr.sort((a, b) => lum(...b) - lum(...a)); return arr.slice(0, Math.max(1, Math.floor(arr.length * 0.3))); };
+    const mouth = sample(INNER), all = mouth.length;
+    const teeth = mouth.filter((c) => lum(...c) > 0.3 && sat(c) < 0.4);
+    if (all < 40 || teeth.length < Math.max(25, all * 0.12)) return;
+    const scl = light(EYES.flatMap(sample).filter((c) => sat(c) < 0.3));
+    if (scl.length < 8) return;
+    const t = robustColor(light(teeth.slice()));
+    const yT = yel(t), yS = scl.reduce((a, c) => a + yel(c), 0) / scl.length;
+    if (sat(t) < 0.01 && Math.abs(yS) < 1e-3) return;                     // чёрно-белый снимок — цвета нет
+    this.teethTone = { yT, yS, d: yT - yS, frac: teeth.length / all, color: t };
+  }
+
+  /**
    * Асимметрия и форма губ (3.8) по несимметризованным точкам, в системе средней линии лица.
    * Пары точек (правая, левая персонажа): толщина верхней губы — внешний ↔ внутренний контур, нижней — то же.
    */
@@ -651,6 +683,7 @@ export class Portrait {
     this.meas = M;
     this._eyeAsym();
     this._lipAsym();
+    this._teeth();
     this.expression = { smile, squint, blink, mouthOpen: gap };
   }
 
@@ -1213,6 +1246,8 @@ export class Portrait {
     if (this.hairColor) ov.hair = hex(this.hairColor.map((v) => v * 1.05));
     Object.assign(ov, this._eyeAsymOv(k, eyeR));
     Object.assign(ov, this._lipAsymOv(k, ov.mouthHW));
+    // зубы: желтизна относительно белка 0 → белые, 0.1 → жёлтые (на улыбающихся портретах 0.01–0.05)
+    if (this.teethTone) { const t = clamp(this.teethTone.d / 0.1, 0, 1); ov.teethColor = hex([0.969, 0.961, 0.941].map((v, i) => lerp(v, [0.902, 0.847, 0.69][i], t))); }
     if (this.hairGray > 0) { ov.hairGray = Math.round(this.hairGray * 100) / 100; ov.hairGrayColor = hex(this.hairGrayColor.map((v) => v * 1.05)); }
     if (this.hairVar !== null) ov.hairVar = Math.round(this.hairVar * 100) / 100;
     if (this.clothColor) ov.cloth = hex(this.clothColor);
@@ -1357,6 +1392,7 @@ export class Portrait {
       origin: [r4(c.x), r4(c.y)], lm: b64(new Uint8Array(lm.buffer)),
       meas, warnings: this.warnings, expression: Object.fromEntries(Object.entries(this.expression).map(([k, v]) => [k, r4(v)])),
       colors: { skinPhoto: rc(this.skinPhoto), skin: rc(this.skinTex), lip: rc(this.lipColor), brow: rc(this.browColor), iris: rc(this.irisColor), hair: rc(this.hairColor), cloth: rc(this.clothColor) },
+      teeth: this.teethTone ? { d: r4(this.teethTone.d) } : null,
       lidTex: rc(this.lidTex), beard: r4(this.beard), grayscale: !!this.grayscale, glasses: this.glasses || null, beardStyle: this.beardStyle || null, hat: this.hat || null,
       bs: this.bs ? Object.fromEntries(Object.entries(this.bs).filter(([, v]) => v > 0.03).map(([k, v]) => [k, Math.round(v * 100) / 100])) : null,
       hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY), r: this.hairR ? this.hairR.map(r4) : null, bang: this.bang ? { side: this.bang.side, depth: r4(this.bang.depth) } : null, gray: r4(this.hairGray || 0), grayColor: rc(this.hairGrayColor), vari: r4(this.hairVar) },
@@ -1403,6 +1439,7 @@ export class Portrait {
     p.lidTex = d.lidTex; p.beard = d.beard || 0; p.grayscale = !!d.grayscale; p.bs = d.bs || null; p.glasses = d.glasses || null; p.beardStyle = d.beardStyle || null; p.hat = d.hat || null;
     p.hairStyle = d.hair?.style ?? null; p.hairBottom = d.hair?.bottom ?? null; p.hairlineY = d.hair?.line ?? null;
     p.hairR = d.hair?.r ?? null; p.bang = d.hair?.bang ?? null;
+    p.teethTone = d.teeth ? { d: d.teeth.d } : null;
     p.hairGray = d.hair?.gray || 0; p.hairGrayColor = d.hair?.grayColor ?? null; p.hairVar = d.hair?.vari ?? null;
     p.tex = null;
     if (d.tex?.img) {
@@ -1425,7 +1462,7 @@ export class Portrait {
   get report() {
     const hx = (c) => (c ? hex(c) : null);
     return {
-      warnings: this.warnings, yaw: +this.yaw.toFixed(3), expression: this.expression, glasses: this.glasses, beard: this.beardStyle, hat: this.hat || null,
+      warnings: this.warnings, yaw: +this.yaw.toFixed(3), expression: this.expression, glasses: this.glasses, beard: this.beardStyle, hat: this.hat || null, teeth: this.teethTone ? +this.teethTone.d.toFixed(3) : null,
       hairStyle: this.hairStyle, colors: { skin: hx(this.skinTex), lip: hx(this.lipColor), brow: hx(this.browColor), iris: hx(this.irisColor), hair: hx(this.hairColor), hairGray: hx(this.hairGrayColor), cloth: hx(this.clothColor) },
       hairGray: +(this.hairGray || 0).toFixed(2), hairVar: this.hairVar === null || this.hairVar === undefined ? null : +this.hairVar.toFixed(2),
       measures: Object.fromEntries(Object.entries(this.meas).filter(([, v]) => typeof v === 'number').map(([k, v]) => [k, +(v / MEAN_M[k]).toFixed(3)])),
