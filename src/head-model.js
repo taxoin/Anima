@@ -682,6 +682,8 @@ function mergeGeos(list) {
   return out;
 }
 
+/** Материал «не рисовать» для исходных мешей после склейки (6.2): узел остаётся костью, дети рисуются как раньше. */
+const HIDDEN_MAT = new THREE.MeshBasicMaterial({ visible: false });
 /** Наушники (5.12): look.headphones — имя или { style, color }. */
 export const HEADPHONES = {
   over: { style: 'over', color: '#26282c' }, headset: { style: 'headset', color: '#2c2f35' }, earbuds: { style: 'earbuds', color: '#f2f2f0' },
@@ -983,6 +985,7 @@ export class ProceduralHead {
     this._buildHeadphones();
     this._buildMask();
 
+    this._batchAll();
     root.traverse((o) => {
       if (o.isMesh && this.shadows && !o.userData.noShadow) { o.castShadow = true; o.receiveShadow = true; }
     });
@@ -1837,7 +1840,7 @@ export class ProceduralHead {
       m.scale.set(Math.max(e.ax + 0.06, 0.62) * 0.97, 1, Math.max(e.az + 0.06, 0.72) * 0.97); m.position.set(0, y0 + 0.08, e.cz);
       group.add(m);
     }
-    this.hat = group;
+    this.hat = group; group.userData.batch = true;
     this.headRoot.add(group);
   }
 
@@ -1859,7 +1862,7 @@ export class ProceduralHead {
         const gem = new THREE.Mesh(this._track(new THREE.SphereGeometry(0.018 * k, 20, 14)), mat);
         gem.scale.y = 1.35; gem.position.y = -0.068 * k; g.add(gem);
       } else g.add(new THREE.Mesh(this._track(new THREE.SphereGeometry(0.014 * k, 16, 12)), mat));
-      this.headRoot.add(g);
+      g.userData.batch = true; this.headRoot.add(g);
     }
   }
 
@@ -1899,7 +1902,7 @@ export class ProceduralHead {
         const stem = new THREE.Mesh(this._track(new THREE.CapsuleGeometry(0.011 * es, 0.09 * es, 4, 10)), mat); stem.position.set(sg * 0.008, -0.065 * es, 0.012); stem.rotation.z = sg * 0.12; b.add(stem);
         g.add(b);
       }
-      this.headRoot.add(g); this.headphones = g; return;
+      g.userData.batch = true; this.headRoot.add(g); this.headphones = g; return;
     }
     // чашки: по контуру головы с волосами в стороны от ушей
     const sides = style === 'headset' ? [1, -1] : [1, -1];
@@ -1937,7 +1940,7 @@ export class ProceduralHead {
       g.add(new THREE.Mesh(this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(path), 48, 0.009, 8, false)), mat));
       const mic = new THREE.Mesh(this._track(new THREE.CapsuleGeometry(0.02, 0.035, 6, 12)), soft); mic.position.copy(tip); mic.rotation.z = Math.PI / 2 - 0.3; g.add(mic);
     }
-    this.headRoot.add(g); this.headphones = g;
+    g.userData.batch = true; this.headRoot.add(g); this.headphones = g;
   }
 
   /**
@@ -1999,7 +2002,7 @@ export class ProceduralHead {
       const a = new THREE.Vector3(rest[i * 3], rest[i * 3 + 1], hm.get(rest[i * 3], rest[i * 3 + 1]) + rest[i * 3 + 2]);
       const b = new THREE.Vector3(sg * (w + 0.02), ey, -0.12), m = new THREE.Vector3(sg * (w - 0.02), lerp(a.y, ey, 0.5), lerp(a.z, -0.05, 0.6));
       const s2 = new THREE.Mesh(this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([a, m, b]), 16, 0.006, 5, false)), strapMat);
-      s2.renderOrder = 30; this.headRoot.add(s2);
+      s2.renderOrder = 30; s2.userData.batch = true; this.headRoot.add(s2);
     }
     void eyeY;
   }
@@ -2058,7 +2061,7 @@ export class ProceduralHead {
       inner.position.set(sg * 0.25, -0.05, 0.1);
       inner.scale.set(0.5, 0.6, 0.6);
       ear.add(inner);
-      this.headRoot.add(ear);
+      ear.userData.batch = true; this.headRoot.add(ear);
     }
   }
 
@@ -2391,6 +2394,143 @@ export class ProceduralHead {
     this.torso = this.body.children[1] || null;
   }
 
+  /**
+   * Склейка мешей ради числа вызовов отрисовки (6.2). Меши с одним материалом сливаются в один: неподвижные
+   * относительно root — в обычный меш, подвижные (веки, нижняя челюсть) — в SkinnedMesh, где каждая вершина
+   * жёстко привязана к кости своей подвижной части (movers). Исходные объекты остаются как узлы-«кости»
+   * (их по-прежнему поворачивает update), но сами не рисуются: им ставится невидимый материал.
+   * Не трогаем: динамические сетки (пересчёт на CPU), морфы, материалы со своим шейдером (onBeforeCompile).
+   */
+  _batch(root, meshes, movers = new Set(), { colorMerge = false } = {}) {
+    root.updateMatrixWorld(true);
+    const inv = root.matrixWorld.clone().invert(), groups = new Map();
+    // colorMerge: материалы одного типа, различающиеся только цветом, — в один (цвет переходит в цвет вершин)
+    const r1 = (v) => Math.round((v ?? 0) * 10) / 10;
+    const sig = (m) => !colorMerge || m.map || m.normalMap || m.alphaMap || m.transparent ? m.uuid
+      : [m.type, m.depthTest, m.depthWrite, m.stencilWrite, m.stencilFunc, m.stencilRef, m.alphaHash, m.alphaToCoverage, m.blending, Math.round((m.metalness ?? 0) * 2), Math.round((m.clearcoat ?? 0) * 2), (m.sheen ?? 0) > 0, m.emissive?.getHex() ?? 0].join('|');   // шероховатость усредняется, сторона — двусторонняя при расхождении
+    for (const m of meshes) {
+      if (!m.isMesh || m.isSkinnedMesh || !m.visible || m.material === HIDDEN_MAT) continue;
+      const g = m.geometry, mat = m.material;
+      if (g.morphAttributes.position || g.attributes.position.usage === THREE.DynamicDrawUsage || Object.prototype.hasOwnProperty.call(mat, 'onBeforeCompile')) continue;
+      const key = sig(mat);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(m);
+    }
+    const frameOf = (m) => { for (let p = m; p && p !== root; p = p.parent) if (movers.has(p)) return p; return root; };
+    let saved = 0;
+    for (const list of groups.values()) {
+      if (list.length < 2) continue;
+      const mats = [...new Set(list.map((m) => m.material))], bake = mats.length > 1;
+      let mat = mats[0];
+      if (bake) {
+        mat = this._track(mat.clone()); mat.vertexColors = true; mat.color.set('#ffffff');
+        const area = mats.map((q) => list.filter((m) => m.material === q).reduce((a, m) => a + (m.geometry.index?.count ?? m.geometry.attributes.position.count), 0));
+        const avg = (k) => mats.reduce((a, q, i) => a + (q[k] ?? 0) * area[i], 0) / area.reduce((a, b) => a + b, 0);
+        mat.roughness = avg('roughness'); if ('envMapIntensity' in mat) mat.envMapIntensity = avg('envMapIntensity');
+        if (new Set(mats.map((q) => q.side)).size > 1) mat.side = THREE.DoubleSide;
+      }
+      const frames = [...new Set(list.map(frameOf))], skinned = frames.length > 1 || frames[0] !== root;
+      const needC = !!mat.vertexColors, needUv = !!(mat.map || mat.normalMap || mat.alphaMap || mat.roughnessMap);
+      const cs = needC && list.some((m) => m.geometry.attributes.color?.itemSize === 4) ? 4 : 3;
+      const P = [], N = [], C = [], U = [], SI = [], SW = [], I = [];
+      const M4 = new THREE.Matrix4(), N3 = new THREE.Matrix3(), v = new THREE.Vector3();
+      for (const m of list) {
+        let g = m.geometry;
+        if (!g.attributes.normal) { g = g.clone(); g.computeVertexNormals(); }
+        M4.multiplyMatrices(inv, m.matrixWorld); N3.getNormalMatrix(M4);
+        const ca = m.material.vertexColors ? g.attributes.color : null, mc = bake ? m.material.color : null;
+        const pa = g.attributes.position, na = g.attributes.normal, ua = g.attributes.uv, base = P.length / 3, fi = frames.indexOf(frameOf(m));
+        for (let i = 0; i < pa.count; i++) {
+          v.fromBufferAttribute(pa, i).applyMatrix4(M4); P.push(v.x, v.y, v.z);
+          v.fromBufferAttribute(na, i).applyMatrix3(N3).normalize(); N.push(v.x, v.y, v.z);
+          if (needC) for (let k = 0; k < cs; k++) C.push((ca ? (k < ca.itemSize ? ca.array[i * ca.itemSize + k] : 1) : 1) * (mc && k < 3 ? [mc.r, mc.g, mc.b][k] : 1));
+          if (needUv) U.push(ua ? ua.getX(i) : 0, ua ? ua.getY(i) : 0);
+          if (skinned) { SI.push(fi, 0, 0, 0); SW.push(1, 0, 0, 0); }
+        }
+        if (g.index) for (let k = 0; k < g.index.count; k++) I.push(base + g.index.getX(k)); else for (let k = 0; k < pa.count; k++) I.push(base + k);
+        if (g !== m.geometry) g.dispose();
+      }
+      const geo = this._track(new THREE.BufferGeometry());
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+      if (needC) geo.setAttribute('color', new THREE.Float32BufferAttribute(C, cs));
+      if (needUv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2));
+      geo.setIndex(P.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(I, 1) : new THREE.Uint16BufferAttribute(I, 1));
+      let mesh;
+      if (skinned) {
+        geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4));
+        geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4));
+        const bones = frames.map((f) => { const b = new THREE.Bone(); f.add(b); return b; });
+        mesh = new THREE.SkinnedMesh(geo, mat);
+        root.add(mesh); root.updateMatrixWorld(true);
+        mesh.bind(new THREE.Skeleton(bones), mesh.matrixWorld);
+      } else { mesh = new THREE.Mesh(geo, mat); root.add(mesh); }
+      mesh.name = 'batch';
+      mesh.frustumCulled = false;
+      mesh.renderOrder = Math.min(...list.map((m) => m.renderOrder));
+      mesh.userData.noShadow = list.every((m) => m.userData.noShadow);
+      for (const m of list) { m.material = HIDDEN_MAT; m.castShadow = m.receiveShadow = false; m.userData.noShadow = true; }
+      saved += list.length - 1;
+    }
+    return saved;
+  }
+
+  /** Все склейки головы: глаза (веки — кости), зубы и дёсны (нижняя челюсть — кость), неподвижные аксессуары, очки, тело. */
+  _batchAll() {
+    const eyeMovers = new Set(), eyeMeshes = [];
+    for (const e of this.eyes) { eyeMovers.add(e.up); eyeMovers.add(e.lo); e.group.traverse((o) => { if (o.isMesh && o !== e.ball) eyeMeshes.push(o); }); }
+    let saved = this._batch(this.headRoot, eyeMeshes, eyeMovers, { colorMerge: true });
+    const M = this.mouth;
+    if (M?.jaw) saved += this._batch(this.headRoot, [M.teethU, M.teethL, M.gumsU, M.gumsL, M.bracesU, M.bracesL].filter(Boolean), new Set([M.jaw]));
+    const acc = [];
+    for (const c of this.headRoot.children) if (c.userData.batch) c.traverse((o) => { if (o.isMesh) acc.push(o); });
+    saved += this._batch(this.headRoot, acc, undefined, { colorMerge: true });
+    if (this.glasses) { const gl = []; this.glasses.traverse((o) => { if (o.isMesh) gl.push(o); }); saved += this._batch(this.glasses, gl, undefined, { colorMerge: true }); }
+    const body = []; this.body.traverse((o) => { if (o.isMesh) body.push(o); });
+    saved += this._batch(this.body, body, undefined, { colorMerge: true });
+    // динамические пары (пересчёт на CPU каждый кадр): после пересчёта вершины копируются в общий буфер
+    this._dyn = [];
+    const dyn = (list) => {
+      list = list.filter(Boolean);
+      if (list.length < 2 || list.some((m) => m.parent !== list[0].parent || m.material !== list[0].material || !m.matrix.equals(list[0].matrix))) return 0;
+      for (const m of list) if (!m.geometry.attributes.normal) m.geometry.computeVertexNormals();   // у динамических сеток нормали появляются только в первом кадре
+      const geo = this._track(new THREE.BufferGeometry()), names = ['position', 'normal', 'color', 'uv'].filter((k) => list.every((m) => m.geometry.attributes[k]));
+      for (const k of names) {
+        const n = list.reduce((a, m) => a + m.geometry.attributes[k].array.length, 0), arr = new Float32Array(n);
+        let o = 0; for (const m of list) { arr.set(m.geometry.attributes[k].array, o); o += m.geometry.attributes[k].array.length; }
+        const at = new THREE.BufferAttribute(arr, list[0].geometry.attributes[k].itemSize);
+        if (k === 'position' || k === 'normal') at.setUsage(THREE.DynamicDrawUsage);
+        geo.setAttribute(k, at);
+      }
+      const I = []; let base = 0;
+      for (const m of list) { const g = m.geometry; for (let i = 0; i < g.index.count; i++) I.push(base + g.index.getX(i)); base += g.attributes.position.count; }
+      geo.setIndex(I);
+      const mesh = new THREE.Mesh(geo, list[0].material);
+      mesh.name = 'batchDyn'; mesh.frustumCulled = false; mesh.renderOrder = Math.min(...list.map((m) => m.renderOrder));
+      mesh.userData.noShadow = list.every((m) => m.userData.noShadow);
+      mesh.position.copy(list[0].position); mesh.quaternion.copy(list[0].quaternion); mesh.scale.copy(list[0].scale);
+      list[0].parent.add(mesh);
+      for (const m of list) { m.material = HIDDEN_MAT; m.castShadow = m.receiveShadow = false; m.userData.noShadow = true; }
+      this._dyn.push({ mesh, list });
+      return list.length - 1;
+    };
+    saved += dyn(this.brows.map((b) => b.mesh));
+    saved += dyn([M?.lipU, M?.lipL]);
+    this.batchSaved = saved;
+  }
+
+  /** Копия пересчитанных на CPU вершин в склеенные динамические меши (см. _batchAll). */
+  _syncDyn() {
+    for (const { mesh, list } of this._dyn || []) {
+      for (const k of ['position', 'normal']) {
+        const dst = mesh.geometry.attributes[k]; if (!dst) continue; let o = 0;
+        for (const m of list) { const a = m.geometry.attributes[k]?.array; if (a) dst.array.set(a, o); o += a ? a.length : 0; }
+        dst.needsUpdate = true;
+      }
+      mesh.visible = list.some((m) => m.visible);
+    }
+  }
+
   // ------------------------------------------------------------------ кадр
   /**
    * @param {Object<string,number>} ch  ARKit-каналы 0..1
@@ -2448,6 +2588,7 @@ export class ProceduralHead {
     this._updateMouth(ch);
     this._updateBeard();
     this._updateMask();
+    this._syncDyn();
   }
 
   /** Преломление в роговице вкл/выкл (кадры для измерений рендерятся без него — см. EmotionalHead._shotFace). */
