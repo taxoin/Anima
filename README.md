@@ -52,6 +52,30 @@ npx serve .        # или: python3 -m http.server 8000
 
 `three/addons/` нужен только для `loadModel()` (glTF). Ядро без него работает.
 
+### Через npm
+
+```bash
+npm i emotional-head three
+```
+
+```js
+import { EmotionalHead } from 'emotional-head';           // ядро
+import 'emotional-head/element';                          // или Web Component <emotional-head>
+import { parseNarrative } from 'emotional-head/emotions'; // эмоции без рендера
+import { buildTimeline } from 'emotional-head/lipsync';   // разметка и таймлайн речи
+```
+
+Пакет — ES-модули без сборки, `three` — peer-зависимость, `three/addons/` подгружается лениво (glTF, экспорт). Работает в Vite, webpack, esbuild и с importmap. Собранный файл без `three` лежит в `emotional-head/min` (`dist/emotional-head.min.js`). С CDN: `https://cdn.jsdelivr.net/npm/emotional-head/dist/emotional-head.min.js` плюс importmap для `three`.
+
+**TypeScript.** Типы входят в пакет (`src/*.d.ts`): опции, все поля `look`, каналы ARKit, события с данными, отчёты фото-аватара, экспорт. Для `three` нужен `@types/three`.
+
+```ts
+import { EmotionalHead, type Look, type Channels } from 'emotional-head';
+const head = new EmotionalHead('#stage', { detail: 'adaptive', look: { outfit: 'blazer', glasses: 'round' } });
+head.on('detailChange', (e) => console.log(e.detail, e.pixelRatio));   // e типизирован по имени события
+head.setChannels({ jawOpen: 0.3, mouthSmileLeft: 0.5 } satisfies Channels);
+```
+
 ### Структура
 
 ```
@@ -64,6 +88,8 @@ src/gltf-head.js         адаптер внешних glTF/GLB с ARKit-мор�
 src/photo-avatar.js      голова по фотографии: MediaPipe, шарж, кожа со снимка (ленивая загрузка)
 src/skin-decals.js       слой рисунка на коже: макияж, веснушки, родинки, морщины, щетина
 src/element.js           Web Component <emotional-head>
+src/export-glb.js        экспорт головы в glTF/GLB (ленивая загрузка)
+src/*.d.ts               типы TypeScript
 examples/                minimal.html, web-component.html, embed.html + iframe-host.html
 tests/                   визуальные регрессионные тесты и метрика сходства (см. «Тесты»)
 docs/samples/            портреты для демо: «Мона Лиза» (скан C2RMF) и Линкольн (А. Гарднер, 1863) — общественное достояние, Wikimedia Commons
@@ -563,6 +589,7 @@ npm run test:likeness         # метрика сходства на docs/sample
 node tests/calibrate.mjs dir  # калибровка основы через рендер → BASE_CORR для photo-avatar.js
 npm run fetch:portraits       # размеченный набор: 136 портретов с Wikimedia Commons → dev/portraits/
 npm run test:detect           # точность детекторов по фото (очки, уборы, борода, седина, зубы, одежда…); -- --errors — список ошибок
+npm run test:types            # типы: tests/types/usage.ts в strict-режиме (и ожидаемые ошибки ловятся)
 ```
 
 Визуальные тесты рассчитаны на запуск в GitHub Actions на каждый push и pull request (`.github/workflows/visual.yml`): Chrome той же основной версии, что отрисовала эталоны (149), при падении карты различий выгружаются артефактом `visual-diff`. Если эталоны перерисованы в другой версии Chrome, поменяйте `chrome-version` в workflow.
@@ -581,6 +608,8 @@ npm run test:detect           # точность детекторов по фо�
 **План развития** (причёски, разрез глаз, зубы, форма лица, аксессуары) со сводным TODO по сложности и эффекту описан в [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ### Сборка в один файл (необязательно)
+
+`npm run build` (выполняется и перед `npm pack` / `npm publish`):
 
 ```bash
 npx esbuild src/element.js --bundle --minify --format=esm --external:three --external:'three/addons/*' --outfile=dist/emotional-head.min.js

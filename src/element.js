@@ -14,8 +14,8 @@ import { EmotionalHead } from './emotional-head.js';
 
 const METHODS = ['setEmotion', 'addEmotion', 'getEmotion', 'getState', 'micro', 'gesture', 'express', 'speak', 'speakAudio', 'listenStream',
   'stopSpeaking', 'setGender', 'lookAt', 'followPointer', 'setIdle', 'setChannels', 'clearChannels', 'setLighting', 'setBackground',
-  'setFraming', 'loadModel', 'useProcedural', 'snapshot', 'fromPhoto', 'setPhotoOptions', 'clearPhoto', 'exportAvatar', 'importAvatar', 'exportGLB', 'setLook', 'getLook', 'setDetail', 'getDetail', 'pause', 'resume', 'likeness', 'refinePhoto', 'refineShape'];
-const EVENTS = ['emotionChange', 'speakStart', 'speakEnd', 'word', 'cue', 'gesture', 'micro', 'express', 'genderChange', 'blink', 'modelLoaded', 'photoAvatar', 'lookChange'];
+  'setFraming', 'loadModel', 'useProcedural', 'snapshot', 'fromPhoto', 'setPhotoOptions', 'clearPhoto', 'exportAvatar', 'importAvatar', 'exportGLB', 'setLook', 'getLook', 'setDetail', 'getDetail', 'getAdaptive', 'pause', 'resume', 'likeness', 'refinePhoto', 'refineShape'];
+const EVENTS = ['emotionChange', 'speakStart', 'speakEnd', 'word', 'cue', 'gesture', 'micro', 'express', 'genderChange', 'blink', 'modelLoaded', 'photoAvatar', 'lookChange', 'detailChange'];
 
 export class EmotionalHeadElement extends HTMLElement {
   static get observedAttributes() { return ['gender', 'emotion', 'intensity', 'restraint', 'background', 'lighting', 'framing', 'idle', 'follow-pointer', 'detail']; }
