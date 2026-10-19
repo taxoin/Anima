@@ -803,6 +803,42 @@ function hairCardTexture(T) {
 }
 
 /** Раскачка волос в вершинном шейдере: transformed += uHairSwing · hairSw (атрибут; нет атрибута — 0). */
+/**
+ * Несколько вставок в шейдер одного материала (декали, рассеяние в коже…): складываются, а не перетирают друг друга.
+ * Клон материала (Material.clone) вставки не наследует — их добавляют заново.
+ */
+function addShaderPatch(mat, key, fn, safe = false) {
+  let L = mat.userData.patches;
+  if (!Array.isArray(L) || L.some((p) => typeof p.fn !== 'function')) L = mat.userData.patches = [];
+  const i = L.findIndex((p) => p.key === key);
+  if (i >= 0) L[i] = { key, fn, safe }; else L.push({ key, fn, safe });   // safe — только освещение во фрагменте: склейке мешей не мешает
+  mat.onBeforeCompile = (sh) => { for (const p of L) p.fn(sh); };
+  mat.customProgramCacheKey = () => L.map((p) => p.key).join('|');
+  mat.needsUpdate = true;
+}
+
+/**
+ * Подповерхностное рассеяние кожи (8.2), приближённо: к обычному освещению добавляется «завёрнутый» за терминатор
+ * свет (wrap), у красного канала шире — граница света и тени тёплая и мягкая, как у кожи, а не пластика. В тени
+ * добавки нет: тень уже учтена в directLight.color. strength 0 — выкл.
+ */
+function skinScatter(strength) {
+  return (sh) => {
+    sh.uniforms.uSss = { value: strength };
+    sh.fragmentShader = sh.fragmentShader.replace('#include <lights_physical_pars_fragment>', `#include <lights_physical_pars_fragment>
+uniform float uSss;
+void RE_Direct_Skin( const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {
+	RE_Direct_Physical( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );
+	float nl = dot( geometryNormal, directLight.direction );
+	vec3 wrapW = vec3( 0.6, 0.32, 0.22 );                                // красный «заходит» за терминатор дальше
+	vec3 wrapped = max( vec3( 0.0 ), ( vec3( nl ) + wrapW ) / ( 1.0 + wrapW ) ) - max( nl, 0.0 );
+	reflectedLight.directDiffuse += uSss * wrapped * directLight.color * BRDF_Lambert( material.diffuseColor );
+}
+#undef RE_Direct
+#define RE_Direct RE_Direct_Skin`);
+  };
+}
+
 function hairSwayShader(mat, uniforms, key, spec2 = null) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uHairSwing = uniforms.uHairSwing;
@@ -944,7 +980,7 @@ export class ProceduralHead {
     this.mat = {
       skin: this._track(new THREE.MeshPhysicalMaterial({
         color: P.skin, roughness: 0.55, metalness: 0, vertexColors: true,
-        sheen: 0.45, sheenRoughness: 0.5, sheenColor: new THREE.Color(P.skin).multiplyScalar(1.25).lerp(new THREE.Color('#ff9a80'), 0.5),   // подповерхностный «тёплый» отсвет в тон кожи
+        sheen: P.skinScatter === false ? 0.45 : 0.3, sheenRoughness: 0.5, sheenColor: new THREE.Color(P.skin).multiplyScalar(1.25).lerp(new THREE.Color('#ff9a80'), 0.5),   // подповерхностный «тёплый» отсвет в тон кожи
         clearcoat: 0.06, clearcoatRoughness: 0.5, envMapIntensity: 0.6,
       })),
       lid: null,
@@ -981,6 +1017,8 @@ export class ProceduralHead {
     this.mat.neck = this._track(this.mat.skin.clone());
     this.mat.neck.vertexColors = false;
     this.mat.neck.color = P.neckSkin ? new THREE.Color(P.neckSkin) : new THREE.Color(P.skin).multiplyScalar(0.92);   // по фото — тон низа лица (7.3)
+    const sss = P.skinScatter === false ? 0 : P.skinScatter ?? 0.7;   // 8.2: рассеяние в коже — кожа, веки, шея и уши
+    if (sss > 0) for (const m of [this.mat.skin, this.mat.lid, this.mat.neck]) addShaderPatch(m, 'skin-scatter', skinScatter(sss), true);
 
     // --- иерархия: root → body; root → headPivot → headRoot → части лица
     this.body = new THREE.Group();
@@ -1176,15 +1214,13 @@ export class ProceduralHead {
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 4;
     const m = this.mat.skin;
-    m.onBeforeCompile = (sh) => {
+    addShaderPatch(m, 'skin-decals', (sh) => {
       sh.uniforms.decalMap = { value: tex };
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec2 decalUv;\nvarying vec2 vDecalUv;')
         .replace('#include <uv_vertex>', '#include <uv_vertex>\n\tvDecalUv = decalUv;');
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D decalMap;\nvarying vec2 vDecalUv;')
         .replace('#include <map_fragment>', '#include <map_fragment>\n\tdiffuseColor.rgb *= texture2D(decalMap, vDecalUv).rgb;');
-    };
-    m.customProgramCacheKey = () => 'skin-decals';
-    m.needsUpdate = true;
+    });
   }
 
   // ---------------- глаза и веки
@@ -2272,6 +2308,7 @@ export class ProceduralHead {
       }
       neckGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
       neckMat = this._track(Object.assign(this.mat.neck.clone(), { vertexColors: true }));
+      for (const pt of this.mat.neck.userData.patches || []) if (pt.fn) addShaderPatch(neckMat, pt.key, pt.fn, pt.safe);
     }
     const neck = new THREE.Mesh(neckGeo, neckMat);
     neck.position.set(0, 0, -0.15);
@@ -2451,7 +2488,8 @@ export class ProceduralHead {
     for (const m of meshes) {
       if (!m.isMesh || m.isSkinnedMesh || !m.visible || m.material === HIDDEN_MAT) continue;
       const g = m.geometry, mat = m.material;
-      if (g.morphAttributes.position || g.attributes.position.usage === THREE.DynamicDrawUsage || Object.prototype.hasOwnProperty.call(mat, 'onBeforeCompile')) continue;
+      const ownShader = Object.prototype.hasOwnProperty.call(mat, 'onBeforeCompile') && !(mat.userData.patches?.length && mat.userData.patches.every((q) => q.safe));
+      if (g.morphAttributes.position || g.attributes.position.usage === THREE.DynamicDrawUsage || ownShader) continue;
       const key = sig(mat);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(m);
@@ -2463,7 +2501,9 @@ export class ProceduralHead {
       const mats = [...new Set(list.map((m) => m.material))], bake = mats.length > 1;
       let mat = mats[0];
       if (bake) {
+        const patches = mat.userData.patches;
         mat = this._track(mat.clone()); mat.vertexColors = true; mat.color.set('#ffffff');
+        for (const pt of patches || []) if (pt.fn) addShaderPatch(mat, pt.key, pt.fn, pt.safe);   // вставки в шейдер клон не наследует
         const area = mats.map((q) => list.filter((m) => m.material === q).reduce((a, m) => a + (m.geometry.index?.count ?? m.geometry.attributes.position.count), 0));
         const avg = (k) => mats.reduce((a, q, i) => a + (q[k] ?? 0) * area[i], 0) / area.reduce((a, b) => a + b, 0);
         mat.roughness = avg('roughness'); if ('envMapIntensity' in mat) mat.envMapIntensity = avg('envMapIntensity');
