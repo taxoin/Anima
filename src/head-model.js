@@ -802,13 +802,32 @@ function hairCardTexture(T) {
 }
 
 /** Раскачка волос в вершинном шейдере: transformed += uHairSwing · hairSw (атрибут; нет атрибута — 0). */
-function hairSwayShader(mat, uniforms, key) {
+function hairSwayShader(mat, uniforms, key, spec2 = null) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uHairSwing = uniforms.uHairSwing;
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float hairSw;\nuniform vec3 uHairSwing;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n\ttransformed += uHairSwing * hairSw;');
+    if (!spec2) return;
+    // второй блик (8.1, приближение Marschner TRT): касательная пряди сдвинута к нормали, блик окрашен цветом волос
+    // и шире первого. Ключевой свет — постоянное направление в системе камеры (как у студийного света сцены).
+    sh.uniforms.uHairSpec2 = { value: spec2.k };
+    sh.uniforms.uHairShift = { value: spec2.shift };
+    sh.uniforms.uHairExp = { value: spec2.exp };
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uHairSpec2;\nuniform float uHairShift;\nuniform float uHairExp;')
+      .replace('#include <opaque_fragment>', `
+#ifdef USE_ANISOTROPY
+	{
+		vec3 hT = normalize( material.anisotropy${spec2.axis} ), hV = normalize( vViewPosition ), hL = normalize( vec3( -0.42, 0.55, 0.72 ) );
+		vec3 hT2 = normalize( hT + uHairShift * normal ), hH = normalize( hL + hV );
+		float th = dot( hT2, hH );
+		float s2 = pow( sqrt( max( 0.0, 1.0 - th * th ) ), uHairExp ) * smoothstep( -0.05, 0.35, dot( normal, hL ) );
+		vec3 tint = mix( diffuseColor.rgb, sqrt( diffuseColor.rgb ), 0.5 );   // окрашен цветом волос, но светлее (свет прошёл сквозь волос)
+		outgoingLight += tint * s2 * uHairSpec2;
+	}
+#endif
+#include <opaque_fragment>`);
   };
-  mat.customProgramCacheKey = () => key;
+  mat.customProgramCacheKey = () => key + (spec2 ? '-s2' + spec2.axis : '');
 }
 
 // ------------------------------------------------------------------ динамические геометрии
@@ -942,10 +961,11 @@ export class ProceduralHead {
       this.mat.hair.color.setRGB(lerp(1, sc.r / Math.max(0.03, hc.r), k * 0.35), lerp(1, sc.g / Math.max(0.03, hc.g), k * 0.35), lerp(1, sc.b / Math.max(0.03, hc.b), k * 0.35));
     }
     // пряди-карточки: блик как у оболочки, альфа по текстуре прядей (alpha-to-coverage — без сортировки прозрачности)
-    this.mat.hairCards = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairCardTexture(hairTone(P))), roughness: 0.5, anisotropy: (P.hairAniso ?? 0.6) * 0.5, anisotropyRotation: Math.PI / 2, sheen: 0.6, sheenColor: hairMean(hairTone(P)).multiplyScalar(2.2), sheenRoughness: 0.35, vertexColors: true, alphaToCoverage: true, alphaTest: 0.02, side: THREE.DoubleSide, envMapIntensity: 0.4 }));
+    this.mat.hairCards = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairCardTexture(hairTone(P))), roughness: 0.6, anisotropy: (P.hairAniso ?? 0.6) * 0.5, anisotropyRotation: Math.PI / 2, sheen: 0.3, sheenColor: hairMean(hairTone(P)).multiplyScalar(1.3), sheenRoughness: 0.5, vertexColors: true, alphaToCoverage: true, alphaTest: 0.02, side: THREE.DoubleSide, envMapIntensity: 0.22 }));
     this._hairU = { uHairSwing: { value: new THREE.Vector3() } };
-    hairSwayShader(this.mat.hair, this._hairU, 'hair-sway');
-    hairSwayShader(this.mat.hairCards, this._hairU, 'hair-cards-sway');
+    const S2 = P.hairSpec2 === false ? null : { k: P.hairSpec2 ?? 0.35, shift: 0.3, exp: 18, axis: P.hairSpec2Axis || 'T' };
+    hairSwayShader(this.mat.hair, this._hairU, 'hair-sway', S2);
+    hairSwayShader(this.mat.hairCards, this._hairU, 'hair-cards-sway', S2 && { ...S2, axis: P.hairSpec2AxisCards || 'T' });
     this.mat.lid = this._track(this.mat.skin.clone());
     this.mat.lid.vertexColors = true;
     this.mat.lid.side = THREE.DoubleSide;
@@ -1762,7 +1782,10 @@ export class ProceduralHead {
     geo.computeVertexNormals();
     const mesh = new THREE.Mesh(geo, this.mat.hairCards);
     mesh.name = 'hairCards';
-    mesh.userData.noShadow = true;                                    // тень по альфе не считается — тень даёт оболочка
+    // тени от прядей (8.1): своя глубина с вырезом по альфе текстуры и той же раскачкой — пряди затеняют лоб и лицо
+    const depth = this._track(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: this.mat.hairCards.map, alphaTest: 0.3, side: THREE.DoubleSide }));
+    hairSwayShader(depth, this._hairU, 'hair-cards-depth');
+    mesh.customDepthMaterial = depth;
     mesh.frustumCulled = false;
     this.headRoot.add(mesh);
     this.hairCards = mesh;
