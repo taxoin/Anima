@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Anima — бенчмарк</title>
+  <script type="importmap">
+  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+  </script>
+  <style>
+    :root { color-scheme: dark; --bg: #101216; --panel: #181b21; --line: #2a2f38; --text: #e6e8ec; --mute: #9aa1ad; --acc: #6aa8ff; --bad: #ff7a7a; --ok: #7ad99a; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, sans-serif; padding: 12px 16px 32px; }
+    h1 { font-size: 18px; margin: 4px 0 8px; }
+    p { margin: 6px 0; color: var(--mute); }
+    #stage { width: 100%; height: 46vh; min-height: 260px; border-radius: 10px; overflow: hidden; background: #000; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+    button, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+    button.primary { background: var(--acc); color: #071224; border-color: var(--acc); font-weight: 600; }
+    button:disabled { opacity: 0.5; }
+    #status { color: var(--mute); }
+    .box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; }
+    dt { color: var(--mute); } dd { margin: 0; word-break: break-word; }
+    .scroll { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; min-width: 640px; font-variant-numeric: tabular-nums; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+    th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+    th { color: var(--mute); font-weight: 500; }
+    .good { color: var(--ok); } .warn { color: #ffd27a; } .bad { color: var(--bad); }
+    textarea { width: 100%; height: 160px; background: #0b0d10; color: var(--text); border: 1px solid var(--line); border-radius: 8px; font: 12px/1.4 ui-monospace, monospace; padding: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Anima — бенчмарк производительности</h1>
+  <p>Голова говорит и двигается, пока идут замеры: 3 набора × 3 уровня детализации, около минуты. Не сворачивайте вкладку и не трогайте экран. Потом нажмите «Скопировать результаты» и пришлите текст.</p>
+  <div id="stage"></div>
+  <div class="row">
+    <button class="primary" id="start">Запустить</button>
+    <select id="dur" title="Длительность замера одного варианта"><option value="4">4 с на вариант</option><option value="8">8 с на вариант</option><option value="2">2 с (быстро)</option></select>
+    <select id="dpr" title="Ограничение плотности пикселей"><option value="2">pixelRatio до 2 (как по умолчанию)</option><option value="1">pixelRatio 1</option></select>
+    <span id="status">Готово к запуску.</span>
+  </div>
+  <div class="box"><dl id="device"></dl></div>
+  <div class="box scroll"><table id="results"><thead><tr>
+    <th>набор</th><th>уровень</th><th>к/с</th><th>кадр p50, мс</th><th>p95, мс</th><th>пропуски</th><th>CPU обн., мс</th><th>CPU отрис., мс</th><th>GPU, мс</th><th>вызовы</th><th>треуг.</th>
+  </tr></thead><tbody></tbody></table></div>
+  <div class="row"><button id="copy" disabled>Скопировать результаты</button><span id="copied" class="good"></span></div>
+  <textarea id="json" readonly placeholder="Здесь появятся результаты в JSON"></textarea>
+
+  <script type="module">
+    import { EmotionalHead } from '../src/emotional-head.js';
+    import { resolveDetail } from '../src/head-model.js';
+
+    const $ = (s) => document.querySelector(s);
+    const CONFIGS = [
+      { name: 'базовая', apply: (h) => { h.options.look = {}; h.useProcedural('female'); } },
+      { name: 'тяжёлая', apply: (h) => { h.options.look = { beard: 'full', outfit: 'blazer', headphones: 'headset', glasses: 'rect' }; h.useProcedural('male'); } },
+      { name: 'фото-аватар', apply: async (h) => { await h.importAvatar('../tests/fixtures/lincoln-shape.anima.json', { gender: 'male' }); } },
+    ];
+    const LEVELS = ['high', 'medium', 'low'];
+    const TEXT = 'Это слишком банально, давайте попробуем ещё раз. Медленно, с паузами и с выражением, чтобы губы двигались всё время замера.';
+
+    // устройство
+    const probe = document.createElement('canvas').getContext('webgl2');
+    const dbg = probe?.getExtension('WEBGL_debug_renderer_info');
+    const device = {
+      ua: navigator.userAgent,
+      gpu: dbg ? probe.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : probe?.getParameter(probe.RENDERER) || 'нет WebGL2',
+      vendor: dbg ? probe.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : '',
+      dpr: window.devicePixelRatio || 1, screen: `${screen.width}×${screen.height}`,
+      cores: navigator.hardwareConcurrency || null, memoryGB: navigator.deviceMemory || null,
+      auto: resolveDetail('auto'), timerQuery: !!probe?.getExtension('EXT_disjoint_timer_query_webgl2'),
+    };
+    const showDevice = (extra = {}) => {
+      const d = { ...device, ...extra }, label = { gpu: 'GPU', vendor: 'производитель', ua: 'браузер', dpr: 'devicePixelRatio', screen: 'экран', cores: 'ядер CPU', memoryGB: 'память, ГБ', auto: "detail 'auto' →", timerQuery: 'время GPU', canvas: 'холст, px', refreshHz: 'частота экрана, Гц' };
+      $('#device').innerHTML = Object.entries(d).map(([k, v]) => `<dt>${label[k] || k}</dt><dd>${v === null || v === '' ? '—' : v === true ? 'есть' : v === false ? 'нет' : v}</dd>`).join('');
+    };
+    showDevice();
+
+    let head = null;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const pct = (a, p) => { const s = a.slice().sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : 0; };
+    const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+
+    // интервалы между кадрами — своим rAF (голова рисует в своём, в том же кадре)
+    async function frameIntervals(ms) {
+      const iv = []; let last = null; const t0 = performance.now();
+      await new Promise((res) => { const f = (now) => { if (last !== null) iv.push(now - last); last = now; if (now - t0 < ms) requestAnimationFrame(f); else res(); }; requestAnimationFrame(f); });
+      return iv;
+    }
+
+    // время CPU: обёртки вокруг обновления и отрисовки головы; время GPU — запросы таймера, если есть
+    function instrument(h) {
+      const S = { upd: [], ren: [], gpu: [], pending: [] };
+      const gl = h.renderer.getContext(), ext = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+      const upd = h._update.bind(h), ren = h._render.bind(h);
+      h._update = (dt) => { const a = performance.now(); upd(dt); S.upd.push(performance.now() - a); };
+      h._render = () => {
+        let q = null;
+        if (ext && S.pending.length < 4) { q = gl.createQuery(); gl.beginQuery(ext.TIME_ELAPSED_EXT, q); }
+        const a = performance.now(); ren(); S.ren.push(performance.now() - a);
+        if (q) { gl.endQuery(ext.TIME_ELAPSED_EXT); S.pending.push(q); }
+        for (let i = S.pending.length - 1; i >= 0; i--) {
+          const p = S.pending[i];
+          if (!gl.getQueryParameter(p, gl.QUERY_RESULT_AVAILABLE)) continue;
+          if (!gl.getParameter(ext.GPU_DISJOINT_EXT)) S.gpu.push(gl.getQueryParameter(p, gl.QUERY_RESULT) / 1e6);
+          gl.deleteQuery(p); S.pending.splice(i, 1);
+        }
+      };
+      S.reset = () => { S.upd.length = 0; S.ren.length = 0; S.gpu.length = 0; };
+      return S;
+    }
+
+    async function run() {
+      $('#start').disabled = true; $('#copy').disabled = true; $('#copied').textContent = '';
+      $('#results tbody').innerHTML = '';
+      const dur = +$('#dur').value * 1000, maxPR = +$('#dpr').value;
+      if (head) head.dispose();
+      head = new EmotionalHead('#stage', { gender: 'female', background: 'dark', detail: 'high', maxPixelRatio: maxPR, idle: true });
+      const S = instrument(head);
+      // частота экрана: голова на паузе, пустые кадры
+      head.pause(); $('#status').textContent = 'Меряю частоту экрана…';
+      await sleep(300);
+      const base = await frameIntervals(1200), period = pct(base, 0.5) || 16.7;
+      head.resume();
+      const c = head.renderer.domElement;
+      showDevice({ canvas: `${c.width}×${c.height}`, refreshHz: Math.round(1000 / period) });
+      const rows = [];
+      for (const cfg of CONFIGS) for (const lvl of LEVELS) {
+        $('#status').textContent = `${cfg.name}, ${lvl}: сборка…`;
+        head.options.detail = lvl;
+        const tb = performance.now();
+        await cfg.apply(head);
+        if (head.getDetail() !== lvl) head.setDetail(lvl);
+        const build = performance.now() - tb;
+        head.setEmotion('contempt + slight_amusement', 0.8, 0.3);
+        head.speak(TEXT, { voice: false });
+        $('#status').textContent = `${cfg.name}, ${lvl}: прогрев…`;
+        await sleep(1000);
+        S.reset();
+        $('#status').textContent = `${cfg.name}, ${lvl}: замер ${dur / 1000} с…`;
+        const iv = await frameIntervals(dur);
+        head.renderer.render(head.scene, head.camera);
+        const info = head.renderer.info.render;
+        const r = {
+          config: cfg.name, detail: lvl, buildMs: Math.round(build),
+          fps: +(1000 / mean(iv)).toFixed(1), p50: +pct(iv, 0.5).toFixed(1), p95: +pct(iv, 0.95).toFixed(1),
+          dropped: +(iv.filter((v) => v > period * 1.5).length / Math.max(1, iv.length)).toFixed(3),
+          cpuUpdate: +mean(S.upd).toFixed(2), cpuRender: +mean(S.ren).toFixed(2), gpu: S.gpu.length ? +mean(S.gpu).toFixed(2) : null,
+          calls: info.calls, triangles: info.triangles,
+        };
+        rows.push(r);
+        const cls = (v, good, warn) => (v <= good ? 'good' : v <= warn ? 'warn' : 'bad');
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${r.config}</td><td>${r.detail}</td><td class="${r.fps >= 1000 / period * 0.95 ? 'good' : r.fps >= 30 ? 'warn' : 'bad'}">${r.fps}</td><td>${r.p50}</td><td>${r.p95}</td>`
+          + `<td class="${cls(r.dropped, 0.02, 0.1)}">${(r.dropped * 100).toFixed(1)} %</td><td>${r.cpuUpdate}</td><td>${r.cpuRender}</td><td>${r.gpu ?? '—'}</td>`
+          + `<td class="${cls(r.calls, 25, 45)}">${r.calls}</td><td class="${cls(r.triangles, 60000, 120000)}">${(r.triangles / 1000).toFixed(0)} тыс.</td>`;
+        $('#results tbody').append(tr);
+        head.stopSpeaking?.();
+      }
+      const out = { bench: 'anima', v: 1, date: new Date().toISOString(), url: location.href, maxPixelRatio: maxPR, durationS: dur / 1000, device: { ...device, canvas: `${c.width}×${c.height}`, refreshHz: Math.round(1000 / period) }, results: rows };
+      $('#json').value = JSON.stringify(out, null, 1);
+      $('#status').textContent = 'Готово.';
+      $('#start').disabled = false; $('#copy').disabled = false;
+      window.benchResult = out;
+    }
+
+    $('#start').onclick = () => run().catch((e) => { $('#status').textContent = 'Ошибка: ' + e.message; $('#start').disabled = false; console.error(e); });
+    $('#copy').onclick = async () => {
+      try { await navigator.clipboard.writeText($('#json').value); $('#copied').textContent = 'Скопировано'; }
+      catch { $('#json').select(); $('#copied').textContent = 'Выделено — скопируйте вручную'; }
+    };
+    const qs = new URLSearchParams(location.search);
+    if (qs.get('dur')) { const o = new Option(qs.get('dur') + ' с', qs.get('dur')); $('#dur').append(o); $('#dur').value = qs.get('dur'); }
+    if (qs.has('auto')) run();
+  </script>
+</body>
+</html>
