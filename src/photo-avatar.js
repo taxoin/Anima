@@ -483,7 +483,7 @@ export class Portrait {
     this.px = L.map((p) => ({ x: p.x * W, y: p.y * H, z: p.z * W }));
     this._initFrame();
     this.warnings = [];
-    if (Math.abs(this.yaw) > 0.12) this.warnings.push('Лицо заметно повёрнуто — сходство будет хуже. Лучше фото анфас.');
+    this.issues = [];
 
     this._measure();
     this._colors();
@@ -492,7 +492,27 @@ export class Portrait {
     this._glasses();
     this._hat();
     this._texture();
+    this._explain();
     this._fits = new Map();
+  }
+
+  /**
+   * Понятные предупреждения (7.4): почему что-то не подобралось. Текст — в warnings, код — в issues
+   * (yaw, bw, sepia, teeth, torso, shoulders, small) для программной обработки.
+   */
+  _explain() {
+    const W = this.img.width, H = this.img.height, add = (code, text) => { this.issues.push(code); this.warnings.push(text); };
+    const ay = Math.abs(this.yaw);
+    if (ay > 0.12) add('yaw', 'Лицо заметно повёрнуто — сходство будет хуже, лучше фото анфас.' + (ay >= 0.15 ? ' Асимметрия глаз и губ не перенесена (поворот её искажает).' : ' Асимметрия глаз и губ перенесена частично.'));
+    else if (ay > 0.05) add('yaw', 'Лицо слегка повёрнуто: асимметрия глаз и губ перенесена частично.');
+    if (this.outfitRaw?.bw) {
+      add(this.outfitRaw.sepia ? 'sepia' : 'bw', (this.outfitRaw.sepia ? 'Тонированный снимок (сепия)' : 'Чёрно-белый снимок') + ': кожа — в типовом тоне, цвет губ и глаз — по умолчанию; седина, цвет зубов и открытый вырез не определяются. Задать вручную: setLook({ skin, iris, lip }).');
+    } else if (!this.teethTone) add('teeth', 'Зубы на снимке не видны — цвет зубов по умолчанию (setLook({ teethColor })).');
+    const inImg = (x, y) => { const p = this.fromHead(x, y); return p.x >= 0 && p.y >= 0 && p.x < W && p.y < H; };
+    if (!inImg(0, -1.5)) add('torso', 'Шея и грудь не попали в кадр — одежда и её цвет по умолчанию (setLook({ outfit, cloth })).');
+    else if (!inImg(-0.8, -2.0) || !inImg(0.8, -2.0)) add('shoulders', 'Плечи обрезаны — пиджак и вырез не определяются, берётся только цвет одежды.');
+    const eyePx = Math.hypot(this.px[33].x - this.px[263].x, this.px[33].y - this.px[263].y);
+    if (eyePx < 70) add('small', `Лицо на снимке мелкое (${Math.round(eyePx)} px между уголками глаз) — брови, губы, зубы и борода определяются хуже. Лучше от 100 px.`);
   }
 
   /** Система координат головы по точкам this.px (общая для анализа и импорта). */
@@ -840,7 +860,7 @@ export class Portrait {
     const shirtPx = Cs ? A.filter((c) => !isSkin(c) && lum(...c) > lum(...Cs) + 0.25 && d(c, Cs) > 0.3) : [];
     const Csh = shirtPx.length > 8 ? robustColor(shirtPx.slice()) : null;
     const tiePx = Csh ? T.filter((c) => !isSkin(c) && d(c, Csh) > 0.18) : [];   // галстук бывает в тон пиджаку — «не рубашка»
-    this.outfitRaw = { bw, spread, skinA: frac(A), skinW: frac(Aw), shirt: Cs ? shirtPx.length / A.length : 0, tie: T.length ? tiePx.length / T.length : 0,
+    this.outfitRaw = { bw, sepia: bw && sat(sk) >= 0.04, spread, skinA: frac(A), skinW: frac(Aw), shirt: Cs ? shirtPx.length / A.length : 0, tie: T.length ? tiePx.length / T.length : 0,
       Cs, Csh, Ct: tiePx.length > 5 ? robustColor(tiePx.slice()) : null };
   }
 
@@ -1192,7 +1212,7 @@ export class Portrait {
     // чёрно-белое фото: раскрашиваем в тон кожи по умолчанию, светотень сохраняется
     let sat = 0, ns = 0;
     for (let i = 0; i < n; i += 11) if (valid[i] > 0.95) { sat += Math.max(R[i], G[i], B[i]) - Math.min(R[i], G[i], B[i]); ns++; }
-    this.grayscale = ns > 0 && sat / ns < 0.025;
+    this.grayscale = (ns > 0 && sat / ns < 0.025) || !!this.outfitRaw?.bw;   // тонированные (сепия) — тоже в типовой тон кожи
     if (this.grayscale) {
       const tone = [0.87, 0.66, 0.55];
       let ml = 0, nl = 0;
@@ -1504,7 +1524,7 @@ export class Portrait {
     const d = {
       format: 'anima-portrait', v: 1,
       origin: [r4(c.x), r4(c.y)], lm: b64(new Uint8Array(lm.buffer)),
-      meas, warnings: this.warnings, expression: Object.fromEntries(Object.entries(this.expression).map(([k, v]) => [k, r4(v)])),
+      meas, warnings: this.warnings, issues: this.issues || [], expression: Object.fromEntries(Object.entries(this.expression).map(([k, v]) => [k, r4(v)])),
       colors: { skinPhoto: rc(this.skinPhoto), skin: rc(this.skinTex), skinLow: rc(this.skinLow), lip: rc(this.lipColor), brow: rc(this.browColor), iris: rc(this.irisColor), hair: rc(this.hairColor), cloth: rc(this.clothColor) },
       teeth: this.teethTone ? { d: r4(this.teethTone.d) } : null,
       outfit: this.outfitRaw ? { ...this.outfitRaw, spread: undefined, Cs: rc(this.outfitRaw.Cs), Csh: rc(this.outfitRaw.Csh), Ct: rc(this.outfitRaw.Ct) } : null,
@@ -1547,7 +1567,7 @@ export class Portrait {
     p._initFrame();
     p._eyeAsym();
     p._lipAsym();
-    p.meas = d.meas; p.warnings = d.warnings || []; p.expression = d.expression || {};
+    p.meas = d.meas; p.warnings = d.warnings || []; p.issues = d.issues || []; p.expression = d.expression || {};
     const C = d.colors || {};
     p.skinPhoto = C.skinPhoto || C.skin || [0.85, 0.68, 0.58]; p.skinTex = C.skin || p.skinPhoto; p.skinLow = C.skinLow || null;
     p.lipColor = C.lip; p.browColor = C.brow; p.irisColor = C.iris; p.hairColor = C.hair; p.clothColor = C.cloth;
@@ -1578,7 +1598,7 @@ export class Portrait {
   get report() {
     const hx = (c) => (c ? hex(c) : null);
     return {
-      warnings: this.warnings, yaw: +this.yaw.toFixed(3), expression: this.expression, glasses: this.glasses, beard: this.beardStyle, hat: this.hat || null, teeth: this.teethTone ? +this.teethTone.d.toFixed(3) : null, outfit: this._outfitOv(this._gender || 'male').outfit || null,
+      warnings: this.warnings, issues: this.issues || [], yaw: +this.yaw.toFixed(3), expression: this.expression, glasses: this.glasses, beard: this.beardStyle, hat: this.hat || null, teeth: this.teethTone ? +this.teethTone.d.toFixed(3) : null, outfit: this._outfitOv(this._gender || 'male').outfit || null,
       hairStyle: this.hairStyle, colors: { skin: hx(this.skinTex), lip: hx(this.lipColor), brow: hx(this.browColor), iris: hx(this.irisColor), hair: hx(this.hairColor), hairGray: hx(this.hairGrayColor), cloth: hx(this.clothColor) },
       hairGray: +(this.hairGray || 0).toFixed(2), hairVar: this.hairVar === null || this.hairVar === undefined ? null : +this.hairVar.toFixed(2),
       measures: Object.fromEntries(Object.entries(this.meas).filter(([, v]) => typeof v === 'number').map(([k, v]) => [k, +(v / MEAN_M[k]).toFixed(3)])),
