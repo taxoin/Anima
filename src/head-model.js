@@ -724,6 +724,50 @@ function lipNormalTexture() {
 }
 
 /**
+ * Normal-карта ткани торса (8.3): складки от плеч к груди, у подмышек и под воротом, плюс фактура трикотажа.
+ * Развёртка торса: u = (φ + π) / 2π (0.5 — перед), v = (y + 3.4) / 2.2. Холст общий, текстуры — свои.
+ */
+let _clothCanvas = null;
+function clothNormalTexture() {
+  if (!_clothCanvas) {
+    const W = 1024, H = 512, AU = Math.PI * 2 * 1.55, AV = 2.2;       // физический размер развёртки
+    const c = (_clothCanvas = document.createElement('canvas'));
+    c.width = W; c.height = H;
+    // складки: отрезки [x0, y0, x1, y1, высота, ширина] (x — дуга от переда), зеркально по x
+    // складки: отрезки [x0, y0, x1, y1, высота, ширина] (x — дуга от переда); стороны чуть различаются — без «нагрудника»
+    const segs = [[0.9, -1.8, 0.42, -2.6, 0.8, 0.09], [1.3, -2.05, 0.85, -3.1, 0.7, 0.1], [1.72, -2.4, 1.45, -3.25, 0.9, 0.1], [2.1, -2.25, 2.0, -3.1, 0.6, 0.12],
+      [-1.0, -1.85, -0.5, -2.8, 0.75, 0.1], [-1.38, -2.2, -0.72, -3.2, 0.65, 0.1], [-1.8, -2.3, -1.5, -3.2, 0.85, 0.1], [-2.15, -2.4, -2.05, -3.2, 0.6, 0.12],
+      [-0.4, -2.08, 0.42, -2.0, 0.35, 0.13], [-0.3, -2.42, 0.35, -2.5, 0.25, 0.14]];
+    const h = new Float32Array(W * H);
+    for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
+      const x = (px / W - 0.5) * AU, y = -3.4 + (1 - py / H) * AV;
+      let v = 0;
+      for (const [x0, y0, x1, y1, a, w] of segs) {
+        const dx = x1 - x0, dy = y1 - y0, L2 = dx * dx + dy * dy, t = clamp(((x - x0) * dx + (y - y0) * dy) / L2, 0, 1);
+        const d = Math.hypot(x - x0 - t * dx, y - y0 - t * dy), taper = Math.sin(Math.PI * Math.min(1, 0.08 + t * 0.92));
+        v += a * taper * Math.exp(-((d / w) ** 2));
+      }
+      v *= 0.11;
+      v += 0.006 * Math.sin(x * 3.1 + Math.sin(y * 2.3)) * Math.sin(y * 4.7 + x * 0.8);                   // мягкие неровности
+      v += 0.0012 * Math.sin(x * 180) * (0.6 + 0.4 * Math.sin(y * 360));                                   // трикотаж: вертикальные рубчики
+      h[py * W + px] = v;
+    }
+    const g = c.getContext('2d'), im = g.createImageData(W, H), d = im.data, sx = W / AU, sy = H / AV;
+    for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
+      const at = (X, Y) => h[clamp(Y, 0, H - 1) * W + ((X + W) % W)];
+      const gx = (at(px + 1, py) - at(px - 1, py)) * sx / 2, gy = (at(px, py - 1) - at(px, py + 1)) * sy / 2;   // вверх по холсту — +v
+      const n = Math.hypot(gx, gy, 1), k = (py * W + px) * 4;
+      d[k] = (-gx / n * 0.5 + 0.5) * 255; d[k + 1] = (-gy / n * 0.5 + 0.5) * 255; d[k + 2] = (1 / n * 0.5 + 0.5) * 255; d[k + 3] = 255;
+    }
+    g.putImageData(im, 0, 0);
+  }
+  const t = new THREE.CanvasTexture(_clothCanvas);
+  t.wrapS = THREE.RepeatWrapping;
+  t.anisotropy = 4;
+  return t;
+}
+
+/**
  * Окраска прядей (1.5): седина, мелирование, разброс оттенков. P → { base, gray, grayCol, streak, streakCol, vari }.
  * hairGray — доля седых волосков (1 — полностью седые), hairGrayColor; hairStreaks — доля прядей мелирования
  * (пучками), hairStreakColor; hairVar — разброс яркости волосков (1 — по умолчанию, 0.3 — ровный цвет).
@@ -2282,7 +2326,7 @@ export class ProceduralHead {
     const top = P.hairStyle === 'long' ? -1.56 : -1.38;
     const topR = P.hairStyle === 'long' ? r * 2.05 : r * 1.45;
     const clothPts = [[topR * 0.97, top + 0.02], [topR, top], [topR * 1.02, top - 0.03], [1.05, -1.74], [1.36, -1.9], [1.55, -2.15], [1.64, -2.6], [1.66, -3.4]];
-    const outfit = OUTFITS[P.outfit] ? P.outfit : null;
+    const outfit = OUTFITS[P.outfit] ? P.outfit : 'crew';               // одна ветка кода (8.3): по умолчанию — круглый ворот
     // шея; под вырезом одежды кожа груди повторяет профиль торса (чуть глубже), иначе в V-вырезе видна «пустота»
     const Rof = (y) => {                                                // радиус торса на высоте y (по профилю)
       if (y >= clothPts[1][1]) return topR;
@@ -2292,7 +2336,7 @@ export class ProceduralHead {
       }
       return clothPts[clothPts.length - 1][0];
     };
-    const neckPts = (outfit && outfit !== 'crew' && outfit !== 'turtleneck' && outfit !== 'hoodie'
+    const neckPts = (outfit !== 'crew' && outfit !== 'turtleneck' && outfit !== 'hoodie'
       ? [[r, -0.45], [r * 0.97, -0.9], [r * 1.05, -1.25], [r * 1.5, -1.5], ...[-1.62, -1.74, -1.9, -2.15, -2.6].map((y) => [Math.max(r * 1.5, Rof(y) * 0.965), y])]
       : [[r, -0.45], [r * 0.97, -0.9], [r * 1.05, -1.25], [r * 1.5, -1.5], [r * 2.6, -1.72], [r * 3.6, -1.92]]).map(([x, y]) => new THREE.Vector2(x, y));
     const neckGeo = this._track(new THREE.LatheGeometry(neckPts, 48));   // шея и ворот — одинаковые грани на всех уровнях (иначе кожа просвечивает у ворота)
@@ -2313,14 +2357,6 @@ export class ProceduralHead {
     const neck = new THREE.Mesh(neckGeo, neckMat);
     neck.position.set(0, 0, -0.15);
     this.body.add(neck);
-    if (!outfit) {                                                      // по умолчанию — прежний круглый ворот (тело вращения)
-      const clothGeo = this._track(new THREE.LatheGeometry(clothPts.map(([x, y]) => new THREE.Vector2(x, y)), 64));
-      clothGeo.scale(1, 1, 0.6);
-      this.torso = new THREE.Mesh(clothGeo, this.mat.cloth);
-      this.torso.position.set(0, 0, -0.15);
-      this.body.add(this.torso);
-      return;
-    }
     this._buildOutfit(outfit, { r, top, topR, Rof });
   }
 
@@ -2336,7 +2372,7 @@ export class ProceduralHead {
     const mat2 = this._track(new THREE.MeshStandardMaterial({ color: P.cloth2 || O.cloth2 || '#e9e7e2', roughness: 0.75, side: THREE.DoubleSide }));
     const add = (geo, mat) => { geo.computeVertexNormals(); const m = new THREE.Mesh(this._track(geo), mat); this.body.add(m); return m; };
     // сетка-полоса: rows — массивы точек одинаковой длины (closed — замкнуть по столбцам)
-    const strip = (rows, closed = false) => {
+    const strip = (rows, closed = false, uvs = null) => {
       const n = rows[0].length, pos = [], idx = [];
       for (const row of rows) for (const p of row) pos.push(p.x, p.y, p.z);
       const cols = closed ? n : n - 1;
@@ -2346,12 +2382,17 @@ export class ProceduralHead {
       }
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      if (uvs) g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
       g.setIndex(idx);
       return g;
     };
+    // ткань торса — со складками (normal-карта по развёртке u = φ, v = y); кромка выреза — тот же материал (склеивается с торсом), воротники — гладкие
+    const bodyMat = this.mat.clothBody ||= this._track(Object.assign(this.mat.cloth.clone(), {
+      normalMap: this._track(clothNormalTexture()), normalScale: new THREE.Vector2(P.clothFolds ?? 1, P.clothFolds ?? 1),
+    }));
     // торс с вырезом topFn; k — масштаб радиуса (нижний слой — чуть внутри)
-    const torso = (topFn, k = 1, mat = this.mat.cloth, phiMax = Math.PI) => {
-      const N = this._q(112, 40), ROWS = this._q(44, 18), rows = [];
+    const torso = (topFn, k = 1, mat = bodyMat, phiMax = Math.PI) => {
+      const N = this._q(112, 40), ROWS = this._q(44, 18), rows = [], uv = [];
       const full = phiMax >= Math.PI;
       for (let i = 0; i <= ROWS; i++) {
         const v = i / ROWS, row = [];
@@ -2360,15 +2401,15 @@ export class ProceduralHead {
           const t0 = topFn(phi), y = lerp(t0, -3.4, v ** 1.7);
           const p = surf(phi, y, k);
           if (i === 0) p.add(radial(phi).multiplyScalar(-0.012));       // кромка выреза чуть загнута внутрь
-          row.push(p);
+          row.push(p); uv.push((phi + Math.PI) / (Math.PI * 2), (y + 3.4) / 2.2);
         }
         rows.push(row);
       }
-      const geo = strip(rows, full);
+      const geo = strip(rows, full, uv);
       return add(geo, mat);
     };
     // кромка выреза — тонкий валик
-    const rim = (topFn, mat = this.mat.cloth, rad = 0.016, phiA = -Math.PI, phiB = Math.PI, k = 1) => {
+    const rim = (topFn, mat = bodyMat, rad = 0.016, phiA = -Math.PI, phiB = Math.PI, k = 1) => {
       const pts = [];
       for (let j = 0; j <= 96; j++) { const phi = lerp(phiA, phiB, j / 96); pts.push(surf(phi, topFn(phi), k, 0.004)); }
       const closed = phiB - phiA >= Math.PI * 2 - 1e-6;
