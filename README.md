@@ -538,6 +538,8 @@ npm run test:visual           # 47 состояний головы против 
 npm run test:visual -- --update   # принять изменения как новые эталоны
 npm run test:likeness         # метрика сходства на docs/samples (или: -- путь/к/папке --k=0,1,1.5 --realism=0.8 --shape)
 node tests/calibrate.mjs dir  # калибровка основы через рендер → BASE_CORR для photo-avatar.js
+npm run fetch:portraits       # размеченный набор: 136 портретов с Wikimedia Commons → dev/portraits/
+npm run test:detect           # точность детекторов по фото (очки, уборы, борода, седина, зубы, одежда…); -- --errors — список ошибок
 ```
 
 Визуальные тесты рассчитаны на запуск в GitHub Actions на каждый push и pull request (`.github/workflows/visual.yml`): Chrome той же основной версии, что отрисовала эталоны (149), при падении карты различий выгружаются артефактом `visual-diff`. Если эталоны перерисованы в другой версии Chrome, поменяйте `chrome-version` в workflow.

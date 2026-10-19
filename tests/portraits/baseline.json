@@ -1,0 +1,96 @@
+{
+ "date": "2026-10-19T05:55:21.018Z",
+ "n": 136,
+ "detectors": {
+  "glasses": {
+   "n": 136,
+   "positives": 38,
+   "precision": 0.8780487804878049,
+   "recall": 0.9473684210526315,
+   "accuracy": 0.9485294117647058,
+   "fp": 5,
+   "fn": 2
+  },
+  "hat": {
+   "n": 136,
+   "positives": 36,
+   "precision": 1,
+   "recall": 0.9722222222222222,
+   "accuracy": 0.9926470588235294,
+   "fp": 0,
+   "fn": 1
+  },
+  "beard": {
+   "n": 136,
+   "positives": 35,
+   "precision": 0.6666666666666666,
+   "recall": 0.05714285714285714,
+   "accuracy": 0.75,
+   "fp": 1,
+   "fn": 33
+  },
+  "moustache": {
+   "n": 136,
+   "positives": 43,
+   "precision": 0.8387096774193549,
+   "recall": 0.6046511627906976,
+   "accuracy": 0.8382352941176471,
+   "fp": 5,
+   "fn": 17
+  },
+  "gray": {
+   "n": 119,
+   "positives": 27,
+   "precision": 0.7142857142857143,
+   "recall": 0.5555555555555556,
+   "accuracy": 0.8487394957983193,
+   "fp": 6,
+   "fn": 12
+  },
+  "teeth": {
+   "n": 119,
+   "positives": 67,
+   "precision": 0.9393939393939394,
+   "recall": 0.9253731343283582,
+   "accuracy": 0.9243697478991597,
+   "fp": 4,
+   "fn": 5
+  },
+  "blazer": {
+   "n": 136,
+   "positives": 79,
+   "precision": 0.85,
+   "recall": 0.6455696202531646,
+   "accuracy": 0.7279411764705882,
+   "fp": 9,
+   "fn": 28
+  },
+  "open": {
+   "n": 119,
+   "positives": 3,
+   "precision": 0,
+   "recall": 0,
+   "accuracy": 0.9495798319327731,
+   "fp": 3,
+   "fn": 3
+  },
+  "tie": {
+   "n": 106,
+   "positives": 59,
+   "precision": 0.8235294117647058,
+   "recall": 0.4745762711864407,
+   "accuracy": 0.6509433962264151,
+   "fp": 6,
+   "fn": 31
+  },
+  "bw": {
+   "n": 136,
+   "positives": 17,
+   "precision": 0.5,
+   "recall": 0.9411764705882353,
+   "accuracy": 0.875,
+   "fp": 16,
+   "fn": 1
+  }
+ }
+}
