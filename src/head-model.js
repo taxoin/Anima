@@ -418,7 +418,7 @@ function eyeTexture(P) {
   c.width = W; c.height = H;
   const ctx = c.getContext('2d'), img = ctx.createImageData(W, H), d = img.data;
   const ci = new THREE.Color(P.iris[0]), co = new THREE.Color(P.iris[1]);
-  const pupil = P.pupil ?? 0.155, iris = 0.53, limbus = 0.6;          // роговица увеличивает радужку и зрачок примерно в 1.2 раза
+  const pupil = P.pupil ?? 0.155, iris = IRIS_A, limbus = 0.6;          // роговица увеличивает радужку и зрачок примерно в 1.2 раза
   const rnd = [];
   for (let j = 0; j < W; j++) rnd.push(Math.random());
   for (let y = 0; y < H; y++) {
@@ -477,11 +477,18 @@ function eyeballGeometry(R, ws = 48, hs = 32) {
   return geo;
 }
 
-/** Преломление в роговице для материала глаза (см. eyeballGeometry). */
-function corneaShader(mat, R, U) {
+const IRIS_A = 0.53;                           // угловой радиус радужки в eyeTexture
+
+/**
+ * Преломление в роговице для материала глаза (см. eyeballGeometry) и динамика зрачка (2.8): uPupil — масштаб
+ * зрачка, радужка между зрачком и краем сжимается/растягивается, как настоящая (узор не «наезжает» на лимб).
+ * U — { value: 1 } роговица вкл. (0 — кадры для измерений; без роговицы — всегда 0), pupilU — { value: 1 }.
+ */
+function corneaShader(mat, R, U, pupilU, pupil0) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uEyeR = { value: R };
     sh.uniforms.uCornea = U;
+    sh.uniforms.uPupil = pupilU;
     // uCornea = 0: яблоко без выпуклости (кадры для измерений) — вершины обратно на сферу радиуса R
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uEyeR;\nuniform float uCornea;\nvarying vec3 vEyeP;\nvarying vec3 vEyeN;\nvarying vec3 vEyeCam;')
       .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n\tif ( uCornea < 0.5 ) objectNormal = normalize( position );')
@@ -489,17 +496,27 @@ function corneaShader(mat, R, U) {
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
 uniform float uEyeR;
 uniform float uCornea;
+uniform float uPupil;
 varying vec3 vEyeP;
 varying vec3 vEyeN;
-varying vec3 vEyeCam;`).replace('#include <map_fragment>', `
+varying vec3 vEyeCam;
+// угол от центра зрачка на «шкале» с нарисованным зрачком: зрачок масштабируется, радужка ужимается между ним и краем
+float pupilRemap( float a ) {
+	float p = ${pupil0.toFixed(4)}, ir = ${IRIS_A.toFixed(3)}, p2 = min( p * uPupil, 0.42 );
+	if ( a < p2 ) return a * p / p2;
+	if ( a < ir ) return p + ( a - p2 ) * ( ir - p ) / ( ir - p2 );
+	return a;
+}`).replace('#include <map_fragment>', `
 #ifdef USE_MAP
 	vec4 sampledDiffuseColor = texture2D( map, vMapUv );
 	float eyeA = acos( clamp( vEyeP.z / length( vEyeP ), -1.0, 1.0 ) );
+	if ( eyeA < ${IRIS_A.toFixed(3)} && abs( uPupil - 1.0 ) > 1e-3 )
+		sampledDiffuseColor = textureGrad( map, vec2( vMapUv.x, 1.0 - pupilRemap( eyeA ) / 3.1415927 ), dFdx( vMapUv ), dFdy( vMapUv ) );
 	if ( eyeA < ${CORNEA_A.toFixed(3)} && uCornea > 0.5 ) {
 		vec3 rd = refract( normalize( vEyeP - vEyeCam ), normalize( vEyeN ), ${(1 / 1.376).toFixed(4)} );
 		if ( rd.z < -1e-3 ) {
 			vec3 q = vEyeP + rd * ( ( uEyeR * ${Math.cos(CORNEA_A).toFixed(4)} - vEyeP.z ) / rd.z );   // плоскость радужки
-			float th = asin( clamp( length( q.xy ) / uEyeR, 0.0, 1.0 ) );
+			float th = pupilRemap( asin( clamp( length( q.xy ) / uEyeR, 0.0, 1.0 ) ) );
 			float ph = atan( -q.y, -q.x );
 			if ( ph < 0.0 ) ph += 6.2831853;
 			vec4 ir = textureGrad( map, vec2( ph / 6.2831853, 1.0 - th / 3.1415927 ), dFdx( vMapUv ), dFdy( vMapUv ) );
@@ -509,7 +526,7 @@ varying vec3 vEyeCam;`).replace('#include <map_fragment>', `
 	diffuseColor *= sampledDiffuseColor;
 #endif`);
   };
-  mat.customProgramCacheKey = () => 'eye-cornea';
+  mat.customProgramCacheKey = () => 'eye-cornea-' + pupil0;   // pupil0 вшит в шейдер
   mat.needsUpdate = true;
 }
 
@@ -1065,10 +1082,10 @@ export class ProceduralHead {
     const [ews, ehs] = this.L.eye;
     const ballGeo = this._track(P.cornea === false ? new THREE.SphereGeometry(E.r, ews, ehs).rotateX(Math.PI / 2) : eyeballGeometry(E.r, ews, ehs));
     this._corneaU = { value: 1 };
-    if (P.cornea !== false) {
-      corneaShader(this.mat.eye, E.r, this._corneaU);
-      if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r, this._corneaU);
-    }
+    this._pupilU = { value: 1 };
+    const cu = P.cornea === false ? { value: 0 } : this._corneaU;    // без роговицы шейдер нужен только для зрачка
+    corneaShader(this.mat.eye, E.r, cu, this._pupilU, P.pupil ?? 0.155);
+    if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r, cu, this._pupilU, P.pupil ?? 0.155);
     const phiS = Math.PI / 2 - 1.75, phiL = 3.5;
     const upGeo = this._track(new THREE.SphereGeometry(E.rs, this.L.lid, 14, phiS, phiL, 0, Math.PI / 2));
     const loGeo = this._track(new THREE.SphereGeometry(E.rl, this.L.lid, 10, phiS, phiL, Math.PI / 2, Math.PI / 2));
@@ -1973,6 +1990,8 @@ export class ProceduralHead {
     const cs = this._morphList === MORPH_LIST_LITE ? foldLite(ch, (this._chLite ||= {})) : ch;
     for (const name in dict) inf[dict[name]] = cs[name] || 0;
 
+    // зрачок (2.8): pose.pupil −1…1.5 → масштаб exp(0.55·v): 0.5…2.3 от нарисованного
+    if (this._pupilU) this._pupilU.value = Math.exp(0.55 * clamp(pose.pupil || 0, -1.2, 1.5));
     // голова
     this.headPivot.rotation.set(pose.pitch, pose.yaw, pose.roll);
     this._updateHairSwing(pose);

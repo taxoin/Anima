@@ -45,6 +45,7 @@ export const STATE_DEFAULTS = {
   '@steady': 0.4,      // 0 — бегающий взгляд, 1 — пристальный, почти неподвижный
   '@blinkRate': 1, '@blinkSpeed': 1, '@headMotion': 1, '@artic': 1, '@microRate': 1,
   '@rate': 1, '@pitchVoice': 1,
+  '@pupil': 0,         // зрачок: −1 сужен … +1 расширен (интерес, страх, удивление; скука, отвращение — уже)
 };
 const RELATIVE_KEYS = new Set(['@aversion', '@steady', '@blinkRate', '@blinkSpeed', '@headMotion', '@artic', '@microRate', '@rate', '@pitchVoice']);
 
@@ -221,8 +222,17 @@ export const ALIASES = {
   безразличие: 'indifferent', равнодушие: 'indifferent', calm: 'neutral', нейтрально: 'neutral',
 };
 
+/**
+ * Зрачок по эмоциям (2.8): возбуждение и интерес расширяют, скука и отвращение — слегка сужают.
+ * Своё значение — поле pupil в определении эмоции.
+ */
+const PUPIL = { happy: 0.25, sad: -0.1, angry: 0.35, surprised: 0.6, fear: 0.8, disgust: -0.2, contempt: -0.05, boredom: -0.3, jaded: -0.2,
+  amusement: 0.25, irritation: 0.2, tension: 0.35, skeptical: 0.05, weary: -0.25, thinking: 0.3, curious: 0.45, determined: 0.2, indifferent: -0.2 };
+for (const k in PUPIL) if (EMOTIONS[k] && EMOTIONS[k].pupil === undefined) EMOTIONS[k].pupil = PUPIL[k];
+
 // ---------------------------------------------------------------- микро-выражения
 // Короткие (0.15–0.6 c) вспышки мимики. Добавляются поверх базы. side:'left'|'right' зеркалит асимметричные.
+
 export const MICRO = {
   contempt: { au: { mouthDimpleRight: 0.55, mouthSmileRight: 0.25 }, dur: 0.35 },
   smirkFlash: { au: { mouthSmileLeft: 0.45, mouthDimpleLeft: 0.3, cheekSquintLeft: 0.15 }, dur: 0.5 },
@@ -356,6 +366,7 @@ function emotionDelta(def, depth = 0) {
   add('@gazeX', g.x); add('@gazeY', g.y);
   if (g.aversion !== undefined) add('@aversion', g.aversion - (def.mix ? 0 : STATE_DEFAULTS['@aversion']));
   if (g.steady !== undefined) add('@steady', g.steady - (def.mix ? 0 : STATE_DEFAULTS['@steady']));
+  add('@pupil', def.pupil);
   const beh = { blinkRate: '@blinkRate', blinkSpeed: '@blinkSpeed', headMotion: '@headMotion', artic: '@artic', microRate: '@microRate', rate: '@rate', pitchVoice: '@pitchVoice' };
   for (const bk in beh) if (b[bk] !== undefined) add(beh[bk], b[bk] - 1);
   return out;

@@ -56,6 +56,8 @@ export const CASES = [
   { name: 'female-low-contempt-jaw', gender: 'female', detail: 'low', channels: { mouthDimpleRight: 0.7, mouthSmileRight: 0.38, noseSneerRight: 0.1, jawOpen: 0.3, jawLeft: 0.5, mouthFunnel: 0.4 }, framing: 'close' },
   { name: 'female-bob-streaks', gender: 'female', look: { hair: '#8a6a3a', hairStreaks: 0.8, hairStyle: 'bob' }, pose: { yaw: 0.5 } },
   { name: 'male-gray-salt-pepper-beard', gender: 'male', look: { hair: '#2a1f18', hairGray: 0.45, beard: 'full' } },
+  { name: 'female-pupil-dilated-side', gender: 'female', channels: { pupil: 1.5 }, framing: 'close', pose: { yaw: 0.45 } },
+  { name: 'male-pupil-constricted-nocornea', gender: 'male', look: { cornea: false, iris: 'blue' }, channels: { pupil: -1 }, framing: 'close' },
 ];
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg' };

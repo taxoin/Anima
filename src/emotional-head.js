@@ -566,6 +566,7 @@ export class EmotionalHead {
   /** Прямое управление каналами (перекрывает всё). setChannels({ jawOpen: .3 }); значение null — снять. */
   setChannels(obj) {
     for (const k in obj) {
+      if (k === 'pupil') { if (obj[k] === null) delete this._manual.pupil; else this._manual.pupil = obj[k]; continue; }   // зрачок: −1…1.5, мимо expandChannels
       for (const c of Object.keys(expandChannels({ [k]: 1 }))) {
         if (obj[k] === null) delete this._manual[c]; else this._manual[c] = obj[k];
       }
@@ -582,6 +583,9 @@ export class EmotionalHead {
     this.lights.hemi.color.set(L.hemi[0]); this.lights.hemi.groundColor.set(L.hemi[1]); this.lights.hemi.intensity = L.hemi[2];
     this.scene.environmentIntensity = L.env;   // three r163+; для старых версий используется envMapIntensity материалов
     this.renderer.toneMappingExposure = L.exposure;
+    // зрачок от света (2.8): рассеянный свет весит больше направленного; studio ≈ 0, тёмный noir — шире, soft — уже
+    const amb = (0.5 * L.key[1] + L.fill[1] + 2 * L.hemi[2] + 0.1 * L.rim[1]) * L.exposure ** 2;
+    this._lightPupil = clamp(-0.7 * Math.log2(Math.max(0.05, amb) / 3.02), -0.8, 0.8);
     this._lighting = preset;
     return this;
   }
@@ -594,6 +598,7 @@ export class EmotionalHead {
       ? 'radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(60,70,90,0.18) 100%)'
       : 'radial-gradient(ellipse at 50% 45%, transparent 50%, rgba(0,0,0,0.45) 100%)';
     this._background = bg;
+    this._bgPupil = bg === 'light' ? -0.3 : 0;                  // светлый фон — светлая комната: зрачок уже
     return this;
   }
 
@@ -649,7 +654,7 @@ export class EmotionalHead {
   renderStill(channels = {}, pose = {}, camera = this.camera) {
     const ch = { ...channels };                                    // + не-ARKit каналы (tongueUp)
     for (const c of CHANNELS) ch[c] = channels[c] || 0;
-    this.rig.update(ch, { pitch: 0, yaw: 0, roll: 0, eyeYaw: 0, eyePitch: 0, breath: 0, focus: 8, still: true, ...pose });   // still: волосы в равновесии
+    this.rig.update(ch, { pitch: 0, yaw: 0, roll: 0, eyeYaw: 0, eyePitch: 0, breath: 0, focus: 8, still: true, pupil: channels.pupil || 0, ...pose });   // still: волосы в равновесии
     this.renderer.render(this.scene, camera);
     return this.renderer.domElement;
   }
@@ -988,6 +993,13 @@ export class EmotionalHead {
     P.eyePitch = clamp(this._eyeW.pitch + P.pitch, -0.45, 0.45);
     P.breath = breath;
     P.focus = this.camera.position.z;
+    // зрачок (2.8): свет + эмоция (@pupil) + усилие при речи + гиппус (медленное «дыхание» зрачка);
+    // сужается быстро (~0.25 с), расширяется медленно (~1 с). setChannels({ pupil }) — вручную.
+    let pt = (this._lightPupil || 0) + (this._bgPupil || 0) + (base['@pupil'] || 0) + 0.12 * this._speechW + (idle ? 0.06 * noise(t * 1.3, 21) : 0);
+    if (typeof this._manual.pupil === 'number') pt = this._manual.pupil;
+    if (this._pupilV === undefined) this._pupilV = pt;
+    this._pupilV += (pt - this._pupilV) * Math.min(1, dt * (pt < this._pupilV ? 4 : 0.9));
+    P.pupil = this._pupilV;
     this.rig.update(out, P);
   }
 }
