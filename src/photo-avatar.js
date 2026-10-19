@@ -552,6 +552,47 @@ export class Portrait {
   }
 
   /**
+   * Асимметрия и форма губ (3.8) по несимметризованным точкам, в системе средней линии лица.
+   * Пары точек (правая, левая персонажа): толщина верхней губы — внешний ↔ внутренний контур, нижней — то же.
+   */
+  _lipAsym() {
+    const P = this.head, phi = Math.atan2(P[168].x - P[152].x, P[168].y - P[152].y), c = Math.cos(phi), s = Math.sin(phi);
+    const Y = (i) => P[i].y * c + P[i].x * s, X = (i) => P[i].x * c - P[i].y * s;
+    const hw = (X(291) - X(61)) / 2;
+    const th = (pairs) => pairs.map(([o, n]) => Math.abs(Y(o) - Y(n)));
+    const UP = [[37, 82], [267, 312], [39, 81], [269, 311], [40, 80], [270, 310]];
+    const LO = [[84, 87], [314, 317], [181, 178], [405, 402], [91, 88], [321, 318]];
+    const u = th(UP), l = th(LO), sumR = (a) => a[0] + a[2] + a[4], sumL = (a) => a[1] + a[3] + a[5];
+    const lc = Math.abs(Y(17) - Y(14)), lm = (Math.abs(Y(181) - Y(178)) + Math.abs(Y(405) - Y(402))) / 2;
+    this.lipAsymRaw = {
+      corner: (Y(291) - Y(61)) / hw,                                  // левый уголок выше правого (> 0)
+      up: (sumL(u) - sumR(u)) / (sumL(u) + sumR(u)), lo: (sumL(l) - sumR(l)) / (sumL(l) + sumR(l)),
+      loFull: lm / Math.max(1e-4, lc), xm: ((X(405) - X(181)) / 2) / hw,  // полнота нижней губы: толщина на ~середине стороны / в центре
+      shift: (X(291) + X(61)) / 2 / hw,
+    };
+  }
+
+  /**
+   * Губы → параметры (3.8). Уголки: разница высот минус поправка на поворот (−0.561·yaw, регрессия по 19 портретам;
+   * остаток анфас ±0.045 полуширины рта). Полнота нижней губы — отношение толщины на середине стороны к центру
+   * (среднее 0.775) → показатель профиля lipLoShape. Разница толщины левой и правой половин (±0.01–0.02) на уровне
+   * шума точек — по фото не переносится (только look: lipUAsym, lipLAsym).
+   */
+  _lipAsymOv(k, mouthHW) {
+    const A = this.lipAsymRaw;
+    if (!A || !(k > 0)) return {};
+    const out = {}, r = (v) => Math.round(v * 10000) / 10000;
+    const w = smoothstep(0.15, 0.05, Math.abs(this.yaw)) * k;
+    const soft = (v, t) => Math.sign(v) * Math.max(0, Math.abs(v) - t);
+    const c = clamp(soft(A.corner + 0.561 * this.yaw - 0.003, 0.03) * w, -0.15, 0.15) * mouthHW;
+    if (c) { out.mouthCornerL = r(c / 2); out.mouthCornerR = r(-c / 2); }
+    // профиль (1 − |t|^e)^0.5: на |t| = 0.55 у основы (e = 2.2) отношение 0.855 ↔ среднее фото 0.775
+    const tgt = clamp(0.855 * (1 + k * (A.loFull / 0.775 - 1)), 0.72, 0.95);
+    out.lipLoShape = r(clamp(Math.log(1 - tgt * tgt) / Math.log(0.55), 1.4, 4));
+    return out;
+  }
+
+  /**
    * Асимметрия глаз → параметры век. Поправки на поворот головы — регрессия по 19 портретам
    * (ln раскрытия: −0.96·yaw, разница высот: −0.345·yaw); остаток на портретах анфас ±0.03–0.05.
    * Мёртвая зона — шум точек; при |yaw| > 0.15 асимметрия не переносится (поворот её искажает).
@@ -609,6 +650,7 @@ export class Portrait {
     }
     this.meas = M;
     this._eyeAsym();
+    this._lipAsym();
     this.expression = { smile, squint, blink, mouthOpen: gap };
   }
 
@@ -1170,6 +1212,7 @@ export class Portrait {
     if (this.beard > 0.05) ov.stubble = this.beard * 2.2;      // борода/щетина: затемнение челюсти и усов поверх текстуры
     if (this.hairColor) ov.hair = hex(this.hairColor.map((v) => v * 1.05));
     Object.assign(ov, this._eyeAsymOv(k, eyeR));
+    Object.assign(ov, this._lipAsymOv(k, ov.mouthHW));
     if (this.hairGray > 0) { ov.hairGray = Math.round(this.hairGray * 100) / 100; ov.hairGrayColor = hex(this.hairGrayColor.map((v) => v * 1.05)); }
     if (this.hairVar !== null) ov.hairVar = Math.round(this.hairVar * 100) / 100;
     if (this.clothColor) ov.cloth = hex(this.clothColor);
@@ -1352,6 +1395,7 @@ export class Portrait {
     for (let i = 0; i < lm.length; i += 3) p.px.push({ x: ox + lm[i] / 8, y: oy + lm[i + 1] / 8, z: lm[i + 2] / 8 });
     p._initFrame();
     p._eyeAsym();
+    p._lipAsym();
     p.meas = d.meas; p.warnings = d.warnings || []; p.expression = d.expression || {};
     const C = d.colors || {};
     p.skinPhoto = C.skinPhoto || C.skin || [0.85, 0.68, 0.58]; p.skinTex = C.skin || p.skinPhoto;

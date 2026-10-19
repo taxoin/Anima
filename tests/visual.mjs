@@ -59,6 +59,7 @@ export const CASES = [
   { name: 'female-pupil-dilated-side', gender: 'female', channels: { pupil: 1.5 }, framing: 'close', pose: { yaw: 0.45 } },
   { name: 'male-pupil-constricted-nocornea', gender: 'male', look: { cornea: false, iris: 'blue' }, channels: { pupil: -1 }, framing: 'close' },
   { name: 'female-eye-asymmetry', gender: 'female', look: { eyeOpenL: 1.15, eyeOpenR: 0.87, eyeLiftL: 3, eyeLiftR: -3 }, framing: 'close' },
+  { name: 'female-lip-asymmetry', gender: 'female', look: { mouthCornerL: 0.015, mouthCornerR: -0.01, lipLAsym: 0.25, lipLoShape: 3.5 }, framing: 'close' },
 ];
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg' };

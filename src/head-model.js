@@ -1394,7 +1394,8 @@ export class ProceduralHead {
 
     const corner = (sg, sm, fr, st, dm, pr) => ({
       x: sg * P.mouthHW * (1 + 0.17 * sm + 0.3 * st + 0.1 * dm - 0.4 * puck - 0.28 * fun - 0.06 * pr) + 0.07 * shift,
-      y: 0.072 * sm - 0.065 * fr - 0.012 * st + 0.018 * dm - 0.008 * pr,
+      // асимметрия (3.8): уголок в покое выше/ниже — mouthCornerL/R (единицы головы)
+      y: 0.072 * sm - 0.065 * fr - 0.012 * st + 0.018 * dm - 0.008 * pr + ((sg > 0 ? P.mouthCornerL : P.mouthCornerR) || 0),
       z: -0.02 * sm - 0.015 * dm + 0.02 * puck,
     });
     const cL = corner(1, smL, frL, stL, dmL, prL), cR = corner(-1, smR, frR, stR, dmR, prR);
@@ -1415,8 +1416,9 @@ export class ProceduralHead {
       const D = 0.03 * lerp(ldR, ldL, f) + 0.03 * fun + 0.012 * stretch + 0.004 * puck;
       C.u[i] = C.cy[i] + U * bell + 0.012 * shU - 0.004 * rollU;
       C.l[i] = C.cy[i] - D * bell + 0.012 * shL + 0.012 * rollL;
-      C.thU[i] = thU0 * upperLipProfile(t, P);
-      C.thL[i] = thL0 * Math.pow(Math.max(0, 1 - at ** 2.2), 0.5);
+      // lipUAsym/lipLAsym > 0 — левая половина губы полнее; lipLoShape — полнота нижней губы к уголкам (больше — «квадратнее»)
+      C.thU[i] = thU0 * upperLipProfile(t, P) * (1 + (P.lipUAsym || 0) * t);
+      C.thL[i] = thL0 * Math.pow(Math.max(0, 1 - at ** (P.lipLoShape ?? 2.2)), 0.5) * (1 + (P.lipLAsym || 0) * t);
       const cw = 0.5 * at ** 4;                     // в уголках губы делят движение челюсти пополам
       C.wU[i] = cw * lowerJawW;
       C.wL[i] = (1 - cw) * lowerJawW;
