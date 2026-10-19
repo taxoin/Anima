@@ -63,6 +63,11 @@ export const CASES = [
   { name: 'female-braces-smile', gender: 'female', look: { braces: true }, channels: { ...SMILE, jawOpen: 0.22, mouthLowerDownLeft: 0.3, mouthLowerDownRight: 0.3 }, framing: 'close' },
   { name: 'male-gap-crooked-yellow', gender: 'male', look: { teethGap: 1, teethCrooked: 1, teethColor: 'yellow' }, channels: AA, framing: 'close' },
   { name: 'female-lips-protruding-profile', gender: 'female', look: { lipProfile: 'protruding' }, pose: { yaw: 1.2 } },
+  { name: 'male-blazer-tie-bust', gender: 'male', look: { outfit: 'blazer', cloth: '#2a3040', cloth2: '#dfe7f0', tie: '#7a2030' }, framing: 'bust', pose: { yaw: 0.25 } },
+  { name: 'male-hoodie-bust', gender: 'male', look: { outfit: 'hoodie', cloth: '#5a6a3a' }, framing: 'bust', pose: { yaw: -0.3 } },
+  { name: 'male-turtleneck-bust', gender: 'male', look: { outfit: 'turtleneck', cloth: '#7a5a3a' }, framing: 'bust' },
+  { name: 'female-vneck-bust', gender: 'female', look: { outfit: 'vneck', hairStyle: 'bob', cloth: '#3a5a8a' }, framing: 'bust' },
+  { name: 'female-shirt-bust', gender: 'female', look: { outfit: 'shirt', hairStyle: 'pixie', cloth: '#d8d0c0' }, framing: 'bust', pose: { yaw: 0.3 } },
 ];
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg' };

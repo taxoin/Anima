@@ -113,6 +113,10 @@
         <label>серьги</label><select id="earSel"><option value="">нет</option></select>
       </div>
       <div class="row">
+        <label>одежда</label><select id="outfitSel"><option value="">авто</option></select>
+        <label>цвет</label><input type="color" id="clothC" value="#5b1f33" title="Цвет одежды">
+      </div>
+      <div class="row">
         <label>зубы</label><select id="teethSel"><option value="">авто</option></select>
         <label>брекеты</label><select id="bracesSel"><option value="">нет</option><option value="metal">металл</option><option value="ceramic">керамика</option><option value="#3a7bd5">синие</option><option value="#e0457b">розовые</option></select>
       </div>
@@ -198,7 +202,7 @@
 </div>
 
 <script type="module">
-import { EmotionalHead, EMOTIONS, MICRO, GESTURES, CHANNELS, WebSpeech, parseNarrative, SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS, MAKEUP, TEETH_COLORS, LIP_PROFILES } from './src/emotional-head.js';
+import { EmotionalHead, EMOTIONS, MICRO, GESTURES, CHANNELS, WebSpeech, parseNarrative, SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS, MAKEUP, TEETH_COLORS, LIP_PROFILES, OUTFITS } from './src/emotional-head.js';
 
 const head = new EmotionalHead('#stage', { gender: 'female', background: 'dark', emotion: 'neutral', framing: 'portrait' });
 window.head = head; // для экспериментов в консоли
@@ -398,6 +402,9 @@ for (const [id, presets] of [['#eyeShape', EYE_SHAPES], ['#noseSel', NOSE_SHAPES
 lookSel('#noseSel', 'noseShape');
 for (const k of Object.keys(LIP_PROFILES)) $('#lipSel').append(new Option(k, k));
 lookSel('#lipSel', 'lipProfile');
+for (const k of Object.keys(OUTFITS)) $('#outfitSel').append(new Option(k, k));
+lookSel('#outfitSel', 'outfit');
+$('#clothC').addEventListener('change', (e) => { const look = head.getLook(); look.cloth = e.target.value; api(`head.setLook(${fmt(look)}, { replace: true })`, () => head.setLook(look, { replace: true })); });
 lookSel('#hairSel', 'hairStyle');
 lookSel('#beardSel', 'beard', (v) => (v === 'none' ? null : v));
 lookSel('#makeupSel', 'makeup');
@@ -415,7 +422,7 @@ for (const [id, key] of [['#ageR', 'age'], ['#frecklesR', 'freckles'], ['#grayR'
 function syncLook() {
   const lk = head.getLook(), str = (v) => (typeof v === 'string' ? v : '');
   for (const [el, key] of [['#skinSw', 'skin'], ['#eyeSw', 'iris']]) $(el).querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (typeof lk[key] === 'string' ? lk[key] : 'auto')));
-  $('#eyeShape').value = str(lk.eyeShape); $('#noseSel').value = str(lk.noseShape); $('#lipSel').value = str(lk.lipProfile); $('#glassesSel').value = lk.glasses === false ? 'none' : str(lk.glasses);
+  $('#eyeShape').value = str(lk.eyeShape); $('#noseSel').value = str(lk.noseShape); $('#lipSel').value = str(lk.lipProfile); $('#outfitSel').value = str(lk.outfit); $('#glassesSel').value = lk.glasses === false ? 'none' : str(lk.glasses);
   $('#hairSel').value = str(lk.hairStyle); $('#beardSel').value = lk.beard === null ? 'none' : str(lk.beard);
   $('#makeupSel').value = str(lk.makeup); $('#hatSel').value = str(lk.hat); $('#earSel').value = str(lk.earrings);
   $('#ageR').value = lk.age || 0; $('#frecklesR').value = lk.freckles || 0; $('#grayR').value = lk.hairGray || 0; $('#streakR').value = lk.hairStreaks || 0;
@@ -424,7 +431,7 @@ function syncLook() {
 const pick = (o) => { const k = Object.keys(o); return k[Math.floor(Math.random() * k.length)]; };
 $('#randomLook').onclick = () => {
   const male = head.gender === 'male', r = Math.random;
-  const look = { skin: pick(SKIN_TONES), iris: pick(EYE_COLORS), eyeShape: pick(EYE_SHAPES), noseShape: pick(NOSE_SHAPES), lipProfile: pick(LIP_PROFILES), hairStyle: pick(HAIR_STYLES),
+  const look = { skin: pick(SKIN_TONES), iris: pick(EYE_COLORS), eyeShape: pick(EYE_SHAPES), noseShape: pick(NOSE_SHAPES), lipProfile: pick(LIP_PROFILES), outfit: pick(OUTFITS), cloth: ['#2a3040', '#5b1f33', '#3a5a8a', '#5a6a3a', '#7a5a3a', '#d8d0c0', '#222222'][Math.floor(Math.random() * 7)], hairStyle: pick(HAIR_STYLES),
     hair: ['#1f1712', '#3a2418', '#6a4a32', '#a87a4a', '#d8b878', '#8a2a1a', '#c8c4bc'][Math.floor(r() * 7)] };
   if (r() < 0.3) look.glasses = pick(GLASSES);
   if (male && r() < 0.5) look.beard = pick(BEARDS);

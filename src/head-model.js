@@ -680,6 +680,10 @@ function mergeGeos(list) {
   return out;
 }
 
+/** Одежда (5.11): look.outfit; cloth — основной цвет, cloth2 — рубашка под пиджаком / шнурки худи, tie — галстук (цвет или false). */
+export const OUTFITS = {
+  crew: {}, vneck: {}, scoop: {}, turtleneck: {}, shirt: {}, hoodie: { cloth2: '#eeeeee' }, blazer: { cloth2: '#e9e7e2', tie: true },
+};
 /** Цвет зубов: look.teethColor — имя пресета или цвет. */
 export const TEETH_COLORS = { white: '#f7f5f0', natural: '#efe8da', ivory: '#ece0c4', yellow: '#e6d8b0', gray: '#d4d0c6' };
 /** Брекеты: look.braces — true / 'metal' / 'ceramic' / цвет. */
@@ -2044,20 +2048,180 @@ export class ProceduralHead {
   _buildBody() {
     const P = this.P;
     const r = P.neckR;
-    const neckPts = [[r, -0.45], [r * 0.97, -0.9], [r * 1.05, -1.25], [r * 1.5, -1.5], [r * 2.6, -1.72], [r * 3.6, -1.92]].map(([x, y]) => new THREE.Vector2(x, y));
+    const top = P.hairStyle === 'long' ? -1.56 : -1.38;
+    const topR = P.hairStyle === 'long' ? r * 2.05 : r * 1.45;
+    const clothPts = [[topR * 0.97, top + 0.02], [topR, top], [topR * 1.02, top - 0.03], [1.05, -1.74], [1.36, -1.9], [1.55, -2.15], [1.64, -2.6], [1.66, -3.4]];
+    const outfit = OUTFITS[P.outfit] ? P.outfit : null;
+    // шея; под вырезом одежды кожа груди повторяет профиль торса (чуть глубже), иначе в V-вырезе видна «пустота»
+    const Rof = (y) => {                                                // радиус торса на высоте y (по профилю)
+      if (y >= clothPts[1][1]) return topR;
+      for (let i = 1; i < clothPts.length - 1; i++) {
+        const [r0, y0] = clothPts[i], [r1, y1] = clothPts[i + 1];
+        if (y <= y0 && y >= y1) return lerp(r0, r1, (y0 - y) / (y0 - y1));
+      }
+      return clothPts[clothPts.length - 1][0];
+    };
+    const neckPts = (outfit && outfit !== 'crew' && outfit !== 'turtleneck' && outfit !== 'hoodie'
+      ? [[r, -0.45], [r * 0.97, -0.9], [r * 1.05, -1.25], [r * 1.5, -1.5], ...[-1.62, -1.74, -1.9, -2.15, -2.6].map((y) => [Math.max(r * 1.5, Rof(y) * 0.965), y])]
+      : [[r, -0.45], [r * 0.97, -0.9], [r * 1.05, -1.25], [r * 1.5, -1.5], [r * 2.6, -1.72], [r * 3.6, -1.92]]).map(([x, y]) => new THREE.Vector2(x, y));
     const neckGeo = this._track(new THREE.LatheGeometry(neckPts, 48));
     neckGeo.scale(1, 1, 0.6);
     const neck = new THREE.Mesh(neckGeo, this.mat.neck);
     neck.position.set(0, 0, -0.15);
     this.body.add(neck);
-    const top = P.hairStyle === 'long' ? -1.56 : -1.38;
-    const topR = P.hairStyle === 'long' ? r * 2.05 : r * 1.45;
-    const clothPts = [[topR * 0.97, top + 0.02], [topR, top], [topR * 1.02, top - 0.03], [1.05, -1.74], [1.36, -1.9], [1.55, -2.15], [1.64, -2.6], [1.66, -3.4]].map(([x, y]) => new THREE.Vector2(x, y));
-    const clothGeo = this._track(new THREE.LatheGeometry(clothPts, 64));
-    clothGeo.scale(1, 1, 0.6);
-    this.torso = new THREE.Mesh(clothGeo, this.mat.cloth);
-    this.torso.position.set(0, 0, -0.15);
-    this.body.add(this.torso);
+    if (!outfit) {                                                      // по умолчанию — прежний круглый ворот (тело вращения)
+      const clothGeo = this._track(new THREE.LatheGeometry(clothPts.map(([x, y]) => new THREE.Vector2(x, y)), 64));
+      clothGeo.scale(1, 1, 0.6);
+      this.torso = new THREE.Mesh(clothGeo, this.mat.cloth);
+      this.torso.position.set(0, 0, -0.15);
+      this.body.add(this.torso);
+      return;
+    }
+    this._buildOutfit(outfit, { r, top, topR, Rof });
+  }
+
+  /**
+   * Одежда (5.11): торс — сетка по углу вокруг тела φ (0 — перед) и высоте, верхний край — вырез top(φ).
+   * Поверх: воротник рубашки, лацканы и галстук (пиджак), капюшон со шнурками (худи), высокое горло (водолазка).
+   */
+  _buildOutfit(outfit, { r, top, topR, Rof }) {
+    const P = this.P, V3 = THREE.Vector3, O = OUTFITS[outfit];
+    const surf = (phi, y, k = 1, dr = 0) => { const R = Rof(y) * k + dr; return new V3(R * Math.sin(phi), y, R * Math.cos(phi) * 0.6 - 0.15); };
+    const radial = (phi) => new V3(Math.sin(phi), 0, Math.cos(phi) * 0.6).normalize();
+    const vcut = (depth, w, pow = 1.1) => (phi) => top - depth * Math.max(0, 1 - Math.abs(phi) / w) ** pow;
+    const mat2 = this._track(new THREE.MeshStandardMaterial({ color: P.cloth2 || O.cloth2 || '#e9e7e2', roughness: 0.75, side: THREE.DoubleSide }));
+    const add = (geo, mat) => { geo.computeVertexNormals(); const m = new THREE.Mesh(this._track(geo), mat); this.body.add(m); return m; };
+    // сетка-полоса: rows — массивы точек одинаковой длины (closed — замкнуть по столбцам)
+    const strip = (rows, closed = false) => {
+      const n = rows[0].length, pos = [], idx = [];
+      for (const row of rows) for (const p of row) pos.push(p.x, p.y, p.z);
+      const cols = closed ? n : n - 1;
+      for (let i = 0; i < rows.length - 1; i++) for (let j = 0; j < cols; j++) {
+        const a = i * n + j, b = i * n + ((j + 1) % n), c = a + n, d = b + n;
+        idx.push(a, c, b, b, c, d);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setIndex(idx);
+      return g;
+    };
+    // торс с вырезом topFn; k — масштаб радиуса (нижний слой — чуть внутри)
+    const torso = (topFn, k = 1, mat = this.mat.cloth, phiMax = Math.PI) => {
+      const N = 112, ROWS = 44, rows = [];
+      const full = phiMax >= Math.PI;
+      for (let i = 0; i <= ROWS; i++) {
+        const v = i / ROWS, row = [];
+        for (let j = 0; j < (full ? N : N + 1); j++) {
+          const phi = full ? (j / N) * Math.PI * 2 - Math.PI : -phiMax + (2 * phiMax * j) / N;
+          const t0 = topFn(phi), y = lerp(t0, -3.4, v ** 1.7);
+          const p = surf(phi, y, k);
+          if (i === 0) p.add(radial(phi).multiplyScalar(-0.012));       // кромка выреза чуть загнута внутрь
+          row.push(p);
+        }
+        rows.push(row);
+      }
+      const geo = strip(rows, full);
+      return add(geo, mat);
+    };
+    // кромка выреза — тонкий валик
+    const rim = (topFn, mat = this.mat.cloth, rad = 0.016, phiA = -Math.PI, phiB = Math.PI, k = 1) => {
+      const pts = [];
+      for (let j = 0; j <= 96; j++) { const phi = lerp(phiA, phiB, j / 96); pts.push(surf(phi, topFn(phi), k, 0.004)); }
+      const closed = phiB - phiA >= Math.PI * 2 - 1e-6;
+      if (closed) pts.pop();
+      return add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, closed), 160, rad, 6, closed), mat);
+    };
+    // воротник рубашки: стойка + отворот, к переду — уголки; phi0 — половина ширины выреза спереди
+    const collar = (topFn, mat, phi0, k = 1, h = 0.085, fall = 0.12, point = 0.13) => {
+      const rows = [[], [], [], []];
+      for (let j = 0; j <= 80; j++) {
+        const side = j <= 40 ? -1 : 1, u = j <= 40 ? j / 40 : (80 - j) / 40;   // 0 — сзади, 1 — у выреза
+        const phi = side * lerp(Math.PI, phi0, u), yt = topFn(phi), front = smoothstep(0.6, 1, u);
+        const base = surf(phi, yt, k, 0.006), rd = radial(phi);
+        const stand = base.clone().add(new V3(0, h * (1 - 0.35 * front), 0)).addScaledVector(rd, 0.012);
+        const fold = stand.clone().addScaledVector(rd, 0.035).add(new V3(0, 0.008, 0));
+        const lie = surf(phi + side * 0.22 * front, yt - 0.03 - point * front ** 1.5, k, 0.016 + 0.01 * front).addScaledVector(rd, fall * (1 - front) * 0.4);
+        rows[0].push(base); rows[1].push(stand); rows[2].push(fold); rows[3].push(lie);
+      }
+      // порядок строк в 80-м столбце и в 0-м совпадает (сзади): полоса не замкнута, шов сзади закрыт стойкой
+      return add(strip(rows), mat);
+    };
+
+    if (outfit === 'crew' || outfit === 'turtleneck' || outfit === 'hoodie') {
+      const fn = () => top;
+      torso(fn); rim(fn);
+    }
+    if (outfit === 'turtleneck') {
+      const pts = [[r * 1.12, -0.9], [r * 1.22, -0.93], [r * 1.17, -0.98], [r * 1.2, -1.1], [r * 1.3, -1.22], [topR * 0.93, top + 0.06]].map(([x, y]) => new THREE.Vector2(x, y));
+      const g = new THREE.LatheGeometry(pts, 48); g.scale(1, 1, 0.6); g.translate(0, 0, -0.15);
+      add(g, this.mat.clothSide ||= this._track(Object.assign(this.mat.cloth.clone(), { side: THREE.DoubleSide })));
+    }
+    if (outfit === 'vneck' || outfit === 'scoop') {
+      const fn = outfit === 'vneck' ? vcut(0.36, 0.55) : (phi) => top - 0.24 * Math.max(0, Math.cos((phi / 1.05) * Math.PI / 2)) ** 1.6 * (Math.abs(phi) < 1.05 ? 1 : 0);
+      torso(fn); rim(fn);
+    }
+    if (outfit === 'shirt') {
+      const fn = vcut(0.26, 0.4);
+      torso(fn); collar(fn, this.mat.clothSide ||= this._track(Object.assign(this.mat.cloth.clone(), { side: THREE.DoubleSide })), 0.38, 1, 0.09, 0.14, 0.2);
+      // планка с пуговицами
+      const btn = this._track(new THREE.MeshStandardMaterial({ color: new THREE.Color(P.cloth).multiplyScalar(0.8), roughness: 0.4 }));
+      for (let i = 0; i < 4; i++) {
+        const y = top - 0.24 - i * 0.22, p = surf(0, y, 1, 0.008);
+        const b = new THREE.Mesh(this._track(new THREE.CylinderGeometry(0.018, 0.018, 0.008, 12)), btn);
+        b.rotation.x = Math.PI / 2; b.position.copy(p); this.body.add(b);
+      }
+    }
+    if (outfit === 'blazer') {
+      const shirtFn = vcut(0.1, 0.24), jacketFn = vcut(0.62, 0.62, 1.05);
+      torso(shirtFn, 0.985, mat2, 1.3);                                // рубашка — только спереди, под пиджаком
+      collar(shirtFn, mat2, 0.22, 0.985, 0.075, 0.08, 0.1);
+      torso(jacketFn);
+      // лацканы: полосы вдоль краёв выреза пиджака, отворот к плечу; сверху переходят в воротник пиджака
+      for (const sg of [-1, 1]) {
+        const inner = [], outer = [];
+        for (let i = 0; i <= 24; i++) {
+          const t = i / 24, phi = sg * 0.62 * (1 - t) ** 0.95, y = jacketFn(phi);
+          const wd = 0.17 * Math.sin(Math.PI * Math.min(1, 0.15 + t * 0.95)) + 0.03;
+          inner.push(surf(phi, y, 1, 0.012));
+          outer.push(surf(phi + sg * wd / Math.max(0.5, Rof(y)), y + 0.02 * (1 - t), 1, 0.02));
+        }
+        add(strip([inner, outer]), this.mat.lapel ||= this._track(Object.assign(this.mat.cloth.clone(), { side: THREE.DoubleSide, color: new THREE.Color(P.cloth).multiplyScalar(0.82), roughness: 0.6 })));
+      }
+      collar((phi) => (Math.abs(phi) > 0.62 ? top : jacketFn(phi)), this.mat.clothSide, 0.62, 1.01, 0.09, 0.1, 0.05);
+      const tie = P.tie === undefined ? O.tie && this.gender === 'male' : P.tie;
+      if (tie) {
+        const tm = this._track(new THREE.MeshStandardMaterial({ color: typeof tie === 'string' ? tie : '#6e1c28', roughness: 0.55, side: THREE.DoubleSide }));
+        const yk = shirtFn(0) - 0.035;
+        const knot = new THREE.Mesh(this._track(new THREE.SphereGeometry(1, 12, 8)), tm);
+        knot.scale.set(0.045, 0.05, 0.025); knot.position.copy(surf(0, yk, 0.985, 0.022)); this.body.add(knot);
+        const L = [], R = [];
+        for (let i = 0; i <= 16; i++) {
+          const t = i / 16, y = yk - 0.04 - t * 0.85, w = lerp(0.035, 0.075, Math.min(1, t * 1.6)) / Math.max(0.5, Rof(y));
+          L.push(surf(-w, y, 0.985, 0.014)); R.push(surf(w, y, 0.985, 0.014));
+        }
+        add(strip([L, R]), tm);
+      }
+    }
+    if (outfit === 'hoodie') {
+      // капюшон, сложенный за шеей: толстый валик по задней части выреза, к переду тоньше
+      const pts = [];
+      for (let j = 0; j <= 40; j++) { const phi = lerp(0.5, Math.PI * 2 - 0.5, j / 40); pts.push({ phi, c: surf(phi, top + 0.06, 1, 0.07) }); }
+      const ring = [];
+      for (let j = 0; j < pts.length; j++) {
+        const { phi, c } = pts[j], u = Math.abs(j / 40 - 0.5) * 2, rad = lerp(0.2, 0.06, u ** 1.5);
+        const rd = radial(phi), row = [];
+        for (let k = 0; k <= 10; k++) { const a = (k / 10) * Math.PI * 2; row.push(c.clone().addScaledVector(rd, Math.cos(a) * rad).add(new V3(0, Math.sin(a) * rad * 0.8, 0))); }
+        ring.push(row);
+      }
+      const T = ring[0].map((_, k) => ring.map((row) => row[k]));          // строки — по окружности сечения
+      add(strip(T), this.mat.clothSide ||= this._track(Object.assign(this.mat.cloth.clone(), { side: THREE.DoubleSide })));
+      for (const sg of [-1, 1]) {
+        const a = surf(sg * 0.42, top - 0.01, 1, 0.02), b = surf(sg * 0.38, top - 0.42, 1, 0.022), m = surf(sg * 0.43, top - 0.2, 1, 0.03);
+        add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([a, m, b]), 16, 0.009, 6, false), mat2);
+        const tip = new THREE.Mesh(this._track(new THREE.CylinderGeometry(0.012, 0.012, 0.05, 8)), mat2); tip.position.copy(b).add(new V3(0, -0.02, 0)); this.body.add(tip);
+      }
+    }
+    this.torso = this.body.children[1] || null;
   }
 
   // ------------------------------------------------------------------ кадр
