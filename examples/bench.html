@@ -33,7 +33,7 @@
 </head>
 <body>
   <h1>Anima — бенчмарк производительности</h1>
-  <p>Голова говорит и двигается, пока идут замеры: 3 набора × 3 уровня детализации, около минуты. Не сворачивайте вкладку и не трогайте экран. Потом нажмите «Скопировать результаты» и пришлите текст.</p>
+  <p>Голова говорит и двигается, пока идут замеры: 3 набора × 3 уровня детализации и адаптивный режим, около полутора минут. Не сворачивайте вкладку и не трогайте экран. Потом нажмите «Скопировать результаты» и пришлите текст.</p>
   <div id="stage"></div>
   <div class="row">
     <button class="primary" id="start">Запустить</button>
@@ -159,7 +159,18 @@
         $('#results tbody').append(tr);
         head.stopSpeaking?.();
       }
-      const out = { bench: 'anima', v: 1, date: new Date().toISOString(), url: location.href, maxPixelRatio: maxPR, durationS: dur / 1000, device: { ...device, canvas: `${c.width}×${c.height}`, refreshHz: Math.round(1000 / period) }, results: rows };
+      // адаптивный режим: базовая голова, 15 с — куда он придёт на этом устройстве
+      $('#status').textContent = 'адаптивный режим: 15 с…';
+      head.options.look = {}; head.setDetail('adaptive'); head.useProcedural('female');
+      head.speak(TEXT + ' ' + TEXT, { voice: false });
+      await sleep(15000);
+      const ad = head.getAdaptive();
+      const adaptive = { detail: ad.detail, pixelRatio: ad.pixelRatio, step: ad.step, refreshHz: ad.refreshHz, changes: ad.changes };
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>базовая</td><td>adaptive → ${ad.detail} ×${ad.pixelRatio}</td><td colspan="9" style="text-align:left">${ad.changes.map((c) => `${c.t} с: ${c.detail} ×${c.pixelRatio} (${c.reason})`).join('; ') || 'без смен'}</td>`;
+      $('#results tbody').append(tr);
+      head.stopSpeaking?.();
+      const out = { bench: 'anima', v: 1, adaptive, date: new Date().toISOString(), url: location.href, maxPixelRatio: maxPR, durationS: dur / 1000, device: { ...device, canvas: `${c.width}×${c.height}`, refreshHz: Math.round(1000 / period) }, results: rows };
       $('#json').value = JSON.stringify(out, null, 1);
       $('#status').textContent = 'Готово.';
       $('#start').disabled = false; $('#copy').disabled = false;

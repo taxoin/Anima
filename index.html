@@ -92,7 +92,7 @@
         <label>Кадр</label>
         <select id="framing"><option>portrait</option><option>close</option><option>bust</option></select>
         <label>Сетка</label>
-        <select id="detailSel" title="Детализация геометрии: авто — medium на телефонах"><option value="auto">авто</option><option>high</option><option>medium</option><option>low</option></select>
+        <select id="detailSel" title="Детализация геометрии: авто — medium на телефонах; адаптивно — по скорости кадров"><option value="auto">авто</option><option value="adaptive">адаптивно</option><option>high</option><option>medium</option><option>low</option></select>
         <span class="hint" id="detailInfo"></span>
       </div>
       <div class="row"><label style="width:44px">кожа</label><span class="swatches" id="skinSw"></span></div>
@@ -261,11 +261,12 @@ swatches($('#eyeSw'), 'iris', EYE_COLORS, (c) => `radial-gradient(circle, #111 0
 $('#lighting').onchange = (e) => api(`head.setLighting('${e.target.value}')`, () => head.setLighting(e.target.value));
 $('#framing').onchange = (e) => api(`head.setFraming('${e.target.value}')`, () => head.setFraming(e.target.value));
 const showDetail = () => {
-  let t = 0; head.rig?.object3D?.traverse((o) => { if (o.isMesh && o.visible) t += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
-  $('#detailInfo').textContent = `${head.getDetail()}, ${Math.round(t / 1000)} тыс. треуг.`;
+  let t = 0; head.rig?.object3D?.traverse((o) => { if (o.isMesh && o.visible && o.material.visible !== false) t += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+  const ad = head.getAdaptive(), pr = head.renderer.getPixelRatio();
+  $('#detailInfo').textContent = `${head.getDetail()}${ad ? ` · ×${pr}` : ''}, ${Math.round(t / 1000)} тыс. треуг.`;
 };
 $('#detailSel').onchange = (e) => { api(`head.setDetail('${e.target.value}')`, () => head.setDetail(e.target.value)); showDetail(); };
-head.on('lookChange', () => setTimeout(showDetail)); head.on('photoAvatar', () => setTimeout(showDetail));
+head.on('lookChange', () => setTimeout(showDetail)); head.on('detailChange', (e) => { log(`⟵ detailChange ${e.detail} ×${e.pixelRatio} (${e.reason})`); setTimeout(showDetail); }); head.on('photoAvatar', () => setTimeout(showDetail));
 setTimeout(showDetail);
 $('#idle').onchange = (e) => api(`head.setIdle(${e.target.checked})`, () => head.setIdle(e.target.checked));
 $('#follow').onchange = (e) => api(`head.followPointer(${e.target.checked})`, () => head.followPointer(e.target.checked));

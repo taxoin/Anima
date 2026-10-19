@@ -42,6 +42,10 @@ export const BACKGROUNDS = {
   light: 'radial-gradient(ellipse at 50% 38%, #ffffff 0%, #e6e9ef 60%, #cfd4dc 100%)',
   transparent: 'transparent',
 };
+/** Лестница адаптивного режима (6.5): от лучшего к худшему; pr — потолок pixelRatio (поверх maxPixelRatio). */
+const ADAPT_STEPS = [
+  { detail: 'high', pr: 2 }, { detail: 'medium', pr: 2 }, { detail: 'medium', pr: 1.5 }, { detail: 'low', pr: 1.5 }, { detail: 'low', pr: 1 },
+];
 const FRAMING = {
   portrait: { fov: 24, pos: [0, -0.2, 8.4], target: [0, -0.4, 0] },
   close: { fov: 24, pos: [0, 0.05, 5.6], target: [0, -0.1, 0] },
@@ -93,7 +97,7 @@ export class EmotionalHead {
    * @param {boolean} [options.followPointer=false]  глаза следят за курсором
    * @param {boolean} [options.vignette=true]
    * @param {number}  [options.maxPixelRatio=2]
-   * @param {'auto'|'high'|'medium'|'low'} [options.detail='auto']  детализация геометрии: auto — medium на телефонах
+   * @param {'auto'|'adaptive'|'high'|'medium'|'low'} [options.detail='auto']  детализация геометрии: auto — medium на телефонах; adaptive — по реальной скорости кадров (уровень и pixelRatio, событие detailChange)
    * @param {'webspeech'|'none'|Function} [options.tts='webspeech']  TTS по умолчанию для speak()
    * @param {object} [options.voice]  { lang, voice, rate, pitch } по умолчанию для speak()
    * @param {object} [options.look]  переопределения внешности: { skin, hair, iris:[c1,c2], cloth, lip }
@@ -110,6 +114,7 @@ export class EmotionalHead {
     this._t = 0;
     this._timers = [];
     this._idle = this.options.idle;
+    if (this.options.detail === 'adaptive') this._initAdapt();
 
     this._initRenderer();
     this._initState();
@@ -469,12 +474,63 @@ export class EmotionalHead {
    */
   setDetail(detail = 'auto') {
     this.options.detail = detail;
+    this._ad = null;
+    if (detail === 'adaptive') this._initAdapt();
     this._applyShadows();
+    if (this.renderer) this._resize();
     if (this.rig instanceof ProceduralHead) this._rebuildRig();
     return this;
   }
   /** Текущий уровень детализации (после разрешения 'auto'). */
-  getDetail() { return this.rig?.detail || resolveDetail(this.options.detail); }
+  getDetail() { return this.rig?.detail || this._detailNow(); }
+  /** Уровень, по которому строится голова: при 'adaptive' — текущая ступень лестницы. */
+  _detailNow() { return this._ad ? ADAPT_STEPS[this._ad.i].detail : resolveDetail(this.options.detail); }
+  /** Состояние адаптивного режима: { step, detail, pixelRatio, refreshHz, ceiling, changes } или null. */
+  getAdaptive() {
+    const A = this._ad;
+    return A ? { step: A.i, detail: ADAPT_STEPS[A.i].detail, pixelRatio: this.renderer.getPixelRatio(), refreshHz: A.T ? Math.round(1000 / A.T) : null, ceiling: A.ceil, changes: A.log.slice() } : null;
+  }
+
+  _initAdapt() {
+    const start = resolveDetail('auto') === 'medium' ? 1 : 0;
+    this._ad = { i: start, ceil: 0, win: [], sum: 0, T: null, tChange: performance.now(), lastUp: -1e9, log: [] };
+  }
+
+  /**
+   * Адаптивная детализация (6.5): по интервалам кадров. Период экрана — 10-й процентиль интервалов, прижатый к
+   * стандартным частотам. Окно 2 с: больше 25 % «медленных» кадров (> 1.45 периода) или меньше 45 к/с — шаг вниз;
+   * 15 с ровной работы (< 3 % медленных) — шаг вверх. Если подъём в течение 10 с привёл к спуску — выше этой ступени
+   * больше не поднимаемся (без качелей). Первые 1.2 с после смены, после возврата во вкладку и интервалы > 1 с не считаются.
+   */
+  _adaptTick(ms) {
+    const A = this._ad, now = performance.now();
+    if (ms > 1000 || now - A.tChange < 1200) { A.win.length = 0; A.sum = 0; return; }
+    A.win.push(ms); A.sum += ms;
+    if (A.sum < 2000 || A.win.length < 8) return;
+    const sorted = A.win.slice().sort((a, b) => a - b), p10 = sorted[Math.floor(sorted.length * 0.1)];
+    const snap = [1000 / 144, 1000 / 120, 1000 / 90, 1000 / 75].find((t) => t >= p10 * 0.93) || 1000 / 60;   // экран не реже 60 Гц: иначе медленное устройство приняло бы свои 30 к/с за частоту экрана
+    A.T = A.T ? Math.min(A.T, snap) : snap;
+    const slow = A.win.filter((v) => v > A.T * 1.45).length / A.win.length, fps = (1000 * A.win.length) / A.sum;
+    A.win.length = 0; A.sum = 0;
+    if ((slow > 0.25 || fps < 45) && A.i < ADAPT_STEPS.length - 1) {
+      if (now - A.lastUp < 10000) A.ceil = A.i + 1;                // подъём не удался: выше не идём
+      this._adaptStep(1, `slow ${Math.round(slow * 100)}% ${fps.toFixed(0)}fps`);
+    } else if (slow < 0.03 && fps > 1000 / A.T * 0.9 && A.i > A.ceil && now - A.tChange > 15000) {
+      A.lastUp = now;
+      this._adaptStep(-1, `headroom ${fps.toFixed(0)}fps`);
+    }
+  }
+
+  _adaptStep(d, reason) {
+    const A = this._ad, prev = ADAPT_STEPS[A.i];
+    A.i = clamp(A.i + d, 0, ADAPT_STEPS.length - 1); A.tChange = performance.now();
+    const cur = ADAPT_STEPS[A.i];
+    if (cur.detail !== prev.detail && this.rig instanceof ProceduralHead) { this._applyShadows(); this._rebuildRig(); }
+    this._resize();
+    const ev = { detail: cur.detail, pixelRatio: this.renderer.getPixelRatio(), step: A.i, reason };
+    A.log.push({ t: Math.round(this._t * 10) / 10, ...ev });
+    this._emit('detailChange', ev);
+  }
 
   /**
    * Внешность: тон кожи, цвет глаз, волос, губ, одежды и т.д. Пересобирает голову, эмоция и речь продолжаются.
@@ -698,7 +754,7 @@ export class EmotionalHead {
     this.camera = new THREE.PerspectiveCamera(24, 1, 0.1, 60);
     const key = new THREE.DirectionalLight('#ffffff', 2);
     key.castShadow = !!this.options.shadows;
-    const sm = DETAIL[resolveDetail(this.options.detail)].shadowMap;
+    const sm = DETAIL[this._detailNow()].shadowMap || 512;
     key.shadow.mapSize.set(sm, sm);
     Object.assign(key.shadow.camera, { left: -1.6, right: 1.6, top: 1.6, bottom: -1.6, near: 1, far: 16 });
     key.shadow.bias = -0.0004;
@@ -717,13 +773,13 @@ export class EmotionalHead {
     this._visible = true;
     this._io = new IntersectionObserver((e) => { this._visible = e[0]?.isIntersecting ?? true; });
     this._io.observe(this.container);
-    this._onVis = () => { this._last = performance.now(); };
+    this._onVis = () => { this._last = performance.now(); if (this._ad) this._ad.tChange = performance.now(); };   // возврат во вкладку — не замер
     document.addEventListener('visibilitychange', this._onVis);
   }
 
   _resize() {
     const w = this.container.clientWidth || 400, h = this.container.clientHeight || 480;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.options.maxPixelRatio));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.options.maxPixelRatio, this._ad ? ADAPT_STEPS[this._ad.i].pr : Infinity));
     this.renderer.setSize(w, h, false);
     const F = this._framing || FRAMING.portrait;
     const aspect = w / h;
@@ -740,7 +796,7 @@ export class EmotionalHead {
     let overrides = look.female || look.male ? look[gender] || {} : look;   // { skin, hair } или { female: {...}, male: {...} }
     if (this._portrait) overrides = { ...this._portrait.fit({ ...this._photoOpts, gender }), ...overrides };
     const shadows = this._applyShadows();                         // уровень детализации мог смениться через options.detail
-    return new ProceduralHead({ gender, shadows, overrides, detail: this.options.detail });
+    return new ProceduralHead({ gender, shadows, overrides, detail: this._detailNow() });
   }
 
   /**
@@ -748,7 +804,7 @@ export class EmotionalHead {
    * вместо тени под подбородком голова запекает затенение шеи (ProceduralHead при shadows: false).
    */
   _applyShadows() {
-    const sm = DETAIL[resolveDetail(this.options.detail)].shadowMap, on = !!this.options.shadows && sm > 0, key = this.lights?.key;
+    const sm = DETAIL[this._detailNow()].shadowMap, on = !!this.options.shadows && sm > 0, key = this.lights?.key;
     this._shadowsOn = on;
     this.renderer.shadowMap.enabled = on;
     if (!key) return on;
@@ -902,7 +958,7 @@ export class EmotionalHead {
       if (this._timers[i].t <= this._t) { const f = this._timers[i].fn; this._timers.splice(i, 1); f(); }
     }
     this._update(dt);
-    if (this._visible && !document.hidden) this._render();
+    if (this._visible && !document.hidden) { this._render(); if (this._ad) this._adaptTick(raw * 1000); }
   }
 
   _render() { this.renderer.render(this.scene, this.camera); }
