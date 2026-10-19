@@ -68,6 +68,11 @@ export const CASES = [
   { name: 'male-turtleneck-bust', gender: 'male', look: { outfit: 'turtleneck', cloth: '#7a5a3a' }, framing: 'bust' },
   { name: 'female-vneck-bust', gender: 'female', look: { outfit: 'vneck', hairStyle: 'bob', cloth: '#3a5a8a' }, framing: 'bust' },
   { name: 'female-shirt-bust', gender: 'female', look: { outfit: 'shirt', hairStyle: 'pixie', cloth: '#d8d0c0' }, framing: 'bust', pose: { yaw: 0.3 } },
+  { name: 'female-headphones-over', gender: 'female', look: { headphones: 'over' }, pose: { yaw: 0.4 } },
+  { name: 'male-headset-mic', gender: 'male', look: { headphones: 'headset' }, pose: { yaw: -0.35 } },
+  { name: 'male-mask-cloth-jaw', gender: 'male', look: { mask: 'cloth' }, channels: { jawOpen: 0.5 }, pose: { yaw: 0.4 } },
+  { name: 'male-n95-beard', gender: 'male', look: { mask: 'n95', beard: 'full' }, pose: { yaw: -0.5 } },
+  { name: 'female-mask-medical-earbuds', gender: 'female', look: { mask: 'medical', headphones: 'earbuds', hairStyle: 'ponytail' }, pose: { yaw: 0.6 } },
 ];
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg' };

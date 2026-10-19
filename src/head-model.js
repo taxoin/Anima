@@ -185,6 +185,8 @@ export function resolveLook(look = {}) {
   }
   if (typeof o.hat === 'string') o.hat = HATS[o.hat] ? { ...HATS[o.hat] } : null;
   if (typeof o.earrings === 'string') o.earrings = EARRINGS[o.earrings] ? { ...EARRINGS[o.earrings] } : null;
+  if (typeof o.headphones === 'string') o.headphones = HEADPHONES[o.headphones] ? { ...HEADPHONES[o.headphones] } : null;
+  if (typeof o.mask === 'string') o.mask = MASKS[o.mask] ? { ...MASKS[o.mask] } : null;
   if (typeof o.beard === 'string') o.beard = BEARDS[o.beard] ? { ...BEARDS[o.beard] } : null;
   const mk = resolveMakeup(o.makeup);
   if (mk?.lipstick && look.lip === undefined) o.lip = mk.lipstick;
@@ -680,6 +682,14 @@ function mergeGeos(list) {
   return out;
 }
 
+/** Наушники (5.12): look.headphones — имя или { style, color }. */
+export const HEADPHONES = {
+  over: { style: 'over', color: '#26282c' }, headset: { style: 'headset', color: '#2c2f35' }, earbuds: { style: 'earbuds', color: '#f2f2f0' },
+};
+/** Маска (5.12): look.mask — имя или { style, color }. Рот под маской скрыт, ткань едет за челюстью. */
+export const MASKS = {
+  medical: { style: 'medical', color: '#bcd8ea' }, cloth: { style: 'cloth', color: '#30343c' }, n95: { style: 'n95', color: '#f0efea' },
+};
 /** Одежда (5.11): look.outfit; cloth — основной цвет, cloth2 — рубашка под пиджаком / шнурки худи, tie — галстук (цвет или false). */
 export const OUTFITS = {
   crew: {}, vneck: {}, scoop: {}, turtleneck: {}, shirt: {}, hoodie: { cloth2: '#eeeeee' }, blazer: { cloth2: '#e9e7e2', tie: true },
@@ -970,6 +980,8 @@ export class ProceduralHead {
     this._buildBeard();
     this._buildHat();
     this._buildEarrings();
+    this._buildHeadphones();
+    this._buildMask();
 
     root.traverse((o) => {
       if (o.isMesh && this.shadows && !o.userData.noShadow) { o.castShadow = true; o.receiveShadow = true; }
@@ -1851,6 +1863,156 @@ export class ProceduralHead {
     }
   }
 
+  /**
+   * Внешний контур головы с волосами по направлению d (из центра головы): максимум проекции вершин кожи и оболочки
+   * волос в узком конусе вокруг d. Нужен, чтобы оголовье и чашки наушников легли поверх причёски.
+   */
+  _outline(d, cone = 0.985) {
+    const C = this._olC ||= new THREE.Vector3(0, -0.05, -0.08);
+    if (!this._olPts) {
+      const pts = [];
+      this.headRoot.traverse((m) => { if (m.isMesh && ['skin', 'hair', 'hairLong'].includes(m.name)) { const a = m.geometry.attributes.position.array; for (let i = 0; i < a.length; i += 6) pts.push(a[i] - C.x, a[i + 1] - C.y, a[i + 2] - C.z); } });
+      this._olPts = new Float32Array(pts);
+    }
+    const p = this._olPts; let best = 0;
+    for (let i = 0; i < p.length; i += 3) {
+      const l = Math.hypot(p[i], p[i + 1], p[i + 2]); if (l < 1e-6) continue;
+      const dt = (p[i] * d.x + p[i + 1] * d.y + p[i + 2] * d.z) / l;
+      if (dt > cone && l * dt > best) best = l * dt;
+    }
+    return C.clone().addScaledVector(d, best);
+  }
+
+  /** Наушники (5.12): накладные (оголовье + две чашки), гарнитура (одна чашка + микрофон), вкладыши. */
+  _buildHeadphones() {
+    const hp = this.P.headphones;
+    if (!hp) return;
+    const P = this.P, style = hp.style || 'over', col = new THREE.Color(hp.color || '#26282c');
+    const mat = this._track(new THREE.MeshPhysicalMaterial({ color: col, roughness: 0.45, clearcoat: 0.4, clearcoatRoughness: 0.3 }));
+    const soft = this._track(new THREE.MeshStandardMaterial({ color: col.clone().multiplyScalar(0.55), roughness: 0.9 }));
+    const g = new THREE.Group(); g.name = 'headphones';
+    const w = prof(P.gx, -0.06) * 0.998, es = clamp(w / 0.785, 0.85, 1.1);
+    if (style === 'earbuds') {
+      for (const sg of [1, -1]) {
+        const b = new THREE.Group(); b.position.set(sg * (w + 0.035), -0.08, -0.02);
+        const bud = new THREE.Mesh(this._track(new THREE.SphereGeometry(0.03 * es, 16, 12)), mat); bud.scale.set(0.8, 1, 1.1); b.add(bud);
+        const stem = new THREE.Mesh(this._track(new THREE.CapsuleGeometry(0.011 * es, 0.09 * es, 4, 10)), mat); stem.position.set(sg * 0.008, -0.065 * es, 0.012); stem.rotation.z = sg * 0.12; b.add(stem);
+        g.add(b);
+      }
+      this.headRoot.add(g); this.headphones = g; return;
+    }
+    // чашки: по контуру головы с волосами в стороны от ушей
+    const sides = style === 'headset' ? [1, -1] : [1, -1];
+    const cupAt = {};
+    for (const sg of sides) {
+      const d = new THREE.Vector3(sg, -0.12, 0.04).normalize(), o = this._outline(d, 0.99);
+      const cup = new THREE.Group(); cup.position.set(o.x + sg * 0.03, o.y, o.z); cup.rotation.z = sg * -0.04;
+      const R = (style === 'headset' ? 0.13 : 0.165) * es;
+      const shell = new THREE.Mesh(this._track(new THREE.CylinderGeometry(R, R * 1.04, 0.075, 32)), mat); shell.rotation.z = Math.PI / 2; shell.position.x = sg * 0.05; cup.add(shell);
+      const cap = new THREE.Mesh(this._track(new THREE.SphereGeometry(R * 0.98, 24, 10, 0, Math.PI * 2, 0, 0.5)), mat); cap.rotation.z = -sg * Math.PI / 2; cap.position.x = sg * 0.085; cap.scale.y = 0.6; cup.add(cap);
+      const pad = new THREE.Mesh(this._track(new THREE.TorusGeometry(R * 0.82, 0.032, 10, 32)), soft); pad.rotation.y = Math.PI / 2; pad.position.x = sg * 0.006; cup.add(pad);
+      g.add(cup); cupAt[sg] = cup.position.clone().add(new THREE.Vector3(sg * 0.05, 0, 0));
+    }
+    // оголовье: дуга поверх волос от чашки к чашке (в плоскости чуть впереди ушей)
+    const pts = [];
+    for (let i = 0; i <= 24; i++) {
+      const a = lerp(-1.25, 1.25, i / 24), d = new THREE.Vector3(Math.sin(a), Math.cos(a), 0.04).normalize();
+      const o = this._outline(d, 0.993).addScaledVector(d, P.hairStyle === 'none' ? 0.03 : 0.07);   // над прядями-карточками
+      pts.push(o);
+    }
+    pts.unshift(cupAt[-1].clone().add(new THREE.Vector3(0.0, 0.17 * es, 0))); pts.push(cupAt[1].clone().add(new THREE.Vector3(0, 0.17 * es, 0)));
+    const band = new THREE.Mesh(this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 80, 0.022, 10, false)), mat); band.scale.z = 1; g.add(band);
+    const cushion = new THREE.Mesh(this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.slice(6, -6)), 48, 0.018, 8, false)), soft);
+    cushion.position.y = -0.012; g.add(cushion);
+    if (style === 'headset') {
+      // штанга микрофона: от левой чашки вперёд и вниз к уголку рта
+      const c = cupAt[1], MY = LAYOUT.mouthY, tip = new THREE.Vector3(P.mouthHW * 1.15, MY + 0.02, this.hm.get(P.mouthHW * 1.15, MY) + 0.07);
+      // путь над щекой: точки по поверхности лица (карта высот) + зазор, от чашки к уголку рта
+      const path = [c.clone().add(new THREE.Vector3(0.0, -0.05, 0.1))];
+      for (let i = 1; i <= 6; i++) {
+        const t = i / 7, x = lerp(c.x - 0.08, tip.x, t), y = lerp(c.y - 0.08, tip.y, t ** 0.8), z = this.hm.get(x, y);
+        path.push(new THREE.Vector3(x, y, (z > -1 ? z : c.z) + 0.06 + 0.02 * Math.sin(Math.PI * t)));
+      }
+      path.push(tip);
+      g.add(new THREE.Mesh(this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(path), 48, 0.009, 8, false)), mat));
+      const mic = new THREE.Mesh(this._track(new THREE.CapsuleGeometry(0.02, 0.035, 6, 12)), soft); mic.position.copy(tip); mic.rotation.z = Math.PI / 2 - 0.3; g.add(mic);
+    }
+    this.headRoot.add(g); this.headphones = g;
+  }
+
+  /**
+   * Маска (5.12): ткань от переносицы до подбородка, натянута по «верхней огибающей» лица (в ямки не проваливается),
+   * едет за челюстью и морфами кожи (как борода, см. _mouthPoint). Губы и усы под маской скрываются.
+   */
+  _buildMask() {
+    const mk = this.P.mask;
+    if (!mk) return;
+    const P = this.P, style = mk.style || 'medical', hm = this.hm;
+    const cols = Math.round(44 * (this.L.beard + 0.3) / 1.3), rows = Math.round(34 * (this.L.beard + 0.3) / 1.3);
+    const x0 = -0.62, x1 = 0.62, yTop = -0.1, yBot = -1.0;
+    const eyeY = this.eye.y ?? LAYOUT.eyeY;
+    // верхняя огибающая: максимум высоты в окрестности, затем сглаживание — ткань натянута
+    const GW = 64, GH = 56, env = new Float32Array(GW * GH), tmp = new Float32Array(GW * GH);
+    const gx = (i) => lerp(x0 - 0.05, x1 + 0.05, i / (GW - 1)), gy = (j) => lerp(yTop + 0.05, yBot - 0.08, j / (GH - 1));
+    // вне лица карта высот пуста (−10): сдвигаемся к середине до ближайшей точки лица
+    const valid = (x, y) => { for (let k = 0; k < 80; k++) { const z = hm.get(x, y); if (z > -1) return [x, z, y]; x *= 0.97; if (k > 40) y += 0.01; } return [x, 0, y]; };
+    for (let j = 0; j < GH; j++) for (let i = 0; i < GW; i++) env[j * GW + i] = valid(gx(i), gy(j))[1];
+    const R = 3;
+    for (let j = 0; j < GH; j++) for (let i = 0; i < GW; i++) { let m = -9; for (let dj = -R; dj <= R; dj++) for (let di = -R; di <= R; di++) { const a = i + di, b = j + dj; if (a >= 0 && b >= 0 && a < GW && b < GH) m = Math.max(m, env[b * GW + a] - 0.004 * (di * di + dj * dj)); } tmp[j * GW + i] = m; }
+    for (let it = 0; it < 3; it++) for (let j = 1; j < GH - 1; j++) for (let i = 1; i < GW - 1; i++) env[j * GW + i] = (tmp[j * GW + i] * 4 + tmp[j * GW + i - 1] + tmp[j * GW + i + 1] + tmp[(j - 1) * GW + i] + tmp[(j + 1) * GW + i]) / 8, tmp.set(env);
+    const envAt = (x, y) => { const fi = clamp(((x - x0 + 0.05) / (x1 - x0 + 0.1)) * (GW - 1), 0, GW - 1.001), fj = clamp(((yTop + 0.05 - y) / (yTop - yBot + 0.13)) * (GH - 1), 0, GH - 1.001); const i = fi | 0, j = fj | 0, u = fi - i, v = fj - j; return lerp(lerp(env[j * GW + i], env[j * GW + i + 1], u), lerp(env[(j + 1) * GW + i], env[(j + 1) * GW + i + 1], u), v); };
+    const geo = this._track(dynamicGrid(cols, rows, false));
+    const n = (cols + 1) * (rows + 1), rest = new Float32Array(n * 3), wj = new Float32Array(n), col = new Float32Array(n * 3);
+    const beardT = P.beard && P.beard.style && P.beard.style !== 'none' ? 0.03 + 0.06 * (P.beard.length ?? 0.3) : 0;
+    for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
+      const i = r * (cols + 1) + c, u = (c / cols) * 2 - 1, v = r / rows;
+      // контур: верх — по переносице и под глазами (дугой), низ — под подбородком; бока уходят к ушам
+      const top = yTop - 0.02 - 0.1 * u * u + (style === 'n95' ? 0.02 : 0);
+      const xr = u * lerp(0.48, 0.57, Math.sin(Math.PI * v)) * (style === 'n95' ? 0.92 : 1);
+      // низ — по линии челюсти: самая низкая точка лица в этом столбце + запас
+      let yl = -1.04; while (yl < -0.5 && hm.get(xr, yl) < -1) yl += 0.01;
+      const bot = Math.max(yBot + 0.08 * u * u - (style === 'n95' ? 0.02 : 0), yl + 0.035);
+      const [x, z0, y] = valid(xr, lerp(top, bot, v));
+      let dz = Math.max(0, envAt(x, y) - z0) + 0.014 + beardT * smoothstep(-0.35, -0.6, y);
+      if (style === 'medical') dz += 0.004 * Math.sin(v * Math.PI * 6) ** 2 * (1 - Math.abs(u) ** 2);   // складки-гармошка
+      if (style === 'n95') dz += 0.06 * Math.sin(Math.PI * v) * (1 - u * u);                        // жёсткая «чашка»
+      dz = Math.max(0.007, dz - 0.05 * smoothstep(0.75, 1, Math.abs(u)));                          // края прилегают к щекам, но не уходят под кожу
+      // на крутых боках зазор по нормали, а не по глубине: иначе сетка между отсчётами прорезает кожу
+      const hx = (hm.get(x + 0.012, y) - hm.get(x - 0.012, y)) / 0.024, hy = (hm.get(x, y + 0.012) - hm.get(x, y - 0.012)) / 0.024;
+      if (Math.abs(hx) < 50 && Math.abs(hy) < 50) dz += Math.min(0.09, 0.016 * (Math.sqrt(1 + hx * hx + hy * hy) - 1));
+      rest[i * 3] = x; rest[i * 3 + 1] = y; rest[i * 3 + 2] = dz;
+      wj[i] = jawWeight(x, y, z0) * smoothstep(-0.42, -0.62, y);
+      const sh = 0.9 + 0.1 * Math.cos(u * 1.4);
+      col.set([sh, sh, sh], i * 3);
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    const mat = this._track(new THREE.MeshPhysicalMaterial({ color: mk.color || '#bcd8ea', roughness: style === 'cloth' ? 0.95 : 0.8, sheen: style === 'cloth' ? 0.5 : 0.2, sheenColor: new THREE.Color('#ffffff'), vertexColors: true, side: THREE.DoubleSide }));
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = 'mask'; mesh.frustumCulled = false; mesh.renderOrder = 30;          // после губ и усов
+    this.headRoot.add(mesh);
+    this.maskPart = { mesh, rest, w: wj, cols, rows };
+    // резинки к ушам
+    const w = prof(P.gx, -0.06) * 0.998, strapMat = this._track(new THREE.MeshStandardMaterial({ color: style === 'cloth' ? mk.color || '#30343c' : '#f4f4f2', roughness: 0.7 }));
+    this._maskStraps = [];
+    for (const sg of [1, -1]) for (const [vy, ey] of [[0.12, 0.02], [0.88, -0.17]]) {
+      const c = sg > 0 ? cols : 0, r = Math.round(vy * rows), i = r * (cols + 1) + c;
+      const a = new THREE.Vector3(rest[i * 3], rest[i * 3 + 1], hm.get(rest[i * 3], rest[i * 3 + 1]) + rest[i * 3 + 2]);
+      const b = new THREE.Vector3(sg * (w + 0.02), ey, -0.12), m = new THREE.Vector3(sg * (w - 0.02), lerp(a.y, ey, 0.5), lerp(a.z, -0.05, 0.6));
+      const s2 = new THREE.Mesh(this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([a, m, b]), 16, 0.006, 5, false)), strapMat);
+      s2.renderOrder = 30; this.headRoot.add(s2);
+    }
+    void eyeY;
+  }
+
+  _updateMask() {
+    const pt = this.maskPart;
+    if (!pt) return;
+    const pos = pt.mesh.geometry.attributes.position.array, n = pos.length / 3;
+    for (let i = 0; i < n; i++) this._mouthPoint(pt.rest[i * 3], pt.rest[i * 3 + 1], pt.rest[i * 3 + 2], pt.w[i], this._jaw, pos, i * 3);
+    pt.mesh.geometry.attributes.position.needsUpdate = true;
+    pt.mesh.geometry.computeVertexNormals();
+  }
+
   /** Хвост (сужающаяся трубка от затылка вниз) или пучок (сфера на макушке сзади). */
   _buildHairTail(kind) {
     const P = this.P, tmp = [0, 0, 0];
@@ -1923,11 +2085,16 @@ export class ProceduralHead {
         const i = r * (cols + 1) + c, t = clamp(mask(lerp(x0, x1, c / cols), lerp(y1, y0, r / rows)), 0, 1);
         const q = [lerp(x0, x1, c / cols), lerp(y1, y0, r / rows), 0.5];
         if (this._warpF) this._warpF(q);                           // маска — по параметрическим губам, положение — по сдвинутой коже
+        // вне лица карта высот пуста (−10): точку — к середине, до лица (иначе при повороте тянутся полосы)
+        const bad = this.hm.get(q[0], q[1] - (extra.droop || 0) * t) < -1;   // такие точки ещё и прозрачные (см. col ниже)
+        for (let k = 0; k < 80 && this.hm.get(q[0], q[1] - (extra.droop || 0) * t) < -1; k++) { q[0] *= 0.97; if (k > 40) q[1] += 0.01; }
         const x = q[0], y = q[1], z0 = this.hm.get(x, y);
-        rest[i * 3] = x; rest[i * 3 + 1] = y - (extra.droop || 0) * t; rest[i * 3 + 2] = depth(t, x, y);
+        // под маской борода прижата (иначе торчит сквозь ткань); видна только по краям
+        const um = P.mask ? 1 - 0.92 * smoothstep(0.6, 0.48, Math.abs(x)) * smoothstep(-0.06, -0.16, y) * smoothstep(-1.04, -0.94, y) : 1;
+        rest[i * 3] = x; rest[i * 3 + 1] = y - (extra.droop || 0) * t; rest[i * 3 + 2] = depth(t, x, y) * um;
         w[i] = jaw ? jawWeight(x, y, z0) : 0;
         const v = lerp(0.55, 1, t) * (0.9 + 0.1 * Math.sin(c * 2.3 + r * 1.7));
-        col.set([v, v, v, ss(0.02, 0.55, t)], i * 4);
+        col.set([v, v, v, bad ? 0 : ss(0.02, 0.55, t)], i * 4);
       }
       geo.setAttribute('color', new THREE.BufferAttribute(col, 4));
       const mesh = new THREE.Mesh(geo, extra.mat || mat);
@@ -2242,8 +2409,8 @@ export class ProceduralHead {
     this._updateHairSwing(pose);
     // губы и усы рисуются без теста глубины (поверх полости рта) — со спины их прячем, иначе просвечивают сквозь затылок
     const facing = Math.cos(pose.yaw) * Math.cos(pose.pitch) > 0.05;
-    if (this.mouth.lipU) this.mouth.lipU.visible = this.mouth.lipL.visible = facing;
-    for (const pt of this.beard?.parts || []) if (pt.mesh.name === 'moustache') pt.mesh.visible = facing && !pt.mesh.userData.hidden;   // hidden — скрыты снаружи (кадр для метрики)
+    if (this.mouth.lipU) this.mouth.lipU.visible = this.mouth.lipL.visible = facing && !this.maskPart;   // под маской губ не видно (они без теста глубины)
+    for (const pt of this.beard?.parts || []) if (pt.mesh.name === 'moustache') pt.mesh.visible = facing && !pt.mesh.userData.hidden && !this.maskPart;   // hidden — скрыты снаружи (кадр для метрики)
     const br = pose.breath || 0;
     this.body.position.y = br * 0.012;
     this.body.scale.set(1 + br * 0.006, 1, 1 + br * 0.01);
@@ -2280,6 +2447,7 @@ export class ProceduralHead {
     this._updateBrows(ch);
     this._updateMouth(ch);
     this._updateBeard();
+    this._updateMask();
   }
 
   /** Преломление в роговице вкл/выкл (кадры для измерений рендерятся без него — см. EmotionalHead._shotFace). */
