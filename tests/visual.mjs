@@ -58,6 +58,7 @@ export const CASES = [
   { name: 'male-gray-salt-pepper-beard', gender: 'male', look: { hair: '#2a1f18', hairGray: 0.45, beard: 'full' } },
   { name: 'female-pupil-dilated-side', gender: 'female', channels: { pupil: 1.5 }, framing: 'close', pose: { yaw: 0.45 } },
   { name: 'male-pupil-constricted-nocornea', gender: 'male', look: { cornea: false, iris: 'blue' }, channels: { pupil: -1 }, framing: 'close' },
+  { name: 'female-eye-asymmetry', gender: 'female', look: { eyeOpenL: 1.15, eyeOpenR: 0.87, eyeLiftL: 3, eyeLiftR: -3 }, framing: 'close' },
 ];
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg' };

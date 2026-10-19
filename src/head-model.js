@@ -2018,8 +2018,10 @@ export class ProceduralHead {
       const chs = ch['cheekSquint' + S] || 0, sm = ch['mouthSmile' + S] || 0;
       const bd = ch['browDown' + S] || 0, bu = Math.max(ch.browInnerUp || 0, ch['browOuterUp' + S] || 0);
       // веки следуют за взглядом: вниз верхнее веко почти «едет» за зрачком, вверх — меньше; нижнее — слабее
-      const lower = P.lowerOpen + 13 * sq + 9 * chs + 3 * sm - 4 * wide + pitchDeg * (pitchDeg > 0 ? 0.4 : 0.22);
-      const open = P.upperOpen + 18 * wide - 7 * sq - 5 * bd + 3 * bu + pitchDeg * (pitchDeg > 0 ? 0.55 : 0.85);
+      // асимметрия глаз (2.10): раскрытие щели (множитель) и её высота (сдвиг обоих век, градусы) — у каждого глаза свои
+      const oS = (e.sg > 0 ? P.eyeOpenL : P.eyeOpenR) ?? 1, lift = (e.sg > 0 ? P.eyeLiftL : P.eyeLiftR) ?? 0;
+      const lower = P.lowerOpen * oS + lift + 13 * sq + 9 * chs + 3 * sm - 4 * wide + pitchDeg * (pitchDeg > 0 ? 0.4 : 0.22);
+      const open = P.upperOpen * oS + lift + 18 * wide - 7 * sq - 5 * bd + 3 * bu + pitchDeg * (pitchDeg > 0 ? 0.55 : 0.85);
       const upper = Math.max(lower + 1.2, lerp(open, lower + 1.5, clamp(blink, 0, 1)));
       e.up.rotation.x = -upper * DEG;
       e.lo.rotation.x = -lower * DEG;

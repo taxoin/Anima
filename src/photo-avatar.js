@@ -35,6 +35,7 @@ export const PHOTO_ASSETS = {
 
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const lerp = (a, b, t) => a + (b - a) * t;
+const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const DEG = Math.PI / 180;
 const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: ((a.z || 0) + (b.z || 0)) / 2 });
 const hex = (c) => '#' + c.map((v) => clamp(Math.round(v * 255), 0, 255).toString(16).padStart(2, '0')).join('');
@@ -532,6 +533,43 @@ export class Portrait {
     return [d[k] / 255, d[k + 1] / 255, d[k + 2] / 255];
   }
 
+  /**
+   * Асимметрия глаз (2.10) по несимметризованным точкам. Система координат головы выравнивает линию глаз по углам,
+   * поэтому разница высот меряется относительно средней линии лица (переносица 168 → подбородок 152).
+   * open — раскрытие (высота / ширина) каждого глаза, lift — центр щели над линией углов того же глаза,
+   * dy — высота глаза (центр углов) относительно другого в системе средней линии.
+   */
+  _eyeAsym() {
+    const P = this.head, avg = (idx) => idx.reduce((s, i) => s + P[i].y, 0) / idx.length;
+    const eye = (o, n, up, lo) => {
+      const w = Math.hypot(P[o].x - P[n].x, P[o].y - P[n].y), h = avg(up) - avg(lo), cy = (P[o].y + P[n].y) / 2;
+      return { open: h / w, lift: ((avg(up) + avg(lo)) / 2 - cy) / w, cx: (P[o].x + P[n].x) / 2, cy, w };
+    };
+    const L = eye(263, 362, [385, 386, 387], [380, 374, 373]), R = eye(33, 133, [158, 159, 160], [153, 145, 144]);
+    const phi = Math.atan2(P[168].x - P[152].x, P[168].y - P[152].y);    // наклон средней линии от вертикали
+    const ry = (e) => e.cy * Math.cos(phi) + e.cx * Math.sin(phi);
+    this.eyeAsymRaw = { openL: L.open, openR: R.open, liftL: L.lift, liftR: R.lift, dy: (ry(L) - ry(R)) / ((L.w + R.w) / 2), wr: L.w / R.w };
+  }
+
+  /**
+   * Асимметрия глаз → параметры век. Поправки на поворот головы — регрессия по 19 портретам
+   * (ln раскрытия: −0.96·yaw, разница высот: −0.345·yaw); остаток на портретах анфас ±0.03–0.05.
+   * Мёртвая зона — шум точек; при |yaw| > 0.15 асимметрия не переносится (поворот её искажает).
+   * eyeOpenL/R — множители раскрытия, eyeLiftL/R — сдвиг щели вверх, градусы поворота век.
+   */
+  _eyeAsymOv(k, eyeR) {
+    const A = this.eyeAsymRaw;
+    if (!A || !(k > 0)) return {};
+    const w = smoothstep(0.15, 0.05, Math.abs(this.yaw)) * k;
+    if (w <= 0) return {};
+    const soft = (v, t) => Math.sign(v) * Math.max(0, Math.abs(v) - t);
+    const lo = clamp(soft(Math.log(A.openL / A.openR) + 0.96 * this.yaw + 0.014, 0.03) * w, -0.25, 0.25);
+    const dy = clamp(soft(A.dy + 0.345 * this.yaw, 0.015) * w, -0.08, 0.08);     // в ширинах глаза
+    const lift = (Math.asin(clamp((dy * 2 * eyeR * 1.05) / 2 / (eyeR * 1.04), -0.5, 0.5)) * 180) / Math.PI;
+    const r = (v) => Math.round(v * 1000) / 1000;
+    return lo || dy ? { eyeOpenL: r(Math.exp(lo / 2)), eyeOpenR: r(Math.exp(-lo / 2)), eyeLiftL: r(lift), eyeLiftR: r(-lift) } : {};
+  }
+
   /** Меры лица с поправкой на выражение на снимке. */
   _measure() {
     const b = this.bs, g = (k) => b[k] || 0;
@@ -570,6 +608,7 @@ export class Portrait {
       M.bowRC = (S[0].y - S[13].y) / Math.max(0.004, S[267].y - yIn);
     }
     this.meas = M;
+    this._eyeAsym();
     this.expression = { smile, squint, blink, mouthOpen: gap };
   }
 
@@ -1130,6 +1169,7 @@ export class Portrait {
     if (this.lidTex && tex > 0) ov.lidTint = this.lidTex.map((v) => lerp(1, v, tex));
     if (this.beard > 0.05) ov.stubble = this.beard * 2.2;      // борода/щетина: затемнение челюсти и усов поверх текстуры
     if (this.hairColor) ov.hair = hex(this.hairColor.map((v) => v * 1.05));
+    Object.assign(ov, this._eyeAsymOv(k, eyeR));
     if (this.hairGray > 0) { ov.hairGray = Math.round(this.hairGray * 100) / 100; ov.hairGrayColor = hex(this.hairGrayColor.map((v) => v * 1.05)); }
     if (this.hairVar !== null) ov.hairVar = Math.round(this.hairVar * 100) / 100;
     if (this.clothColor) ov.cloth = hex(this.clothColor);
@@ -1311,6 +1351,7 @@ export class Portrait {
     p.px = [];
     for (let i = 0; i < lm.length; i += 3) p.px.push({ x: ox + lm[i] / 8, y: oy + lm[i + 1] / 8, z: lm[i + 2] / 8 });
     p._initFrame();
+    p._eyeAsym();
     p.meas = d.meas; p.warnings = d.warnings || []; p.expression = d.expression || {};
     const C = d.colors || {};
     p.skinPhoto = C.skinPhoto || C.skin || [0.85, 0.68, 0.58]; p.skinTex = C.skin || p.skinPhoto;
