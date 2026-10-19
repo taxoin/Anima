@@ -96,6 +96,13 @@ export const EYE_SHAPES = {
   hooded: { hood: 0.8, lidCrease: 0.2, upperOpen: 22 },
   monolid: { hood: 0.55, lidCrease: 0, epicanthus: 0.85, upperOpen: 19, lowerOpen: -19, lidUpFull: -2, eyeTilt: 0.12 },
 };
+/** Профиль губ (4.5): look: { lipProfile: 'full' }. Свои lipPro/lipDepthU/lipDepthL/philtrum из look важнее. */
+export const LIP_PROFILES = {
+  flat: { lipPro: -0.6, lipDepthU: -0.3, lipDepthL: -0.4, philtrum: 0.3 },
+  average: { lipPro: 0, lipDepthU: 0, lipDepthL: 0, philtrum: 0.5 },
+  full: { lipPro: 0.7, lipDepthU: 0.6, lipDepthL: 0.6, philtrum: 0.7 },
+  protruding: { lipPro: 1.2, lipDepthU: 0.3, lipDepthL: 1, philtrum: 0.5 },
+};
 /** Формы носа (featureDz): look: { noseShape: 'roman' }. Свои noseBridge/noseHump/… из look важнее. */
 export const NOSE_SHAPES = {
   straight: {},
@@ -165,7 +172,7 @@ export function resolveLook(look = {}) {
   // разрез — первым: пресет задаёт lid*/eyeTilt/upperOpen, явные значения из look важнее
   // пресеты разреза и причёски — первыми: явные значения из look важнее (иначе строки вроде skin: 'brown' затрут готовый цвет)
   const hs = typeof look.hairStyle === 'string' && HAIR_STYLES[look.hairStyle];
-  const o = { ...(typeof look.eyeShape === 'string' && EYE_SHAPES[look.eyeShape] || {}), ...(typeof look.noseShape === 'string' && NOSE_SHAPES[look.noseShape] || {}), ...(hs || {}), ...look };
+  const o = { ...(typeof look.eyeShape === 'string' && EYE_SHAPES[look.eyeShape] || {}), ...(typeof look.noseShape === 'string' && NOSE_SHAPES[look.noseShape] || {}), ...(typeof look.lipProfile === 'string' && LIP_PROFILES[look.lipProfile] || {}), ...(hs || {}), ...look };
   if (hs) o.hairStyle = hs.hairStyle;
   if (typeof o.skin === 'string' && SKIN_TONES[o.skin]) {
     const t = SKIN_TONES[o.skin];
@@ -260,8 +267,14 @@ function featureDz(x, y, P) {
   dz += 0.035 * (1 + 0.9 * bulb) * G(x, yn, 0, tipY, 0.05 * nw * (1 + 0.35 * bulb), 0.05 * (1 + 0.25 * bulb));   // кончик носа
   dz -= 0.03 * Math.max(0, up) * G(x, yn, 0, -0.262, 0.045 * nw, 0.022);           // вздёрнутый: колумелла уходит вверх
   dz += 0.042 * (1 + 0.6 * flare) * G(ax, yn, 0.07 * nw * (1 + 0.15 * flare), -0.245, 0.032 * nw * (1 + 0.2 * flare), 0.028);   // крылья носа
-  dz += 0.05 * G(x, y, 0, -0.5, 0.2, 0.14);                          // зона рта
-  dz -= 0.02 * G(x, y, 0, -0.635, 0.12, 0.025);                      // ямка под губой
+  // губы в 3D (4.5): выступ губ вперёд (lipPro), впадина над верхней губой (lipDepthU), ямка под нижней (lipDepthL),
+  // фильтрум — желобок с валиками от носа к «луку Купидона» (philtrum, 0…1)
+  const pro = P.lipPro || 0, dU = P.lipDepthU || 0, dL = P.lipDepthL || 0, ph = P.philtrum || 0;
+  dz += 0.05 * (1 + 0.6 * pro) * G(x, y, 0, -0.5, 0.2, 0.14);       // зона рта
+  if (pro) dz += 0.028 * pro * G(x, y, 0, -0.53, 0.19, 0.07);        // сами губы
+  if (dU) dz -= 0.014 * dU * G(x, y, 0, -0.39, 0.11, 0.045);
+  if (ph) dz += ph * (0.005 * G(ax, y, 0.03, -0.385, 0.012, 0.055) - 0.004 * G(x, y, 0, -0.385, 0.014, 0.055));
+  dz -= 0.02 * (1 + dL) * G(x, y, 0, -0.635, 0.12, 0.025);          // ямка под губой
   dz += P.chin * G(x, y, 0, -0.78, P.chinSX, 0.07);                  // подбородок
   dz += P.cheek * G(ax, y, 0.44, -0.05, 0.1, 0.08);                  // скулы
   dz -= P.hollow * G(ax, y, 0.46, -0.32, 0.1, 0.1);                  // впалые щёки (м)

@@ -62,6 +62,7 @@ export const CASES = [
   { name: 'female-lip-asymmetry', gender: 'female', look: { mouthCornerL: 0.015, mouthCornerR: -0.01, lipLAsym: 0.25, lipLoShape: 3.5 }, framing: 'close' },
   { name: 'female-braces-smile', gender: 'female', look: { braces: true }, channels: { ...SMILE, jawOpen: 0.22, mouthLowerDownLeft: 0.3, mouthLowerDownRight: 0.3 }, framing: 'close' },
   { name: 'male-gap-crooked-yellow', gender: 'male', look: { teethGap: 1, teethCrooked: 1, teethColor: 'yellow' }, channels: AA, framing: 'close' },
+  { name: 'female-lips-protruding-profile', gender: 'female', look: { lipProfile: 'protruding' }, pose: { yaw: 1.2 } },
 ];
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg' };
