@@ -1143,7 +1143,8 @@ export class ProceduralHead {
     const hm0 = new HeightMap(geo);
     const eyeR = P.eyeR, rs = eyeR * 1.08;
     const ex = P.eyeX ?? LAYOUT.eyeX;
-    this.eye = { r: eyeR, rs, rl: eyeR * 1.03, x: ex, y: LAYOUT.eyeY, z: hm0.get(ex, LAYOUT.eyeY) - 0.078 };
+    // rl — оболочка нижнего века: снаружи выпуклости роговицы (иначе при взгляде вниз и поднятом веке зрачок проступает сквозь веко)
+    this.eye = { r: eyeR, rs, rl: eyeR * (P.cornea === false ? 1.03 : 1 + CORNEA_H + 0.012), x: ex, y: LAYOUT.eyeY, z: hm0.get(ex, LAYOUT.eyeY) - 0.078 };
     const E = this.eye;
     const pos = geo.attributes.position.array;
     this._eyeRing = new Float32Array(pos.length / 3);
