@@ -247,6 +247,53 @@ function shapeHead(px, py, pz, P, out) {
   return out;
 }
 
+/** Функция деформации по точкам (P.warp) или null; см. ProceduralHead._initWarp. Сдвигает только x, y. */
+function makeWarp(W) {
+  if (!W?.pts?.length || !(W.scale ?? 1)) return null;
+  const sc = W.scale ?? 1, S = [], D = [];
+  for (const [x, y, dx, dy] of W.pts) { S.push({ x, y }); D.push({ x: dx * sc, y: dy * sc }); }
+  const f = thinPlate(S, D, W.lambda ?? 3e-4), t = { x: 0, y: 0 }, [cx, cy, rx, ry] = W.win || [0, -0.2, 0.75, 0.78];
+  return (p) => {
+    const w = smoothstep(-0.6, 0, p[2]);
+    if (w <= 0) return p;
+    const e = Math.hypot((p[0] - cx) / rx, (p[1] - cy) / ry), c = e > 1 ? 1 / e : 1;
+    f(cx + (p[0] - cx) * c, cy + (p[1] - cy) * c, t);
+    p[0] += t.x * w; p[1] += t.y * w;
+    return p;
+  };
+}
+
+/**
+ * Передний силуэт головы сбоку (7.5): для каждой высоты y — самая выступающая вперёд точка кожи z(y), как контур
+ * головы на снимке в профиль (ортогональная проекция). Считается прямо по форме черепа (shapeHead + деформация
+ * по точкам), без сборки модели: ~20 мс. Глазницы не учитываются — на силуэт выходят переносица и нос.
+ * @returns {{ y0: number, step: number, z: Float32Array }}  z[i] — на высоте y0 + i·step (−Infinity — нет кожи)
+ */
+export function profileCurve(gender, overrides = {}, { y0 = -1.1, y1 = 0.6, step = 0.004 } = {}) {
+  const P = { ...PRESETS[gender] || PRESETS.female, ...resolveLook(overrides) }, warp = makeWarp(P.warp);
+  const n = Math.round((y1 - y0) / step) + 1, z = new Float32Array(n).fill(-Infinity), q = [0, 0, 0];
+  for (let i = 0; i <= 900; i++) {
+    const lat = -1.25 + (2.15 * i) / 900, cl = Math.cos(lat), sl = Math.sin(lat);
+    for (let j = 0; j <= 40; j++) {
+      const lon = -0.7 + (1.4 * j) / 40;
+      shapeHead(cl * Math.sin(lon), sl, cl * Math.cos(lon), P, q);
+      if (warp) warp(q);
+      const k = Math.round((q[1] - y0) / step);
+      if (k >= 0 && k < n && q[2] > z[k]) z[k] = q[2];
+    }
+  }
+  // губы — отдельный меш поверх кожи: центральная колонка как в _updateMouth в покое (кожа + валик губы)
+  const zAt = (y) => { const f = (y - y0) / step, i = Math.floor(f), a = z[i], b = z[i + 1]; return Number.isFinite(a) && Number.isFinite(b) ? a + (b - a) * (f - i) : a; };
+  const MY = LAYOUT.mouthY, thU = P.lipU * upperLipProfile(0, P), thL = P.lipL, add = [];
+  for (const [th, sg] of [[thU, 1], [thL, -1]]) for (let r = 0; r <= 40; r++) {
+    const sv = r / 40, y = MY + sg * th * sv;
+    const bulge = th * 0.55 * Math.pow(Math.sin(Math.PI * (0.12 + 0.88 * sv)), 0.65) * (1 - 0.3 * sv) + 0.0022 * Math.exp(-(((sv - 0.9) / 0.06) ** 2));
+    add.push([y, zAt(y) + 0.004 + bulge - 0.012 * (1 - sv) ** 3]);
+  }
+  for (const [y, zz] of add) { const k = Math.round((y - y0) / step); if (k >= 0 && k < n && zz > z[k]) z[k] = zz; }
+  return { y0, step, z };
+}
+
 /** Нос по вертикали: y головы → y "эталонного" носа (кончик на -0.21). */
 const noseY = (y, P) => LAYOUT.eyeY + (y - LAYOUT.eyeY) * (0.24 / (LAYOUT.eyeY - (P.noseTipY ?? -0.21)));
 
@@ -997,22 +1044,7 @@ export class ProceduralHead {
    *   P.warp = { pts: [[x, y, dx, dy], …], scale = 1, win: [cx, cy, rx, ry] }
    * Вне эллипса win поле берётся с его границы: силуэт, уши и волосы сдвигаются вместе с контуром лица.
    */
-  _initWarp() {
-    const W = this.P.warp;
-    this._warpF = null;
-    if (!W?.pts?.length || !(W.scale ?? 1)) return;
-    const sc = W.scale ?? 1, S = [], D = [];
-    for (const [x, y, dx, dy] of W.pts) { S.push({ x, y }); D.push({ x: dx * sc, y: dy * sc }); }
-    const f = thinPlate(S, D, W.lambda ?? 3e-4), t = { x: 0, y: 0 }, [cx, cy, rx, ry] = W.win || [0, -0.2, 0.75, 0.78];
-    this._warpF = (p) => {
-      const w = smoothstep(-0.6, 0, p[2]);
-      if (w <= 0) return p;
-      const e = Math.hypot((p[0] - cx) / rx, (p[1] - cy) / ry), c = e > 1 ? 1 / e : 1;
-      f(cx + (p[0] - cx) * c, cy + (p[1] - cy) * c, t);
-      p[0] += t.x * w; p[1] += t.y * w;
-      return p;
-    };
-  }
+  _initWarp() { this._warpF = makeWarp(this.P.warp); }
 
   _track(x) { this._disposables.push(x); return x; }
 

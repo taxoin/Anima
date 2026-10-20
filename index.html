@@ -150,6 +150,7 @@
       <div class="row"><label style="width:84px" for="realism">реализм</label><input type="range" id="realism" min="0" max="1" step="0.05" value="0.8"><span class="val" id="realismV">0.8</span></div>
       <div class="row"><label><input type="checkbox" id="photoAcc"> искать очки и шапки (+16 МБ модель)</label></div>
       <div class="row"><button id="photoClear" disabled>Стандартная голова</button><button id="photoRefine" disabled title="Рендер → те же точки лица → сдвинуть овал и нос под фото (~2–4 с)">Подогнать форму</button><span class="hint" id="photoStatus"></span></div>
+      <div class="row"><label class="filebtn" for="profileFile" title="Второй снимок того же человека строго сбоку: глубина носа, губ, подбородка">Добавить профиль</label><input type="file" id="profileFile" accept="image/*" hidden><span class="hint" id="profileInfo"></span></div>
       <div class="row"><button id="avatarSave" disabled>Сохранить аватар</button><label class="filebtn" for="avatarFile">Открыть аватар</label><input type="file" id="avatarFile" accept=".json,application/json" hidden></div>
       <div class="row"><button id="glbSave" title="Сетка, материалы и 52 ARKit-морфа — для Blender, Unity, Unreal">Скачать .glb</button><select id="glbDetail" title="Детализация файла"><option value="high">high</option><option value="medium" selected>medium</option><option value="low">low</option></select></div>
       <div class="hint">Файл аватара весит около 10 КБ: точки лица, цвета и кожа, без исходного фото. Его можно переслать на другой телефон и открыть там, распознавание не нужно.</div>
@@ -386,6 +387,20 @@ async function usePhoto(src, label) {
 $('#photoFile').onchange = (e) => { const f = e.target.files[0]; if (f) usePhoto(f, f.name); e.target.value = ''; };
 document.querySelectorAll('[data-sample]').forEach((b) => b.onclick = () => usePhoto(b.dataset.sample, b.textContent));
 $('#photoClear').onclick = () => { api('head.clearPhoto()', () => head.clearPhoto()); $('#photoBox').hidden = true; $('#photoClear').disabled = $('#avatarSave').disabled = $('#photoRefine').disabled = true; status(''); };
+$('#profileFile').onchange = async (e) => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f || photoBusy) return;
+  photoBusy = true;
+  try {
+    const t0 = performance.now();
+    const r = await api('await head.addProfile(file)', () => head.addProfile(f, { onProgress: status }));
+    status(`Профиль учтён за ${((performance.now() - t0) / 1000).toFixed(1)} с`);
+    $('#profileInfo').innerHTML = `нос ${r.params.nose}, подбородок ${r.params.chin}, губы ${r.params.lipPro}` + r.warnings.map((w) => `<div class="warn">${w}</div>`).join('');
+    log(`⟵ addProfile ${fmt(r.params)} rms ${r.rms}`);
+    head.setFraming('portrait'); head.lookAt(1.2, 0, { head: 1 }); setTimeout(() => head.lookAt(null), 2500);   // показать профиль
+  } catch (err) { status(''); $('#profileInfo').innerHTML = `<span class="warn">${err.message || err}</span>`; log('✕ ' + (err.message || err), 'err'); }
+  finally { photoBusy = false; }
+};
 $('#photoRefine').onclick = async () => {
   if (photoBusy) return;
   photoBusy = true; $('#photoRefine').disabled = true;

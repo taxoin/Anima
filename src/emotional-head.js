@@ -309,6 +309,7 @@ export class EmotionalHead {
    * @param {'female'|'male'|'auto'|'keep'} [o.gender='auto'] основа (шея, плечи, причёска по умолчанию); auto — по фото, если модель уверена (иначе текущий пол и предупреждение); keep — текущий
    * @param {boolean} [o.shape=false]  сразу подогнать форму по точкам лица (refineShape, +1.5–3 с)
    * @param {'full'} [o.detail]         очки и головные уборы по многоклассовому сегментатору (+16 МБ модель; = accessories: true)
+   * @param {File|Blob|string|HTMLImageElement|HTMLCanvasElement} [o.profile]  второй снимок — строго в профиль: глубина носа, губ, подбородка (addProfile)
    * @param {function} [o.onProgress]    (text) => void
    * @returns {Promise<object>} отчёт: предупреждения, цвета, меры лица относительно среднего
    */
@@ -325,11 +326,44 @@ export class EmotionalHead {
     }
     this._rebuildRig();
     if (o.shape) await this.refineShape({ onProgress: o.onProgress });   // деформация по точкам (+1.5–3 с)
+    let profileErr = null;
+    if (o.profile) { try { await this.addProfile(o.profile, { onProgress: o.onProgress, silent: true }); } catch (e) { profileErr = e.message; } }
     const report = { ...portrait.report, gender: { value: this.gender, guess } };
+    if (profileErr) report.warnings = [...report.warnings, `Профиль не учтён: ${profileErr}`];
     if (guess && !guess.confident) report.warnings = [...report.warnings, `Пол по фото не определён уверенно (вероятность женского ${guess.p}) — оставлен текущий (${this.gender}). Задать явно: fromPhoto(src, { gender: 'male' | 'female' }).`];
     this._emit('photoAvatar', report);
     return report;
   }
+  /**
+   * Глубина лица по снимку строго в профиль (7.5): выступ носа, переносица, горбинка, вздёрнутость, губы,
+   * ямка под губой, подбородок. Контур профиля со снимка совмещается с контуром модели, параметры подгоняются
+   * (см. profile.js). С фото-аватаром — дополняет его (сохраняется в exportAvatar); без него — меняет look.
+   * @param {File|Blob|string|HTMLImageElement|HTMLCanvasElement} src
+   * @param {object} [o] { onProgress }
+   * @returns {Promise<{ params: object, rms: number, side: 1|-1, warnings: string[] }>}
+   */
+  async addProfile(src, o = {}) {
+    const { analyzeProfile, fitProfile } = await import('./profile.js');
+    const prof = await analyzeProfile(src, { onProgress: o.onProgress });
+    o.onProgress?.('Подгоняю глубину лица…');
+    const P = this._portrait, gender = this.gender;
+    let base;
+    if (P) { const saved = P.profile; P.profile = null; base = P.fit({ ...this._photoOpts, gender, texture: 0 }); P.profile = saved; }
+    else { const look = this.options.look || {}; base = look.female || look.male ? look[gender] || {} : look; }
+    const fit = fitProfile(prof.curve, gender, base);
+    const warnings = [...prof.warnings];
+    if (!fit.reliable) throw new Error('контур профиля не совместился с моделью (снимок не строго сбоку, контур закрыт волосами или фон сливается с лицом)');
+    const data = { params: fit.params, rms: +fit.rms.toFixed(4), side: prof.side, warnings, v: Date.now() };
+    if (P) { P.profile = data; P._fits.clear(); this._rebuildRig(); if (!o.silent) this._emit('photoAvatar', { ...P.report, gender: { value: this.gender } }); }
+    else this.setLook({ ...(this.options.look || {}), ...fit.params }, { replace: true });
+    return { params: data.params, rms: data.rms, side: data.side, warnings };
+  }
+  /** Убрать данные профиля (вернуть глубину по снимку анфас). */
+  clearProfile() {
+    if (this._portrait?.profile) { this._portrait.profile = null; this._portrait._fits.clear(); this._rebuildRig(); }
+    return this;
+  }
+
   /** Изменить шарж/текстуру без повторного распознавания. */
   setPhotoOptions(o = {}) {
     if (!this._portrait) return this;

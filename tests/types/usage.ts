@@ -21,7 +21,10 @@ console.log(first, v, Object.keys(EMOTIONS).length, SKIN_TONES.olive?.skin, OUTF
 async function main() {
   await head.speak('[e:coldIrony] Привет. *Слегка* улыбаюсь.', { emotion: 'auto', revert: true, rate: 1.1 });
   const rep: PhotoReport = await head.fromPhoto('/me.jpg', { caricature: 1.5, gender: 'auto', onProgress: (t) => console.log(t) });
-  console.log(rep.issues.length, rep.gender?.value);
+  console.log(rep.issues.length, rep.gender?.value, rep.profile?.params.nose);
+  const pr = await head.addProfile('/side.jpg');
+  console.log(pr.params.chin, pr.side);
+  await head.fromPhoto('/me.jpg', { profile: '/side.jpg' });
   const json: string = await head.exportAvatar({ format: 'json' });
   await head.importAvatar(json);
   const glb: ArrayBuffer = await head.exportGLB({ detail: 'medium' });

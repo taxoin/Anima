@@ -111,7 +111,7 @@ function b64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += 
 function ub64(s) { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
 function makeCanvas(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
 
-async function toCanvas(src, max = 1280) {
+export async function toCanvas(src, max = 1280) {
   let img = src;
   if (typeof src === 'string') img = await createImageBitmap(await (await fetch(src)).blob());
   else if (src instanceof Blob) img = await createImageBitmap(src);
@@ -300,7 +300,7 @@ export function shapeStep(portrait, render, base, k, o = {}) {
 
 let _multi = null, _multiKey = '';
 /** Многоклассовый сегментатор (по запросу): маска «прочее» = очки и аксессуары. */
-async function loadMulti(A) {
+export async function loadMulti(A) {
   if (_multi && _multiKey === A.multi) return _multi;
   _multiKey = A.multi;
   _multi = (async () => {
@@ -494,6 +494,7 @@ export class Portrait {
     this._texture();
     this._explain();
     this._fits = new Map();
+    this.profile = null;                                             // глубина по снимку в профиль (7.5): { params, rms, side, warnings, v }
   }
 
   /**
@@ -1299,7 +1300,7 @@ export class Portrait {
   fit(o = {}) {
     const k = o.caricature ?? 1.5, tex = clamp(o.texture ?? 0.9, 0, 1), gender = o.gender === 'male' ? 'male' : 'female';
     const re = clamp(o.realism ?? 0.8, 0, 1);
-    const key = `${k}|${tex}|${gender}|${re}|${this._corrV || 0}`;
+    const key = `${k}|${tex}|${gender}|${re}|${this._corrV || 0}|${this.profile?.v || 0}`;
     if (this._fits.has(key)) return this._fits.get(key);
     const Q = this.meas, Mn = MEAN_M;
     // основа: пресет пола, сдвинутый к реальным пропорциям
@@ -1420,6 +1421,7 @@ export class Portrait {
       if (this.hairlineY !== null) ov.hairline = clamp(this.hairlineY - (this.hairStyle === 'long' ? 0.6 : 0.64), -0.2, 0.22);
     }
     if (this.warp && k > 0) ov.warp = { pts: this.warp.pts, win: this.warp.win, scale: k / this.warp.k };
+    if (this.profile?.params) Object.assign(ov, this.profile.params);   // глубина по снимку в профиль (7.5) — вместо шаблонной
     if (tex > 0 && this.tex) ov.photo = this._photoMapping(ov, this._textureCanvas(tex));
     this._fits.set(key, ov);
     return ov;
@@ -1531,6 +1533,7 @@ export class Portrait {
       lidTex: rc(this.lidTex), beard: r4(this.beard), grayscale: !!this.grayscale, glasses: this.glasses || null, beardStyle: this.beardStyle || null, hat: this.hat || null,
       bs: this.bs ? Object.fromEntries(Object.entries(this.bs).filter(([, v]) => v > 0.03).map(([k, v]) => [k, Math.round(v * 100) / 100])) : null,
       hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY), r: this.hairR ? this.hairR.map(r4) : null, bang: this.bang ? { side: this.bang.side, depth: r4(this.bang.depth) } : null, gray: r4(this.hairGray || 0), grayColor: rc(this.hairGrayColor), vari: r4(this.hairVar) },
+      profile: this.profile ? { params: this.profile.params, rms: this.profile.rms, side: this.profile.side, warnings: this.profile.warnings } : null,
       tex: null,
       corr: this.corr ? JSON.parse(JSON.stringify(this.corr, (k, v) => (typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v))) : null,
       warp: this.warp ? { k: this.warp.k, n: this.warp.n, win: this.warp.win, pts: this.warp.pts.map((p) => p.map(r4)) } : null,
@@ -1568,6 +1571,7 @@ export class Portrait {
     p._eyeAsym();
     p._lipAsym();
     p.meas = d.meas; p.warnings = d.warnings || []; p.issues = d.issues || []; p.expression = d.expression || {};
+    p.profile = d.profile ? { ...d.profile, v: 1 } : null;
     const C = d.colors || {};
     p.skinPhoto = C.skinPhoto || C.skin || [0.85, 0.68, 0.58]; p.skinTex = C.skin || p.skinPhoto; p.skinLow = C.skinLow || null;
     p.lipColor = C.lip; p.browColor = C.brow; p.irisColor = C.iris; p.hairColor = C.hair; p.clothColor = C.cloth;
@@ -1604,6 +1608,7 @@ export class Portrait {
       measures: Object.fromEntries(Object.entries(this.meas).filter(([, v]) => typeof v === 'number').map(([k, v]) => [k, +(v / MEAN_M[k]).toFixed(3)])),
       widths: this.meas.widths.map((v) => +v.toFixed(3)),
       widthsAbs: this.meas.widthsAbs.map((v) => (v ? +v.toFixed(4) : null)),
+      profile: this.profile ? { params: this.profile.params, rms: this.profile.rms, warnings: this.profile.warnings } : null,
     };
   }
 }

@@ -182,8 +182,14 @@ export interface PhotoOptions {
   /** 'full' — очки и уборы по многоклассовому сегментатору (+16 МБ модель). */
   detail?: 'full';
   accessories?: boolean;
+  /** Второй снимок — строго в профиль: глубина носа, губ, подбородка (см. addProfile). */
+  profile?: File | Blob | string | HTMLImageElement | HTMLCanvasElement;
   onProgress?: (text: string) => void;
 }
+
+/** Параметры глубины по снимку в профиль. */
+export interface ProfileParams { nose: number; noseRoot: number; noseHump: number; noseUp: number; lipPro: number; lipDepthL: number; chin: number }
+export interface ProfileResult { params: ProfileParams; rms: number; side: 1 | -1; warnings: string[] }
 
 /** Отчёт распознавания фото: предупреждения, найденные цвета и детали, меры лица. */
 export interface PhotoReport {
@@ -191,6 +197,8 @@ export interface PhotoReport {
   issues: string[];
   gender?: { value: Gender; guess?: { gender: Gender; p: number; confident: boolean } };
   colors?: Record<string, string>;
+  /** Данные снимка в профиль, если он добавлен. */
+  profile?: { params: ProfileParams; rms: number; warnings: string[] } | null;
   [key: string]: unknown;
 }
 
@@ -313,6 +321,9 @@ export declare class EmotionalHead {
   fromPhoto(src: File | Blob | string | HTMLImageElement | HTMLCanvasElement, o?: PhotoOptions): Promise<PhotoReport>;
   setPhotoOptions(o?: Partial<Pick<PhotoOptions, 'caricature' | 'texture' | 'realism'>>): this;
   clearPhoto(): this;
+  /** Глубина лица по снимку строго в профиль; с фото-аватаром — дополняет его, без него — меняет look. */
+  addProfile(src: File | Blob | string | HTMLImageElement | HTMLCanvasElement, o?: { onProgress?: (text: string) => void }): Promise<ProfileResult>;
+  clearProfile(): this;
   likeness(o?: { base?: boolean; expression?: boolean; size?: number }): Promise<LikenessReport>;
   refinePhoto(o?: { iterations?: number; alpha?: number; onProgress?: (text: string) => void }): Promise<number[]>;
   refineShape(o?: { iterations?: number; alpha?: number; realism?: number; onProgress?: (text: string) => void }): Promise<number[]>;

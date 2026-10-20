@@ -46,6 +46,7 @@ export const CASES = [
   { name: 'avatar-monalisa-smile', avatar: '/tests/fixtures/monalisa.anima.json', channels: SMILE, framing: 'close' },
   // волна 4: деформация по точкам, нос, убор, пряди со спины (губы не просвечивают), роговица сбоку
   { name: 'avatar-lincoln-shape', avatar: '/tests/fixtures/lincoln-shape.anima.json', gender: 'male' },
+  { name: 'avatar-lincoln-profile-side', avatar: '/tests/fixtures/lincoln-profile.anima.json', gender: 'male', pose: { yaw: 1.35 } },   // 7.5: глубина по снимку в профиль
   { name: 'male-roman-nose-profile', gender: 'male', look: { noseShape: 'roman' }, pose: { yaw: 1.25 } },
   { name: 'female-snub-bowler', gender: 'female', look: { noseShape: 'snub', hat: 'bowler', hairStyle: 'bob' }, pose: { yaw: 0.5 } },
   { name: 'female-bob-back', gender: 'female', look: { hairStyle: 'bob', hair: '#a87a4a' }, pose: { yaw: 2.6 } },

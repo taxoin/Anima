@@ -67,7 +67,8 @@
     "fetch:portraits": "node tests/fetch-portraits.mjs",
     "test:detect": "node tests/detect.mjs",
     "test:types": "tsc -p tests/types/tsconfig.json",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "test:profile": "node tests/profile.mjs"
   },
   "devDependencies": {
     "@types/three": "^0.170.0",
