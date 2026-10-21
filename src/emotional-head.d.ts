@@ -91,7 +91,7 @@ export interface Look {
   // одежда и аксессуары
   outfit?: Outfit;
   cloth?: Color; cloth2?: Color; tie?: Color | false; clothFolds?: number;
-  hat?: HatStyle | { style?: HatStyle; color?: Color; y0?: number };
+  hat?: HatStyle | { style?: HatStyle; color?: Color; y0?: number; /** цвет ленты на тулье мультяшной шляпы (fedora, bowler) */ band?: Color };
   earrings?: 'stud' | 'hoop' | 'drop' | { style?: string; color?: Color; size?: number };
   headphones?: 'over' | 'headset' | 'earbuds' | { style?: 'over' | 'headset' | 'earbuds'; color?: Color };
   mask?: 'medical' | 'cloth' | 'n95' | { style?: 'medical' | 'cloth' | 'n95'; color?: Color };
