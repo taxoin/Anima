@@ -1142,6 +1142,11 @@ export class ProceduralHead {
     // --- иерархия: root → body; root → headPivot → headRoot → части лица
     this.body = new THREE.Group();
     root.add(this.body);
+    // 10.2: кукольные пропорции — тело (шея, плечи, одежда) уже и чуть короче относительно головы; опора — основание шеи
+    const tb = clamp(+P.toon || 0, 0, 1);
+    this._bodyK = { sx: 1 - 0.3 * tb, sy: 1 - 0.26 * tb, y0: -0.6 };
+    this.body.position.y = this._bodyK.y0 * (1 - this._bodyK.sy);
+    this.body.scale.set(this._bodyK.sx, this._bodyK.sy, this._bodyK.sx);
     this.headPivot = new THREE.Group();
     this.headPivot.position.copy(LAYOUT.pivot);
     this.headPivot.rotation.order = 'YXZ';
@@ -2483,11 +2488,12 @@ export class ProceduralHead {
   }
 
   _buildBody() {
-    const P = this.P;
+    const P = this.P, bk = this._bodyK;
+    this._yBot = bk.y0 + (-3.4 - bk.y0) / bk.sy;                         // низ торса после сжатия тела (10.2) — у края кадра, как без него
     const r = P.neckR;
     const top = P.hairStyle === 'long' ? -1.56 : -1.38;
     const topR = P.hairStyle === 'long' ? r * 2.05 : r * 1.45;
-    const clothPts = [[topR * 0.97, top + 0.02], [topR, top], [topR * 1.02, top - 0.03], [1.05, -1.74], [1.36, -1.9], [1.55, -2.15], [1.64, -2.6], [1.66, -3.4]];
+    const clothPts = [[topR * 0.97, top + 0.02], [topR, top], [topR * 1.02, top - 0.03], [1.05, -1.74], [1.36, -1.9], [1.55, -2.15], [1.64, -2.6], [1.66, this._yBot]];
     const outfit = OUTFITS[P.outfit] ? P.outfit : 'crew';               // одна ветка кода (8.3): по умолчанию — круглый ворот
     // шея; под вырезом одежды кожа груди повторяет профиль торса (чуть глубже), иначе в V-вырезе видна «пустота»
     const Rof = (y) => {                                                // радиус торса на высоте y (по профилю)
@@ -2560,7 +2566,7 @@ export class ProceduralHead {
         const v = i / ROWS, row = [];
         for (let j = 0; j < (full ? N : N + 1); j++) {
           const phi = full ? (j / N) * Math.PI * 2 - Math.PI : -phiMax + (2 * phiMax * j) / N;
-          const t0 = topFn(phi), y = lerp(t0, -3.4, v ** 1.7);
+          const t0 = topFn(phi), y = lerp(t0, this._yBot, v ** 1.7);
           const p = surf(phi, y, k);
           if (i === 0) p.add(radial(phi).multiplyScalar(-0.012));       // кромка выреза чуть загнута внутрь
           row.push(p); uv.push((phi + Math.PI) / (Math.PI * 2), (y + 3.4) / 2.2);
@@ -2836,8 +2842,9 @@ export class ProceduralHead {
     if (this.mouth.lipU) this.mouth.lipU.visible = this.mouth.lipL.visible = facing && !this.maskPart;   // под маской губ не видно (они без теста глубины)
     for (const pt of this.beard?.parts || []) if (pt.mesh.name === 'moustache') pt.mesh.visible = facing && !pt.mesh.userData.hidden && !this.maskPart;   // hidden — скрыты снаружи (кадр для метрики)
     const br = pose.breath || 0;
-    this.body.position.y = br * 0.012;
-    this.body.scale.set(1 + br * 0.006, 1, 1 + br * 0.01);
+    const bk = this._bodyK;
+    this.body.position.y = bk.y0 * (1 - bk.sy) + br * 0.012;
+    this.body.scale.set(bk.sx * (1 + br * 0.006), bk.sy, bk.sx * (1 + br * 0.01));
     this.headPivot.position.y = LAYOUT.pivot.y + br * 0.01;
 
     // глаза: сходимость на точку фокуса + веки следуют за взглядом

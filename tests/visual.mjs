@@ -76,6 +76,7 @@ export const CASES = [
   { name: 'female-mask-medical-earbuds', gender: 'female', look: { mask: 'medical', headphones: 'earbuds', hairStyle: 'ponytail' }, pose: { yaw: 0.6 } },
   { name: 'female-toon', gender: 'female', look: { toon: 1, hair: '#7a5434' }, framing: 'close' },
   { name: 'male-toon-smile-down', gender: 'male', look: { toon: 0.6 }, channels: SMILE, pose: { eyePitch: -0.3 }, framing: 'close' },
+  { name: 'female-toon-scoop-bust', gender: 'female', look: { toon: 1, hair: '#7a5434', outfit: 'scoop' }, framing: 'bust', pose: { yaw: -0.3 } },
   { name: 'avatar-monalisa-toon', avatar: '/tests/fixtures/monalisa.anima.json', lookAfter: { toon: 1 }, framing: 'close' },
 ];
 
