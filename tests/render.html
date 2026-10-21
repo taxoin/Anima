@@ -31,6 +31,7 @@
       if (c.photo) await head.fromPhoto(c.photo, { ...(c.photoOpts || {}), ...(c.gender ? { gender: c.gender } : {}) });   // нужен MediaPipe (сеть)
       else if (c.avatar) await head.importAvatar(c.avatar, c.gender ? { gender: c.gender } : {});
       else { head.useProcedural(c.gender || 'female'); }
+      if (c.lookAfter) head.setLook(c.lookAfter);                     // поверх внешности из файла аватара
       head.setFraming(c.framing || 'portrait');
       head.renderStill(c.channels, c.pose);
       return head.renderer.domElement.toDataURL('image/png');

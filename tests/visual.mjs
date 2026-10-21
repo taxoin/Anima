@@ -74,6 +74,9 @@ export const CASES = [
   { name: 'male-mask-cloth-jaw', gender: 'male', look: { mask: 'cloth' }, channels: { jawOpen: 0.5 }, pose: { yaw: 0.4 } },
   { name: 'male-n95-beard', gender: 'male', look: { mask: 'n95', beard: 'full' }, pose: { yaw: -0.5 } },
   { name: 'female-mask-medical-earbuds', gender: 'female', look: { mask: 'medical', headphones: 'earbuds', hairStyle: 'ponytail' }, pose: { yaw: 0.6 } },
+  { name: 'female-toon', gender: 'female', look: { toon: 1, hair: '#7a5434' }, framing: 'close' },
+  { name: 'male-toon-smile-down', gender: 'male', look: { toon: 0.6 }, channels: SMILE, pose: { eyePitch: -0.3 }, framing: 'close' },
+  { name: 'avatar-monalisa-toon', avatar: '/tests/fixtures/monalisa.anima.json', lookAfter: { toon: 1 }, framing: 'close' },
 ];
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg' };

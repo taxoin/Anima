@@ -86,6 +86,7 @@
         <button data-gender="female" class="on">Женская</button><button data-gender="male">Мужская</button>
         <button id="bgBtn">Светлый фон</button>
       </div>
+      <div class="row"><label style="width:84px" for="toonR" title="look.toon: пропорции 3D-мультфильма — крупные глаза, маленькие нос и рот, круглые щёки">мультяшность</label><input type="range" id="toonR" min="0" max="1" step="0.05" value="0"></div>
       <div class="row">
         <label>Свет</label>
         <select id="lighting"><option>studio</option><option>warm</option><option>cool</option><option>noir</option><option>soft</option></select>
@@ -440,7 +441,7 @@ for (const k of Object.keys(TEETH_COLORS)) $('#teethSel').append(new Option(k, k
 lookSel('#teethSel', 'teethColor');
 lookSel('#bracesSel', 'braces');
 let lookT = 0;
-for (const [id, key] of [['#ageR', 'age'], ['#frecklesR', 'freckles'], ['#grayR', 'hairGray'], ['#streakR', 'hairStreaks'], ['#gapR', 'teethGap'], ['#crookR', 'teethCrooked']]) $(id).addEventListener('input', (e) => {
+for (const [id, key] of [['#toonR', 'toon'], ['#ageR', 'age'], ['#frecklesR', 'freckles'], ['#grayR', 'hairGray'], ['#streakR', 'hairStreaks'], ['#gapR', 'teethGap'], ['#crookR', 'teethCrooked']]) $(id).addEventListener('input', (e) => {
   clearTimeout(lookT);
   lookT = setTimeout(() => { const look = head.getLook(); if (+e.target.value) look[key] = +e.target.value; else delete look[key]; api(`head.setLook(${fmt(look)}, { replace: true })`, () => head.setLook(look, { replace: true })); }, 200);
 });
@@ -451,7 +452,7 @@ function syncLook() {
   $('#eyeShape').value = str(lk.eyeShape); $('#noseSel').value = str(lk.noseShape); $('#lipSel').value = str(lk.lipProfile); $('#outfitSel').value = str(lk.outfit); $('#hpSel').value = str(lk.headphones); $('#maskSel').value = str(lk.mask); $('#glassesSel').value = lk.glasses === false ? 'none' : str(lk.glasses);
   $('#hairSel').value = str(lk.hairStyle); $('#beardSel').value = lk.beard === null ? 'none' : str(lk.beard);
   $('#makeupSel').value = str(lk.makeup); $('#hatSel').value = str(lk.hat); $('#earSel').value = str(lk.earrings);
-  $('#ageR').value = lk.age || 0; $('#frecklesR').value = lk.freckles || 0; $('#grayR').value = lk.hairGray || 0; $('#streakR').value = lk.hairStreaks || 0;
+  $('#toonR').value = lk.toon || 0; $('#ageR').value = lk.age || 0; $('#frecklesR').value = lk.freckles || 0; $('#grayR').value = lk.hairGray || 0; $('#streakR').value = lk.hairStreaks || 0;
   $('#teethSel').value = str(lk.teethColor); $('#bracesSel').value = str(lk.braces); $('#gapR').value = lk.teethGap || 0; $('#crookR').value = lk.teethCrooked || 0;
 }
 const pick = (o) => { const k = Object.keys(o); return k[Math.floor(Math.random() * k.length)]; };

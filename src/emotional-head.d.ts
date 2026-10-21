@@ -40,6 +40,8 @@ export type MakeupPreset = 'natural' | 'day' | 'evening' | 'smoky' | 'bold';
  * Полный список — README, раздел «Внешность». Неизвестные ключи передаются модели как есть.
  */
 export interface Look {
+  /** Мультяшность 0…1: пропорции 3D-мультфильма (крупные глаза и радужка, маленькие нос и рот, круглые щёки, короткий подбородок). Фототекстура кожи при > 0.2 снимается. */
+  toon?: number;
   // кожа и цвет
   skin?: 'porcelain' | 'fair' | 'light' | 'medium' | 'olive' | 'tan' | 'brown' | 'deep' | Color;
   undertone?: 'warm' | 'cool' | 'olive';
@@ -55,6 +57,8 @@ export interface Look {
   // глаза
   eyeShape?: 'almond' | 'round' | 'upturned' | 'downturned' | 'narrow' | 'wide' | 'hooded' | 'monolid';
   eyeR?: number;
+  /** Размер радужки (1 — обычная). */
+  irisScale?: number;
   lidUpSkew?: number; lidUpFull?: number; lidLoSkew?: number; lidLoFull?: number;
   hood?: number; lidCrease?: number; epicanthus?: number; lashLen?: number;
   eyeOpenL?: number; eyeOpenR?: number; eyeLiftL?: number; eyeLiftR?: number;

@@ -197,6 +197,47 @@ export function resolveLook(look = {}) {
 }
 
 /**
+ * Мультяшность (look.toon = 0…1): плавный сдвиг параметров уже собранного лица (пресет пола + подгонка по фото + look)
+ * к пропорциям 3D-мультфильма — крупные глаза и радужка, маленькие нос и рот, полные губы, круглые щёки,
+ * короткий маленький подбородок, брови выше, густые ресницы, румянец. Черты человека (по фото) сохраняются — они
+ * лишь «утрируются». Фототекстура кожи снимается: глаза на снимке не совпали бы с увеличенными (остаётся тон кожи).
+ */
+export function applyToon(P, gender = 'female') {
+  const t = clamp(+P.toon || 0, 0, 1);
+  if (!t) return P;
+  const o = { ...P }, r0 = P.eyeR;
+  o.eyeR = r0 * (1 + 0.42 * t);
+  o.eyeX = (P.eyeX ?? LAYOUT.eyeX) + 0.6 * (o.eyeR - r0);                // внутренние углы почти на месте
+  o.eyeDepth = (P.eyeDepth || 0) + 1.35 * (o.eyeR - r0);                // крупное яблоко глубже: видна плоская «шапка», без мешков
+  o.irisScale = (P.irisScale ?? 1) * (1 + 0.32 * t);
+  o.lidShade = (P.lidShade ?? 1) * (1 - 0.75 * t);                      // без тёмного кольца вокруг глаза («мешков»)
+  o.lidCover = (P.lidCover || 0) + Math.min(1, 3 * t);                                    // кожа под глазом обтягивает оболочку века, без канавки
+  o.lidTint = P.lidTint.map((v) => lerp(v, 1, t));                       // веко в тон кожи: стык с кожей не виден
+  o.upperOpen = P.upperOpen + 3 * t;
+  o.lowerOpen = P.lowerOpen - 1 * t;
+  o.nose = P.nose * (1 - 0.45 * t);
+  o.noseW = (P.noseW ?? 0.07) * (1 - 0.25 * t);
+  o.noseTipY = (P.noseTipY ?? -0.21) + 0.025 * t;
+  o.mouthHW = P.mouthHW * (1 - 0.22 * t);
+  o.lipU = P.lipU * (1 + 0.1 * t);
+  o.lipL = P.lipL * (1 + 0.18 * t);
+  o.chinScale = (P.chinScale ?? 1) * (1 - 0.2 * t);
+  o.chin = P.chin * (1 - 0.5 * t);
+  o.cheek = (P.cheek || 0) * (1 - 0.5 * t);
+  o.cheekFull = (P.cheekFull || 0) + 0.035 * t;
+  o.hollow = (P.hollow || 0) * (1 - t);
+  o.browRidge = P.browRidge * (1 - 0.6 * t);
+  if (P.gx) o.gx = P.gx.map((v, i) => v + t * [0, 0, 0, 0, 0.005, 0.02, 0.035, 0.02, -0.03][i]);   // круглые щёки, маленький подбородок
+  o.brow = { ...P.brow, y: P.brow.y + 1.5 * (o.eyeR - r0) + 0.01 * t, arch: P.brow.arch + 0.015 * t };
+  o.lash = P.lash * (1 + 0.45 * t);
+  o.lashLen = (P.lashLen ?? (gender === 'female' ? 1 : 0.7)) * (1 + 0.5 * t);
+  o.blush = (P.blush || 0) + 0.25 * t;
+  o.stubble = (P.stubble || 0) * (1 - 0.7 * t);
+  if (t > 0.2) o.photo = null;
+  return o;
+}
+
+/**
  * Профиль толщины верхней губы по ширине рта (t = -1..1 от уголка до уголка, без учёта мимики):
  * «лук Купидона» — ямка в центре (bowDip) и два пика на ±bowX (bowPeak).
  */
@@ -270,7 +311,7 @@ function makeWarp(W) {
  * @returns {{ y0: number, step: number, z: Float32Array }}  z[i] — на высоте y0 + i·step (−Infinity — нет кожи)
  */
 export function profileCurve(gender, overrides = {}, { y0 = -1.1, y1 = 0.6, step = 0.004 } = {}) {
-  const P = { ...PRESETS[gender] || PRESETS.female, ...resolveLook(overrides) }, warp = makeWarp(P.warp);
+  const P = { ...PRESETS[gender] || PRESETS.female, ...resolveLook(overrides) }, warp = makeWarp(P.warp);   // без мультяшности: подгонка — по настоящему лицу
   const n = Math.round((y1 - y0) / step) + 1, z = new Float32Array(n).fill(-Infinity), q = [0, 0, 0];
   for (let i = 0; i <= 900; i++) {
     const lat = -1.25 + (2.15 * i) / 900, cl = Math.cos(lat), sl = Math.sin(lat);
@@ -326,6 +367,7 @@ function featureDz(x, y, P) {
   dz -= 0.02 * (1 + dL) * G(x, y, 0, -0.635, 0.12, 0.025);          // ямка под губой
   dz += P.chin * G(x, y, 0, -0.78, P.chinSX, 0.07);                  // подбородок
   dz += P.cheek * G(ax, y, 0.44, -0.05, 0.1, 0.08);                  // скулы
+  if (P.cheekFull) dz += P.cheekFull * G(ax, y, 0.36, -0.3, 0.13, 0.12);   // пухлые щёки (мультяшность)
   dz -= P.hollow * G(ax, y, 0.46, -0.32, 0.1, 0.1);                  // впалые щёки (м)
   return dz;
 }
@@ -480,7 +522,7 @@ function eyeTexture(P) {
   c.width = W; c.height = H;
   const ctx = c.getContext('2d'), img = ctx.createImageData(W, H), d = img.data;
   const ci = new THREE.Color(P.iris[0]), co = new THREE.Color(P.iris[1]);
-  const pupil = P.pupil ?? 0.155, iris = IRIS_A, limbus = 0.6;          // роговица увеличивает радужку и зрачок примерно в 1.2 раза
+  const k = P.irisScale ?? 1, pupil = (P.pupil ?? 0.155) * k, iris = IRIS_A * k, limbus = CORNEA_A * k;   // роговица увеличивает радужку и зрачок примерно в 1.2 раза; irisScale — крупнее радужка (мультяшность)
   const rnd = [];
   for (let j = 0; j < W; j++) rnd.push(Math.random());
   for (let y = 0; y < H; y++) {
@@ -522,10 +564,10 @@ const CORNEA_H = 0.06;                         // выпуклость рого�
  * и находит точку радужки. Отсюда параллакс при взгляде сбоку и «линза» над радужкой без лишнего прохода рендера.
  * Нормали — аналитические (у полюса сферы швы и вырожденные треугольники).
  */
-function eyeballGeometry(R, ws = 48, hs = 32) {
+function eyeballGeometry(R, ws = 48, hs = 32, A = CORNEA_A) {
   const geo = new THREE.SphereGeometry(R, ws, hs);
   geo.rotateX(Math.PI / 2);                                         // полюс (зрачок) → +Z
-  const p = geo.attributes.position, n = geo.attributes.normal, A = CORNEA_A, H = CORNEA_H;
+  const p = geo.attributes.position, n = geo.attributes.normal, H = CORNEA_H;
   for (let i = 0; i < p.count; i++) {
     const x = p.getX(i), y = p.getY(i), z = p.getZ(i), a = Math.acos(clamp(z / R, -1, 1));
     if (a >= A) continue;
@@ -546,7 +588,8 @@ const IRIS_A = 0.53;                           // угловой радиус р
  * зрачка, радужка между зрачком и краем сжимается/растягивается, как настоящая (узор не «наезжает» на лимб).
  * U — { value: 1 } роговица вкл. (0 — кадры для измерений; без роговицы — всегда 0), pupilU — { value: 1 }.
  */
-function corneaShader(mat, R, U, pupilU, pupil0) {
+function corneaShader(mat, R, U, pupilU, pupil0, k = 1) {
+  const IA = IRIS_A * k, CA = CORNEA_A * k;
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uEyeR = { value: R };
     sh.uniforms.uCornea = U;
@@ -564,7 +607,7 @@ varying vec3 vEyeN;
 varying vec3 vEyeCam;
 // угол от центра зрачка на «шкале» с нарисованным зрачком: зрачок масштабируется, радужка ужимается между ним и краем
 float pupilRemap( float a ) {
-	float p = ${pupil0.toFixed(4)}, ir = ${IRIS_A.toFixed(3)}, p2 = min( p * uPupil, 0.42 );
+	float p = ${pupil0.toFixed(4)}, ir = ${IA.toFixed(3)}, p2 = min( p * uPupil, 0.42 );
 	if ( a < p2 ) return a * p / p2;
 	if ( a < ir ) return p + ( a - p2 ) * ( ir - p ) / ( ir - p2 );
 	return a;
@@ -572,23 +615,23 @@ float pupilRemap( float a ) {
 #ifdef USE_MAP
 	vec4 sampledDiffuseColor = texture2D( map, vMapUv );
 	float eyeA = acos( clamp( vEyeP.z / length( vEyeP ), -1.0, 1.0 ) );
-	if ( eyeA < ${IRIS_A.toFixed(3)} && abs( uPupil - 1.0 ) > 1e-3 )
+	if ( eyeA < ${IA.toFixed(3)} && abs( uPupil - 1.0 ) > 1e-3 )
 		sampledDiffuseColor = textureGrad( map, vec2( vMapUv.x, 1.0 - pupilRemap( eyeA ) / 3.1415927 ), dFdx( vMapUv ), dFdy( vMapUv ) );
-	if ( eyeA < ${CORNEA_A.toFixed(3)} && uCornea > 0.5 ) {
+	if ( eyeA < ${CA.toFixed(3)} && uCornea > 0.5 ) {
 		vec3 rd = refract( normalize( vEyeP - vEyeCam ), normalize( vEyeN ), ${(1 / 1.376).toFixed(4)} );
 		if ( rd.z < -1e-3 ) {
-			vec3 q = vEyeP + rd * ( ( uEyeR * ${Math.cos(CORNEA_A).toFixed(4)} - vEyeP.z ) / rd.z );   // плоскость радужки
+			vec3 q = vEyeP + rd * ( ( uEyeR * ${Math.cos(CA).toFixed(4)} - vEyeP.z ) / rd.z );   // плоскость радужки
 			float th = pupilRemap( asin( clamp( length( q.xy ) / uEyeR, 0.0, 1.0 ) ) );
 			float ph = atan( -q.y, -q.x );
 			if ( ph < 0.0 ) ph += 6.2831853;
 			vec4 ir = textureGrad( map, vec2( ph / 6.2831853, 1.0 - th / 3.1415927 ), dFdx( vMapUv ), dFdy( vMapUv ) );
-			sampledDiffuseColor = mix( ir, sampledDiffuseColor, smoothstep( ${(CORNEA_A - 0.05).toFixed(3)}, ${CORNEA_A.toFixed(3)}, eyeA ) );
+			sampledDiffuseColor = mix( ir, sampledDiffuseColor, smoothstep( ${(CA - 0.05).toFixed(3)}, ${CA.toFixed(3)}, eyeA ) );
 		}
 	}
 	diffuseColor *= sampledDiffuseColor;
 #endif`);
   };
-  mat.customProgramCacheKey = () => 'eye-cornea-' + pupil0;   // pupil0 вшит в шейдер
+  mat.customProgramCacheKey = () => 'eye-cornea-' + pupil0 + '-' + k;   // pupil0 вшит в шейдер
   mat.needsUpdate = true;
 }
 
@@ -1028,7 +1071,7 @@ export class ProceduralHead {
     this.detail = resolveDetail(detail);
     this.L = DETAIL[this.detail];
     this.shadows = shadows;
-    this.P = { ...PRESETS[gender] || PRESETS.female, ...resolveLook(overrides) };
+    this.P = applyToon({ ...PRESETS[gender] || PRESETS.female, ...resolveLook(overrides) }, gender);
     this.object3D = new THREE.Group();
     this.object3D.name = 'ProceduralHead';
     this._disposables = [];
@@ -1055,7 +1098,7 @@ export class ProceduralHead {
     // --- материалы
     this.mat = {
       skin: this._track(new THREE.MeshPhysicalMaterial({
-        color: P.skin, roughness: 0.55, metalness: 0, vertexColors: true,
+        color: P.skin, roughness: 0.55 + 0.25 * clamp(+P.toon || 0, 0, 1), metalness: 0, vertexColors: true,   // мультяшность — кожа мягче, без бликов на стенке глазницы
         sheen: P.skinScatter === false ? 0.45 : 0.3, sheenRoughness: 0.5, sheenColor: new THREE.Color(P.skin).multiplyScalar(1.25).lerp(new THREE.Color('#ff9a80'), 0.5),   // подповерхностный «тёплый» отсвет в тон кожи
         clearcoat: 0.06, clearcoatRoughness: 0.5, envMapIntensity: 0.6,
       })),
@@ -1144,7 +1187,7 @@ export class ProceduralHead {
     const eyeR = P.eyeR, rs = eyeR * 1.08;
     const ex = P.eyeX ?? LAYOUT.eyeX;
     // rl — оболочка нижнего века: снаружи выпуклости роговицы (иначе при взгляде вниз и поднятом веке зрачок проступает сквозь веко)
-    this.eye = { r: eyeR, rs, rl: eyeR * (P.cornea === false ? 1.03 : 1 + CORNEA_H + 0.012), x: ex, y: LAYOUT.eyeY, z: hm0.get(ex, LAYOUT.eyeY) - 0.078 };
+    this.eye = { r: eyeR, rs, rl: eyeR * (P.cornea === false ? 1.03 : 1 + CORNEA_H + 0.012), x: ex, y: LAYOUT.eyeY, z: hm0.get(ex, LAYOUT.eyeY) - 0.078 - (P.eyeDepth || 0) };
     const E = this.eye;
     const pos = geo.attributes.position.array;
     this._eyeRing = new Float32Array(pos.length / 3);
@@ -1170,6 +1213,11 @@ export class ProceduralHead {
       if (rho >= 1) T = E.z - 0.028 + rr * 2.9 * Math.pow(rho - 1, 1.3) + 0.022 * smoothstep(1.0, 1.25, rho);
       const m = 1 - smoothstep(1.2, 2.1, rho);
       pos[k + 2] = lerp(z, Math.min(z, T), m);
+      if (P.lidCover && dy < 0) {                                  // мультяшность: под глазом без канавки — кожа обтягивает низ оболочки
+        const zs = dist < rr ? E.z + Math.sqrt(rr * rr - dist * dist) + 0.003 : -Infinity;
+        const c = clamp(P.lidCover, 0, 1) * smoothstep(0.95, 1.1, eo) * smoothstep(-0.15, -0.5, dy);   // ниже уровня глаза: у угла ступенька ловила бы свет
+        pos[k + 2] = lerp(pos[k + 2], Math.max(z, zs), c);
+      }
       // затенение глазницы: мягкий градиент по всей стенке, а не светлое кольцо
       this._eyeRing[k / 3] = (rho < 1 ? smoothstep(0.85, 1.0, rho) : 1 - smoothstep(1.0, 1.5, rho)) * m * (dy > 0 ? 1 : 0.9);
       if (rho > 0.9 && rho < 2.0) ring.push(k / 3);
@@ -1223,7 +1271,7 @@ export class ProceduralHead {
       if (z > 0) {
         let ao = 0;
         ao += 0.22 * G(ax, y, E.x - E.r * 0.95, 0.03, 0.03, 0.035);          // внутренний угол глаза
-        ao += 0.26 * this._eyeRing[k / 3];                                     // глазница / складка века
+        ao += 0.26 * (P.lidShade ?? 1) * this._eyeRing[k / 3];                                     // глазница / складка века
         ao += 0.65 * G(ax, yn, 0.05 * nw, -0.272, 0.017 * nw, 0.011);         // ноздри
         ao += 0.16 * G(x, yn, 0, -0.285, 0.07 * nw, 0.016);                    // под носом
         ao += 0.3 * G(ax, y, 0.205, -0.52, 0.022, 0.02);                       // уголки рта
@@ -1306,12 +1354,12 @@ export class ProceduralHead {
   _buildEyes() {
     const P = this.P, E = this.eye;
     const [ews, ehs] = this.L.eye;
-    const ballGeo = this._track(P.cornea === false ? new THREE.SphereGeometry(E.r, ews, ehs).rotateX(Math.PI / 2) : eyeballGeometry(E.r, ews, ehs));
+    const ballGeo = this._track(P.cornea === false ? new THREE.SphereGeometry(E.r, ews, ehs).rotateX(Math.PI / 2) : eyeballGeometry(E.r, ews, ehs, CORNEA_A * (P.irisScale ?? 1)));
     this._corneaU = { value: 1 };
     this._pupilU = { value: 1 };
     const cu = P.cornea === false ? { value: 0 } : this._corneaU;    // без роговицы шейдер нужен только для зрачка
-    corneaShader(this.mat.eye, E.r, cu, this._pupilU, P.pupil ?? 0.155);
-    if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r, cu, this._pupilU, P.pupil ?? 0.155);
+    corneaShader(this.mat.eye, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1);
+    if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1);
     const phiS = Math.PI / 2 - 1.75, phiL = 3.5;
     const upGeo = this._track(new THREE.SphereGeometry(E.rs, this.L.lid, 14, phiS, phiL, 0, Math.PI / 2));
     const loGeo = this._track(new THREE.SphereGeometry(E.rl, this.L.lid, 10, phiS, phiL, Math.PI / 2, Math.PI / 2));
@@ -1321,7 +1369,7 @@ export class ProceduralHead {
       for (let i = 0; i < p.count; i++) {
         const el = Math.asin(clamp(p.getY(i) / geo.parameters.radius, -1, 1));       // угол возвышения точки
         const fromEdge = upper ? el : -el;                                             // 0 у кромки → π/2 у полюса
-        const v = lerp(1.0, 0.7, smoothstep(0.35, 1.25, fromEdge)) * (fromEdge < 0.12 ? lerp(0.86, 1, fromEdge / 0.12) : 1);
+        const v = lerp(1.0, 1 - 0.3 * (P.lidShade ?? 1), smoothstep(0.35, 1.25, fromEdge)) * (fromEdge < 0.12 ? lerp(0.86, 1, fromEdge / 0.12) : 1);
         c.set([v, v * 0.97, v * 0.97], i * 3);
       }
       geo.setAttribute('color', new THREE.BufferAttribute(c, 3));
