@@ -1892,7 +1892,8 @@ export class ProceduralHead {
         const a = a0 + (i / cols) * (Math.PI * 2 - 2 * a0);
         curtainAt(a, r / rows, q, wk);
         if (P.hairClump) {                                                  // без прядей-карточек край занавеса виден — подворачиваем его к голове
-          const e = smoothstep(0, 0.35, Math.min(a - a0, Math.PI * 2 - a0 - a)), kk = lerp(0.9, 1, e);
+          const e = smoothstep(0, 0.5, Math.min(a - a0, Math.PI * 2 - a0 - a)), top = smoothstep(0, 0.32, r / rows);
+          const kk = lerp(0.82, 1, Math.min(e, top));                       // верх и передний край уходят под оболочку — без среза и «стенки»
           q[0] *= kk; q[2] = -0.08 + (q[2] + 0.08) * kk;
         }
         const k = (r * (cols + 1) + i) * 3;
@@ -2381,15 +2382,24 @@ export class ProceduralHead {
     const color = new THREE.Color(bd.color || P.beardColor || P.hair);
     const lipTop = MY + P.lipU + 0.012, lipBot = MY - P.lipL - 0.012;
     const ss = (a, b, x) => smoothstep(a, b, x);
-    const mat = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairTexture({ ...hairTone(P, color, P.beardGray ?? P.hairGray), streak: 0 })), roughness: 0.7, sheen: 0.7, sheenRoughness: 0.4,
+    // мультяшная борода (10.3): сплошная гладкая масса с волнистой чёткой кромкой и жгутами, как волосы (tk — сила)
+    const tk = clamp(P.hairClump || 0, 0, 1);
+    const clumpX = (x) => Math.sqrt(Math.abs(Math.sin(x * Math.PI / 0.075)));   // 0 в складке, 1 — гребень жгута
+    const mat = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairTexture({ ...hairTone(P, color, P.beardGray ?? P.hairGray), streak: 0 }, tk)), roughness: 0.7 - 0.3 * tk, sheen: 0.7 * (1 - 0.5 * tk), sheenRoughness: 0.4,
       sheenColor: hairMean(hairTone(P, color, P.beardGray ?? P.hairGray)).multiplyScalar(2.4).addScalar(0.08), vertexColors: true, alphaHash: true, side: THREE.DoubleSide }));
     mat.map.repeat.set(10, 3);
+    if (tk > 0.5) { mat.alphaHash = false; mat.alphaTest = 0.5; }       // мультяшная — резкая кромка без «пыли» по краю
     this.beard = { parts: [] };
     const part = (name, x0, x1, y0, y1, cols, rows, mask, depth, jaw, extra = {}) => {
       const geo = this._track(dynamicGrid(cols, rows, false));
-      const n = (cols + 1) * (rows + 1), col = new Float32Array(n * 4), rest = new Float32Array(n * 3), w = new Float32Array(n);
+      const n = (cols + 1) * (rows + 1), col = new Float32Array(n * 4), rest = new Float32Array(n * 3), w = new Float32Array(n), badV = new Uint8Array(n);
       for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
-        const i = r * (cols + 1) + c, t = clamp(mask(lerp(x0, x1, c / cols), lerp(y1, y0, r / rows)), 0, 1);
+        const mx = lerp(x0, x1, c / cols);
+        let t = clamp(mask(mx, lerp(y1, y0, r / rows)), 0, 1);
+        // мультяшная: волнистая кромка по плавной маске (alphaTest режет её по гладкой линии), за кромкой — сразу полная толщина
+        const te = t + 0.14 * (clumpX(mx) - 0.5) * tk;
+        if (tk) t = lerp(t, smoothstep(0.2, 0.6, te), tk);
+        const i = r * (cols + 1) + c;
         const q = [lerp(x0, x1, c / cols), lerp(y1, y0, r / rows), 0.5];
         if (this._warpF) this._warpF(q);                           // маска — по параметрическим губам, положение — по сдвинутой коже
         // вне лица карта высот пуста (−10): точку — к середине, до лица (иначе при повороте тянутся полосы)
@@ -2398,10 +2408,17 @@ export class ProceduralHead {
         const x = q[0], y = q[1], z0 = this.hm.get(x, y);
         // под маской борода прижата (иначе торчит сквозь ткань); видна только по краям
         const um = P.mask ? 1 - 0.92 * smoothstep(0.6, 0.48, Math.abs(x)) * smoothstep(-0.06, -0.16, y) * smoothstep(-1.04, -0.94, y) : 1;
-        rest[i * 3] = x; rest[i * 3 + 1] = y - (extra.droop || 0) * t; rest[i * 3 + 2] = depth(t, x, y) * um;
+        rest[i * 3] = x; rest[i * 3 + 1] = y - (extra.droop || 0) * t; rest[i * 3 + 2] = (depth(t, x, y) + tk * 0.012 * (clumpX(mx) - 0.5) * t) * um;
         w[i] = jaw ? jawWeight(x, y, z0) : 0;
         const v = lerp(0.55, 1, t) * (0.9 + 0.1 * Math.sin(c * 2.3 + r * 1.7));
-        col.set([v, v, v, bad ? 0 : ss(0.02, 0.55, t)], i * 4);
+        col.set([v, v, v, bad ? 0 : lerp(ss(0.02, 0.55, t), clamp((te - 0.1) / 0.6, 0, 1), tk)], i * 4);
+        if (bad) badV[i] = 1;
+      }
+      // у резкой кромки (alphaTest) растянутые треугольники к точкам вне лица видны полосой — соседей таких точек тоже прячем
+      if (tk > 0.5) for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
+        let nb = 0;
+        for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) { const rr = r + dr, cc = c + dc; if (rr >= 0 && rr <= rows && cc >= 0 && cc <= cols && badV[rr * (cols + 1) + cc]) nb = 1; }
+        if (nb) col[(r * (cols + 1) + c) * 4 + 3] = 0;
       }
       geo.setAttribute('color', new THREE.BufferAttribute(col, 4));
       const mesh = new THREE.Mesh(geo, extra.mat || mat);
