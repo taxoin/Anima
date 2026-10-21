@@ -234,6 +234,12 @@ export function applyToon(P, gender = 'female') {
   o.blush = (P.blush || 0) + 0.25 * t;
   o.stubble = (P.stubble || 0) * (1 - 0.7 * t);
   if (t > 0.2) o.photo = null;
+  // 10.3: стиль отрисовки — волосы объёмными глянцевыми прядями (без пушистых карточек), блики в глазах, мягкая кожа
+  o.hairClump = (P.hairClump || 0) + t;
+  o.hairBottom = (P.hairBottom ?? -1.55) + 0.2 * t;                      // длинные волосы кончаются над узкими кукольными плечами
+  if (t > 0.4 && P.hairCards === undefined && !P.hairCurl) o.hairCards = false;
+  if (P.skinScatter !== false) o.skinScatter = (P.skinScatter ?? 0.7) * (1 + 0.5 * t);
+  o.catchlight = (P.catchlight || 0) + t;
   return o;
 }
 
@@ -373,6 +379,17 @@ function featureDz(x, y, P) {
 }
 
 /** Сетка "сферы" с плотностью, смещённой к лицу; без шва (столбцы замкнуты по индексу). */
+/**
+ * Объёмные пряди мультяшной причёски (10.3): прибавка к толщине волос по долготе a — округлые «жгуты» со складками
+ * между ними (K штук по кругу, толщина у каждого своя); у макушки (py → 1) на нет, иначе пряди сходятся в точку.
+ */
+function hairClumpH(a, py, k) {
+  const K = 15, u = (a + Math.PI) * K / (2 * Math.PI), i = Math.floor(u), f = u - i;
+  const h = Math.sin(i * 12.9898) * 43758.5453, rnd = h - Math.floor(h);
+  const s = Math.sqrt(Math.sin(Math.PI * f));                                // 0 в складке, 1 — гребень жгута
+  return clamp(k, 0, 1) * 0.04 * (s - 0.55) * (0.65 + 0.6 * rnd) * smoothstep(0.97, 0.7, py);
+}
+
 function sphereGrid(W, H, fn, a = 0.42, b = 0.72) {
   const pos = new Float32Array((H + 1) * W * 3);
   const uv = new Float32Array((H + 1) * W * 2);
@@ -588,7 +605,7 @@ const IRIS_A = 0.53;                           // угловой радиус р
  * зрачка, радужка между зрачком и краем сжимается/растягивается, как настоящая (узор не «наезжает» на лимб).
  * U — { value: 1 } роговица вкл. (0 — кадры для измерений; без роговицы — всегда 0), pupilU — { value: 1 }.
  */
-function corneaShader(mat, R, U, pupilU, pupil0, k = 1) {
+function corneaShader(mat, R, U, pupilU, pupil0, k = 1, catchK = 0) {
   const IA = IRIS_A * k, CA = CORNEA_A * k;
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uEyeR = { value: R };
@@ -630,8 +647,17 @@ float pupilRemap( float a ) {
 	}
 	diffuseColor *= sampledDiffuseColor;
 #endif`);
+    if (catchK > 0) sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', `
+	{   // 10.3: крупные «рисованные» блики на роговице — отражение двух окон в системе камеры, с чёткой кромкой
+		vec3 cR = reflect( -normalize( vViewPosition ), normalize( normal ) );
+		float c1 = smoothstep( 0.955, 0.965, dot( cR, normalize( vec3( -0.42, 0.5, 0.76 ) ) ) );
+		float c2 = 0.8 * smoothstep( 0.988, 0.992, dot( cR, normalize( vec3( 0.34, -0.3, 0.89 ) ) ) );
+		float cA = acos( clamp( vEyeP.z / length( vEyeP ), -1.0, 1.0 ) );
+		outgoingLight = mix( outgoingLight, vec3( 1.0 ), ${Math.min(1, catchK).toFixed(3)} * max( c1, c2 ) * ( 1.0 - smoothstep( ${(CA - 0.04).toFixed(3)}, ${CA.toFixed(3)}, cA ) ) );
+	}
+#include <opaque_fragment>`);
   };
-  mat.customProgramCacheKey = () => 'eye-cornea-' + pupil0 + '-' + k;   // pupil0 вшит в шейдер
+  mat.customProgramCacheKey = () => 'eye-cornea-' + pupil0 + '-' + k + '-' + catchK;   // pupil0 вшит в шейдер
   mat.needsUpdate = true;
 }
 
@@ -881,7 +907,7 @@ function strandColor(T, u, inStreak, l) {
 }
 const rgbOf = (c) => `${Math.min(255, c.r * 255) | 0},${Math.min(255, c.g * 255) | 0},${Math.min(255, c.b * 255) | 0}`;
 
-function hairTexture(T) {
+function hairTexture(T, smooth = 0) {
   const W = 256, H = 512, c = document.createElement('canvas');
   c.width = W; c.height = H;
   const ctx = c.getContext('2d');
@@ -895,7 +921,7 @@ function hairTexture(T) {
   for (let i = 0; i < 1400; i++) {
     const x = Math.random() * W, l = 1.05 + T.vari * (Math.random() - 0.5) * 0.9;
     const col = strandColor(T, T.gray > 0 ? Math.random() : 1, inStreak(x), l);   // лишних Math.random нет — без седины текстура та же, что раньше
-    ctx.strokeStyle = `rgba(${rgbOf(col)},0.5)`;
+    ctx.strokeStyle = `rgba(${rgbOf(col)},${0.5 - 0.44 * smooth})`;   // мультяшные пряди — гладкие, волоски едва заметны
     ctx.lineWidth = 0.5 + Math.random() * 1.5;
     ctx.beginPath(); ctx.moveTo(x, 0);
     ctx.bezierCurveTo(x + (Math.random() - 0.5) * 20, H * 0.33, x + (Math.random() - 0.5) * 20, H * 0.66, x + (Math.random() - 0.5) * 10, H);
@@ -1106,7 +1132,7 @@ export class ProceduralHead {
       lip: this._track(new THREE.MeshPhysicalMaterial({ color: P.lip, roughness: 0.38, vertexColors: true, normalMap: this._track(lipNormalTexture()), normalScale: new THREE.Vector2(0.35, 0.35), clearcoat: 0.35, clearcoatRoughness: 0.35, sheen: 0.3, sheenColor: new THREE.Color('#ff8080'), side: THREE.DoubleSide, envMapIntensity: 0.6, depthTest: false })),
       brow: this._track(new THREE.MeshStandardMaterial({ color: new THREE.Color(P.brow.color).lerp(hairTone(P).grayCol, 0.5 * (P.browGray ?? P.hairGray ?? 0) ** 2), roughness: 0.9 })),   // брови седеют вслед за волосами, но слабее
       lash: this._track(new THREE.MeshStandardMaterial({ color: '#120c0a', roughness: 0.8 })),
-      hair: this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairTexture(hairTone(P))), roughness: 0.45, anisotropy: P.hairAniso ?? 0.6, anisotropyRotation: P.hairAnisoRot ?? 0, sheen: 0.6, sheenColor: hairMean(hairTone(P)).multiplyScalar(2.2), sheenRoughness: 0.35, vertexColors: true, side: THREE.DoubleSide, envMapIntensity: 0.5 })),
+      hair: this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairTexture(hairTone(P), clamp(P.hairClump || 0, 0, 1))), roughness: 0.45 - 0.17 * clamp(P.hairClump || 0, 0, 1), anisotropy: P.hairAniso ?? 0.6 + 0.3 * clamp(P.hairClump || 0, 0, 1), anisotropyRotation: P.hairAnisoRot ?? 0, sheen: 0.6, sheenColor: hairMean(hairTone(P)).multiplyScalar(2.2), sheenRoughness: 0.35, vertexColors: true, side: THREE.DoubleSide, envMapIntensity: 0.5 })),
       cloth: this._track(new THREE.MeshStandardMaterial({ color: P.cloth, roughness: 0.85 })),
       eye: this._track(new THREE.MeshPhysicalMaterial({ map: this._track(eyeTexture(P)), roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.3 })),
       eyeR: null,
@@ -1120,7 +1146,7 @@ export class ProceduralHead {
     this.mat.hairCards = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairCardTexture(hairTone(P))), roughness: 0.72,   // без анизотропии: блики карточек под разными углами давали светлые пятна — блик волос даёт оболочка
        sheen: 0.3, sheenColor: hairMean(hairTone(P)).multiplyScalar(1.3), sheenRoughness: 0.5, vertexColors: true, alphaToCoverage: true, alphaTest: 0.02, side: THREE.DoubleSide, envMapIntensity: 0.22 }));
     this._hairU = { uHairSwing: { value: new THREE.Vector3() } };
-    const S2 = P.hairSpec2 === false ? null : { k: P.hairSpec2 ?? 0.35, shift: 0.3, exp: 18, axis: P.hairSpec2Axis || 'T' };
+    const S2 = P.hairSpec2 === false ? null : { k: P.hairSpec2 ?? 0.35 + 0.3 * clamp(P.hairClump || 0, 0, 1), shift: 0.3, exp: 18, axis: P.hairSpec2Axis || 'T' };
     hairSwayShader(this.mat.hair, this._hairU, 'hair-sway', S2);
     hairSwayShader(this.mat.hairCards, this._hairU, 'hair-cards-sway', S2 && { ...S2, axis: P.hairSpec2AxisCards || 'T' });
     this.mat.lid = this._track(this.mat.skin.clone());
@@ -1363,8 +1389,8 @@ export class ProceduralHead {
     this._corneaU = { value: 1 };
     this._pupilU = { value: 1 };
     const cu = P.cornea === false ? { value: 0 } : this._corneaU;    // без роговицы шейдер нужен только для зрачка
-    corneaShader(this.mat.eye, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1);
-    if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1);
+    corneaShader(this.mat.eye, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1, P.catchlight || 0);
+    if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1, P.catchlight || 0);
     const phiS = Math.PI / 2 - 1.75, phiL = 3.5;
     const upGeo = this._track(new THREE.SphereGeometry(E.rs, this.L.lid, 14, phiS, phiL, 0, Math.PI / 2));
     const loGeo = this._track(new THREE.SphereGeometry(E.rl, this.L.lid, 10, phiS, phiL, Math.PI / 2, Math.PI / 2));
@@ -1811,7 +1837,7 @@ export class ProceduralHead {
       const a = Math.atan2(tmp[0], tmp[2]);
       let yh = hairline(a);
       if (bangSide) yh -= bangDepth * G(a, 0, bangSide * 0.45, 0, 0.3, 1);  // чёлка набок (сторона и глубина — по фото)
-      let H = long ? 0.06 + 0.06 * smoothstep(0.2, 0.9, tmp[1]) + 0.05 * G(a, tmp[1], bangSide * 0.5 || -0.5, 0.45, 0.4, 0.18) : 0.032 + 0.018 * smoothstep(0.3, 0.9, tmp[1]);
+      let H = long ? 0.06 + 0.06 * smoothstep(0.2, 0.9, tmp[1]) + 0.05 * (1 - clamp(P.hairClump || 0, 0, 1)) * G(a, tmp[1], bangSide * 0.5 || -0.5, 0.45, 0.4, 0.18) : 0.032 + 0.018 * smoothstep(0.3, 0.9, tmp[1]);
       if (!long) H += 0.012 * G(a, tmp[1], 0, 0.6, 0.5, 0.1);               // лёгкий объём надо лбом
       const v = volAt(tmp[0], tmp[1]);
       // силуэт причёски с фото; к вискам и ниже — плавно к обычной толщине (иначе по бокам «поля шляпы»)
@@ -1823,7 +1849,8 @@ export class ProceduralHead {
       }
       if (P.hat) { const hl = P.hat.y0 ?? HAT_LINE[P.hat.style] ?? 0.45; H = lerp(H, Math.min(H, 0.03), smoothstep(hl - 0.08, hl, tmp[1])); }   // под шапкой волосы примяты
       // у линии роста волосы сходят на нет, ниже неё поверхность уходит глубоко под кожу
-      const off = H * (0.3 + 0.7 * smoothstep(yh, yh + 0.16, tmp[1])) - (0.25 + 0.3 * H) * (1 - smoothstep(yh - 0.1, yh, tmp[1]));
+      let off = H * (0.3 + 0.7 * smoothstep(yh, yh + 0.16 + 0.3 * clamp(P.hairClump || 0, 0, 1), tmp[1])) - (0.25 + 0.3 * H) * (1 - smoothstep(yh - 0.1, yh, tmp[1]));
+      if (P.hairClump && !P.hat) off += hairClumpH(a, py, P.hairClump) * (long ? 1.2 : 1) * smoothstep(yh - 0.03, yh + 0.03, tmp[1]);   // жгуты — ровной толщины до самой кромки
       const nx = px / prof(P.gx, py), ny = py, nz = pz;
       const nl = Math.hypot(nx, ny, nz) || 1;
       const y = tmp[1];
@@ -1850,19 +1877,24 @@ export class ProceduralHead {
       const jaw = smoothstep(0.1, -0.7, y) * (1 - smoothstep(-0.9, -1.3, y)) * front;   // у лица пряди ближе к щекам
       const rx = (0.84 + 0.1 * flare + 0.012 * Math.sin(a * 9 + y * 3) - 0.1 * jaw) * wk;
       const rz = 0.86 + 0.06 * flare + 0.012 * Math.sin(a * 7 - y * 2) - 0.12 * jaw;
-      out[0] = rx * Math.sin(a); out[1] = y; out[2] = -0.08 + rz * Math.cos(a);
+      const cl = P.hairClump ? 1 + 1.3 * hairClumpH(a, 0, P.hairClump) * smoothstep(0.42, 0.1, y) : 1;   // пряди занавеса — продолжение прядей оболочки
+      out[0] = rx * cl * Math.sin(a); out[1] = y; out[2] = -0.08 + rz * cl * Math.cos(a);
       return out;
     };
     let wkC = 1;
     if (long) {
       // "занавес" длинных волос сзади и по бокам
       const side = volAt(1, HC - 0.17);                                      // объём у висков (θ ≈ 100°)
-      const cols = 64, rows = 30, a0 = 1.0, wk = wkC = prof(P.gx, 0) / 0.755 * (side === null ? 1 : clamp(1 + (side - 0.07) / 0.84, 0.92, 1.35));   // занавес по ширине головы и волос
+      const cols = P.hairClump ? 192 : 64, rows = 30, a0 = 1.0, wk = wkC = prof(P.gx, 0) / 0.755 * (side === null ? 1 : clamp(1 + (side - 0.07) / 0.84, 0.92, 1.35));   // занавес по ширине головы и волос
       const g = this._track(dynamicGrid(cols, rows, true));
       const pos = g.attributes.position.array, c = g.attributes.color.array, q = [0, 0, 0], sw = new Float32Array(pos.length / 3);
       for (let r = 0; r <= rows; r++) for (let i = 0; i <= cols; i++) {
         const a = a0 + (i / cols) * (Math.PI * 2 - 2 * a0);
         curtainAt(a, r / rows, q, wk);
+        if (P.hairClump) {                                                  // без прядей-карточек край занавеса виден — подворачиваем его к голове
+          const e = smoothstep(0, 0.35, Math.min(a - a0, Math.PI * 2 - a0 - a)), kk = lerp(0.9, 1, e);
+          q[0] *= kk; q[2] = -0.08 + (q[2] + 0.08) * kk;
+        }
         const k = (r * (cols + 1) + i) * 3;
         pos[k] = q[0]; pos[k + 1] = q[1]; pos[k + 2] = q[2];
         sw[k / 3] = (r / rows) ** 2;                                        // раскачка растёт к кончикам
