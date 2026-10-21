@@ -2008,7 +2008,11 @@ export class ProceduralHead {
       shapeHead(0, yy, -r, P, tmp); const zb = tmp[2];
       return { ax, az: (zf - zb) / 2, cz: (zf + zb) / 2 };
     };
-    const mat = this._track(new THREE.MeshStandardMaterial({ color: h.color || '#3a4a5a', roughness: st === 'cap' ? 0.7 : 0.92, side: THREE.DoubleSide }));
+    // мультяшный убор (10.3, tk — сила): гладкий «игрушечный» материал, цвет чуть сочнее, края толще, крупные рубчики, помпон / пуговка
+    const tk = clamp(P.hairClump || 0, 0, 1);
+    const col = new THREE.Color(h.color || '#3a4a5a');
+    if (tk) { const hsl = {}; col.getHSL(hsl); col.setHSL(hsl.h, Math.min(1, hsl.s * (1 + 0.5 * tk)), Math.min(0.85, hsl.l * (1 + 0.25 * tk) + 0.03 * tk)); }
+    const mat = this._track(new THREE.MeshPhysicalMaterial({ color: col, roughness: lerp(st === 'cap' ? 0.7 : 0.92, 0.55, tk), clearcoat: 0.25 * tk, clearcoatRoughness: 0.5, sheen: 0.4 * tk, sheenColor: col.clone().lerp(new THREE.Color('#ffffff'), 0.4), side: THREE.DoubleSide }));
     const group = new THREE.Group();
     group.name = 'hat';
     // купол: кольца по высоте от края до макушки (поверх волос), для fedora — выше и с заломом
@@ -2027,7 +2031,11 @@ export class ProceduralHead {
         if (brimmed) { rx = Math.max(rx, 0.62 * k); rz = Math.max(rz, 0.72 * k); }
         let yy = y;
         if (st === 'fedora' && y > 1.15) yy -= 0.06 * Math.exp(-((sx / 0.25) ** 2)) * (1 - Math.abs(cz) * 0.3);   // залом тульи
-        if (st === 'beanie') { const rib = 0.004 * Math.sin(a * 48); rx += rib * (r < 5 ? 1 : 0.4); rz += rib * (r < 5 ? 1 : 0.4); }
+        if (st === 'beanie') {
+          const rib = lerp(0.004 * Math.sin(a * 48), 0.009 * (Math.sqrt(Math.abs(Math.sin(a * 12))) - 0.5), tk);   // мультяшная — крупные рубчики
+          const cuff = tk * 0.025 * (1 - smoothstep(4, 6, r));                                                       // и толстый отворот
+          rx += rib * (r < 5 ? 1 : 0.4) + cuff; rz += rib * (r < 5 ? 1 : 0.4) + cuff;
+        }
         pos.push(rx * sx, yy, e.cz + rz * cz);
       }
     }
@@ -2054,17 +2062,28 @@ export class ProceduralHead {
       brim.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
       brim.setIndex(bi); brim.computeVertexNormals();
       group.add(new THREE.Mesh(brim, mat));
+      if (st === 'cap' && tk) {                                     // мультяшный козырёк — с толстым кантом
+        const tube = this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rim), this._q(64, 16), 0.016 * tk, this._q(8, 4), false));
+        group.add(new THREE.Mesh(tube, mat));
+      }
       if (st !== 'cap') {                                           // завёрнутый край полей: читается и на тёмном фетре
-        const tube = this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rim, true), this._q(96, 24), st === 'bowler' ? 0.02 : 0.009, this._q(6, 4), true));
+        const tube = this._track(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rim, true), this._q(96, 24), (st === 'bowler' ? 0.02 : 0.009) + 0.018 * tk, this._q(8, 4), true));
         group.add(new THREE.Mesh(tube, mat));
       }
     }
     if (brimmed) {                                                  // лента на тулье
-      const band = this._track(new THREE.TorusGeometry(1, 0.035, this._q(6, 4), this._q(64, 20)));
+      const band = this._track(new THREE.TorusGeometry(1, 0.035 + 0.015 * tk, this._q(8, 4), this._q(64, 20)));
       band.rotateX(Math.PI / 2);
-      const e = ell(y0 + 0.08), m = new THREE.Mesh(band, this._track(new THREE.MeshStandardMaterial({ color: '#1a1410', roughness: 0.6 })));
+      const e = ell(y0 + 0.08), m = new THREE.Mesh(band, this._track(new THREE.MeshStandardMaterial({ color: tk ? new THREE.Color(h.band || '#a8323c').lerp(new THREE.Color('#1a1410'), 1 - tk) : '#1a1410', roughness: 0.6 - 0.2 * tk })));   // мультяшная лента — яркая
       m.scale.set(Math.max(e.ax + 0.06, 0.62) * 0.97, 1, Math.max(e.az + 0.06, 0.72) * 0.97); m.position.set(0, y0 + 0.08, e.cz);
       group.add(m);
+    }
+    if (tk > 0.3 && (st === 'beanie' || st === 'cap')) {          // помпон на шапке, пуговка на кепке
+      const pr = st === 'beanie' ? 0.17 * tk : 0.035;
+      const ball = new THREE.Mesh(this._track(new THREE.SphereGeometry(pr, this._q(24, 10), this._q(16, 8))), mat);
+      ball.position.set(0, topY + pr * (st === 'beanie' ? 0.6 : 0.2), ell(0.8).cz);
+      if (st === 'beanie') ball.scale.set(1, 0.92, 1);
+      group.add(ball);
     }
     this.hat = group; group.userData.batch = true;
     this.headRoot.add(group);

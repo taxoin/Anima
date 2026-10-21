@@ -78,6 +78,8 @@ export const CASES = [
   { name: 'male-toon-smile-down', gender: 'male', look: { toon: 0.6 }, channels: SMILE, pose: { eyePitch: -0.3 }, framing: 'close' },
   { name: 'female-toon-scoop-bust', gender: 'female', look: { toon: 1, hair: '#7a5434', outfit: 'scoop' }, framing: 'bust', pose: { yaw: -0.3 } },
   { name: 'male-toon-beard', gender: 'male', look: { toon: 1, beard: 'full', hair: '#5a3a24' }, pose: { yaw: 0.35 }, framing: 'close' },
+  { name: 'female-toon-beanie', gender: 'female', look: { toon: 1, hat: 'beanie' }, pose: { yaw: 0.4 } },
+  { name: 'male-toon-fedora', gender: 'male', look: { toon: 1, hat: 'fedora', beard: 'walrus', hair: '#c8c4bc' }, pose: { yaw: 0.3 } },
   { name: 'avatar-monalisa-toon', avatar: '/tests/fixtures/monalisa.anima.json', lookAfter: { toon: 1 }, framing: 'close' },
 ];
 
