@@ -582,8 +582,9 @@ const CORNEA_H = 0.06;                         // выпуклость рого�
  * и находит точку радужки. Отсюда параллакс при взгляде сбоку и «линза» над радужкой без лишнего прохода рендера.
  * Нормали — аналитические (у полюса сферы швы и вырожденные треугольники).
  */
-function eyeballGeometry(R, ws = 48, hs = 32, A = CORNEA_A) {
-  const geo = new THREE.SphereGeometry(R, ws, hs);
+function eyeballGeometry(R, ws = 48, hs = 32, A = CORNEA_A, cap = Math.PI) {
+  const geo = new THREE.SphereGeometry(R, ws, hs, 0, Math.PI * 2, 0, cap);
+  if (cap < Math.PI) { const uv = geo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setY(i, 1 - (1 - uv.getY(i)) * cap / Math.PI); }   // развёртка — как у целого шара
   geo.rotateX(Math.PI / 2);                                         // полюс (зрачок) → +Z
   const p = geo.attributes.position, n = geo.attributes.normal, H = CORNEA_H;
   for (let i = 0; i < p.count; i++) {
@@ -1099,7 +1100,7 @@ export class ProceduralHead {
     this.detail = resolveDetail(detail);
     this.L = DETAIL[this.detail];
     this.lp = flat?.tris ? 0.45 : 1;                               // 11.2: множитель разрешения частей, которые не упрощаются (динамические, на костях)
-    if (flat?.tris) this.L = { ...this.L, eye: [16, 12], lid: 14, teeth: [5, 4], acc: 0.3 };
+    if (flat?.tris) this.L = { ...this.L, eye: [12, 6], lid: 10, teeth: [5, 4], acc: 0.3 };
     this.shadows = shadows;
     this.P = applyToon({ ...PRESETS[gender] || PRESETS.female, ...resolveLook(overrides) }, gender);
     if (flat && this.P.hairCards === undefined) this.P.hairCards = false;   // 11.1: без прядей-карточек — их прозрачность мерцает шумом
@@ -1392,16 +1393,20 @@ export class ProceduralHead {
   _buildEyes() {
     const P = this.P, E = this.eye;
     const [ews, ehs] = this.L.eye;
-    const ballGeo = this._track(P.cornea === false ? new THREE.SphereGeometry(E.r, ews, ehs).rotateX(Math.PI / 2) : eyeballGeometry(E.r, ews, ehs, CORNEA_A * (P.irisScale ?? 1)));
+    const cap = this.flat?.tris ? 2.2 : Math.PI;                       // 11.2: только передняя часть яблока (взгляд ±0,6 рад + угол разреза), зад закрыт глазницей
+    const ballGeo = this._track(P.cornea === false ? new THREE.SphereGeometry(E.r, ews, ehs, 0, Math.PI * 2, 0, cap).rotateX(Math.PI / 2) : eyeballGeometry(E.r, ews, ehs, CORNEA_A * (P.irisScale ?? 1), cap));
     this._corneaU = { value: 1 };
     this._pupilU = { value: 1 };
     const cu = P.cornea === false ? { value: 0 } : this._corneaU;    // без роговицы шейдер нужен только для зрачка
     corneaShader(this.mat.eye, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1, P.catchlight || 0);
     if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1, P.catchlight || 0);
     const phiS = Math.PI / 2 - 1.75, phiL = 3.5;
-    const lv = this.flat?.tris ? 0.6 : 1;
-    const upGeo = this._track(new THREE.SphereGeometry(E.rs, this.L.lid, Math.round(14 * lv), phiS, phiL, 0, Math.PI / 2));
-    const loGeo = this._track(new THREE.SphereGeometry(E.rl, this.L.lid, Math.round(10 * lv), phiS, phiL, Math.PI / 2, Math.PI / 2));
+    const lv = this.flat?.tris ? 0.36 : 1, ru = Math.round(14 * lv), rlo = Math.round(10 * lv);
+    // грубая оболочка века: хорды проходят внутри сферы — раздуваем её на прогиб хорды (описанный многогранник), иначе веко срезает роговицу
+    const kLid = this.flat?.tris ? 1 / (Math.cos(phiL / this.L.lid / 2) * Math.cos(Math.PI / 4 / Math.min(ru, rlo))) : 1;
+    const upGeo = this._track(new THREE.SphereGeometry(E.rs, this.L.lid, ru, phiS, phiL, 0, Math.PI / 2));
+    const loGeo = this._track(new THREE.SphereGeometry(E.rl, this.L.lid, rlo, phiS, phiL, Math.PI / 2, Math.PI / 2));
+    if (kLid > 1) { upGeo.scale(kLid, kLid, kLid); loGeo.scale(kLid, kLid, kLid); }
     // веко темнеет к складке (как кожа глазницы), светлое — только у кромки
     const shadeLid = (geo, upper) => {
       const p = geo.attributes.position, c = new Float32Array(p.count * 3);
@@ -1415,8 +1420,8 @@ export class ProceduralHead {
     };
     shadeLid(upGeo, true); shadeLid(loGeo, false);
     const liner = resolveMakeup(P.makeup)?.eyeliner || 0;           // подводка — толще линия ресниц
-    const lp = this.lp, sq = (a, min = 3) => Math.max(min, Math.round(a * lp));
-    const lashGeo = this._track(new THREE.TorusGeometry(E.rs * 1.004, P.lash * (0.65 + 0.8 * liner), sq(5), sq(40), Math.PI));   // линия роста ресниц
+    const lp = this.lp, sq = (a, min = 3) => Math.max(min, Math.round(a * lp)), sa = (a) => Math.max(8, Math.round(a * lp * lp));   // sa — вдоль дуг ресниц и складки
+    const lashGeo = this._track(new THREE.TorusGeometry(E.rs * 1.004 * kLid, P.lash * (0.65 + 0.8 * liner), sq(5), sa(40), Math.PI));   // линия роста ресниц
     // ресницы-карточки: изогнутые ленты от кромки, длиннее к внешнему углу; upper — вверх, lower — вниз и реже
     const lashCards = (R, n, len, up, sg) => {
       const pos = [], idx = [];
@@ -1443,7 +1448,7 @@ export class ProceduralHead {
     const lashLen = (P.lashLen ?? (this.gender === 'female' ? 1 : 0.7)) * 0.034 * (E.r / 0.116) * (1 + 0.25 * liner);
     const lashCardMat = this._track(new THREE.MeshStandardMaterial({ color: '#120c0a', roughness: 0.8, side: THREE.DoubleSide }));
     lashGeo.rotateX(Math.PI / 2);
-    const lashLoGeo = this._track(new THREE.TorusGeometry(E.rl * 1.004, P.lash * 0.28, sq(4), sq(32), Math.PI * 0.8));
+    const lashLoGeo = this._track(new THREE.TorusGeometry(E.rl * 1.004 * kLid, P.lash * 0.28, sq(4), sa(32), Math.PI * 0.8));
     lashLoGeo.rotateX(Math.PI / 2);
     lashLoGeo.rotateY(-Math.PI * 0.1);
     // мягкая тень от верхнего века: полоса с альфа-градиентом прямо под кромкой
@@ -1473,7 +1478,7 @@ export class ProceduralHead {
     let creaseGeo = null;
     if (crease > 0.02 || hood > 0.02) {
       const tube = (0.003 + 0.004 * crease + 0.013 * hood) * kr;
-      creaseGeo = this._track(new THREE.TorusGeometry(E.rs * (1.02 + 0.03 * hood), tube, sq(6), sq(36), Math.PI * 0.86));
+      creaseGeo = this._track(new THREE.TorusGeometry(E.rs * (1.02 + 0.03 * hood), tube, sq(6), sa(36), Math.PI * 0.86));
       creaseGeo.rotateX(Math.PI / 2);
       creaseGeo.rotateY(Math.PI * 0.07);
       // тень под валиком: низ трубки темнее, края дуги растворяются в коже (тоньше к углам)
@@ -1487,7 +1492,7 @@ export class ProceduralHead {
       }
       creaseGeo.computeVertexNormals();
     }
-    const epiGeo = this._track(new THREE.SphereGeometry(1, 14, 10));
+    const epiGeo = this._track(new THREE.SphereGeometry(1, sq(14, 6), sq(10, 4)));
     epiGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(epiGeo.attributes.position.count * 3).fill(0.96), 3));
 
     this.eyes = [];
@@ -2591,9 +2596,9 @@ export class ProceduralHead {
       return clothPts[clothPts.length - 1][0];
     };
     const neckPts = (outfit !== 'crew' && outfit !== 'turtleneck' && outfit !== 'hoodie'
-      ? [[r, -0.45], [r * 0.97, -0.9], [r * 1.05, -1.25], [r * 1.5, -1.5], ...[-1.62, -1.74, -1.9, -2.15, -2.6].map((y) => [Math.max(r * 1.5, Rof(y) * 0.965), y])]
+      ? [[r, -0.45], [r * 0.97, -0.9], [r * 1.05, -1.25], [r * 1.5, -1.5], ...[-1.62, -1.74, -1.9, -2.15, -2.6].map((y) => [Math.max(r * 1.5, Rof(y) * (this.flat?.tris ? 0.92 : 0.965)), y])]
       : [[r, -0.45], [r * 0.97, -0.9], [r * 1.05, -1.25], [r * 1.5, -1.5], [r * 2.6, -1.72], [r * 3.6, -1.92]]).map(([x, y]) => new THREE.Vector2(x, y));
-    const neckGeo = this._track(new THREE.LatheGeometry(neckPts, 48));   // шея и ворот — одинаковые грани на всех уровнях (иначе кожа просвечивает у ворота)
+    const neckGeo = this._track(new THREE.LatheGeometry(neckPts, this.flat?.tris ? 32 : 48));   // шея и ворот — одинаковые грани на всех уровнях (иначе кожа просвечивает у ворота)
     neckGeo.scale(1, 1, 0.6);
     let neckMat = this.mat.neck;
     if (!this.shadows) {
@@ -2645,14 +2650,14 @@ export class ProceduralHead {
       normalMap: this._track(clothNormalTexture()), normalScale: new THREE.Vector2(P.clothFolds ?? 1, P.clothFolds ?? 1),
     }));
     // торс с вырезом topFn; k — масштаб радиуса (нижний слой — чуть внутри)
-    const torso = (topFn, k = 1, mat = bodyMat, phiMax = Math.PI) => {
-      const N = this._q(112, 40), ROWS = this._q(44, 18), rows = [], uv = [];
+    const torso = (topFn, k = 1, mat = bodyMat, phiMax = Math.PI, botFn = null) => {
+      const lowT = this.flat?.tris, N = lowT ? 33 : this._q(112, 40), ROWS = lowT ? 9 : this._q(44, 18), rows = [], uv = [];   // 11.2: минимум треугольников; нечётное N — нет столбца ровно на острие выреза (иначе воротник его не закрывает)
       const full = phiMax >= Math.PI;
       for (let i = 0; i <= ROWS; i++) {
         const v = i / ROWS, row = [];
         for (let j = 0; j < (full ? N : N + 1); j++) {
           const phi = full ? (j / N) * Math.PI * 2 - Math.PI : -phiMax + (2 * phiMax * j) / N;
-          const t0 = topFn(phi), y = lerp(t0, this._yBot, v ** 1.7);
+          const t0 = topFn(phi), y = botFn ? lerp(t0, botFn(phi), v) : lerp(t0, this._yBot, v ** 1.7);
           const p = surf(phi, y, k);
           if (i === 0) p.add(radial(phi).multiplyScalar(-0.012));       // кромка выреза чуть загнута внутрь
           row.push(p); uv.push((phi + Math.PI) / (Math.PI * 2), (y + 3.4) / 2.2);
@@ -2668,13 +2673,14 @@ export class ProceduralHead {
       for (let j = 0; j <= 96; j++) { const phi = lerp(phiA, phiB, j / 96); pts.push(surf(phi, topFn(phi), k, 0.004)); }
       const closed = phiB - phiA >= Math.PI * 2 - 1e-6;
       if (closed) pts.pop();
-      return add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, closed), this._q(160, 48), rad, this._q(6, 4), closed), mat);
+      return add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, closed), this.flat?.tris ? 32 : this._q(160, 48), rad, this.flat?.tris ? 3 : this._q(6, 4), closed), mat);
     };
     // воротник рубашки: стойка + отворот, к переду — уголки; phi0 — половина ширины выреза спереди
     const collar = (topFn, mat, phi0, k = 1, h = 0.085, fall = 0.12, point = 0.13) => {
       const rows = [[], [], [], []];
-      for (let j = 0; j <= 80; j++) {
-        const side = j <= 40 ? -1 : 1, u = j <= 40 ? j / 40 : (80 - j) / 40;   // 0 — сзади, 1 — у выреза
+      const H = this.flat?.tris ? 16 : 40;                              // столбцов на половину воротника
+      for (let j = 0; j <= 2 * H; j++) {
+        const side = j <= H ? -1 : 1, u = j <= H ? j / H : (2 * H - j) / H;   // 0 — сзади, 1 — у выреза
         const phi = side * lerp(Math.PI, phi0, u), yt = topFn(phi), front = smoothstep(0.6, 1, u);
         const base = surf(phi, yt, k, 0.006), rd = radial(phi);
         const stand = base.clone().add(new V3(0, h * (1 - 0.35 * front), 0)).addScaledVector(rd, 0.012);
@@ -2712,7 +2718,8 @@ export class ProceduralHead {
     }
     if (outfit === 'blazer') {
       const shirtFn = vcut(0.1, 0.24), jacketFn = vcut(0.62, 0.62, 1.05);
-      torso(shirtFn, 0.985, mat2, 1.3);                                // рубашка — только спереди, под пиджаком
+      // рубашка — только в вырезе пиджака и чуть ниже его края: на изгибе плеча хорды пиджака проваливаются внутрь, и полная рубашка под ним проступала
+      torso(shirtFn, 0.985, mat2, 0.8, (phi) => jacketFn(phi) - 0.08);
       collar(shirtFn, mat2, 0.22, 0.985, 0.075, 0.08, 0.1);
       torso(jacketFn);
       // лацканы: полосы вдоль краёв выреза пиджака, отворот к плечу; сверху переходят в воротник пиджака
@@ -2734,8 +2741,9 @@ export class ProceduralHead {
         const knot = new THREE.Mesh(this._track(new THREE.SphereGeometry(1, 12, 8)), tm);
         knot.scale.set(0.045, 0.05, 0.025); knot.position.copy(surf(0, yk, 0.985, 0.022)); this.body.add(knot);
         const L = [], R = [];
+        const tl = this.flat?.tris ? yk - jacketFn(0) + 0.02 : 0.85;  // грубый пиджак: галстук только до низа выреза (ниже проступал сквозь хорды)
         for (let i = 0; i <= 16; i++) {
-          const t = i / 16, y = yk - 0.04 - t * 0.85, w = lerp(0.035, 0.075, Math.min(1, t * 1.6)) / Math.max(0.5, Rof(y));
+          const t = i / 16, y = yk - 0.04 - t * tl, w = lerp(0.035, 0.075, Math.min(1, t * 1.6)) / Math.max(0.5, Rof(y));
           L.push(surf(-w, y, 0.985, 0.014)); R.push(surf(w, y, 0.985, 0.014));
         }
         add(strip([L, R]), tm);
@@ -2779,7 +2787,7 @@ export class ProceduralHead {
     // colorMerge: материалы одного типа, различающиеся только цветом, — в один (цвет переходит в цвет вершин)
     const r1 = (v) => Math.round((v ?? 0) * 10) / 10;
     const sig = (m) => !colorMerge || m.map || m.normalMap || m.alphaMap || m.transparent ? m.uuid
-      : [m.type, m.depthTest, m.depthWrite, m.stencilWrite, m.stencilFunc, m.stencilRef, m.alphaHash, m.alphaToCoverage, m.blending, Math.round((m.metalness ?? 0) * 2), Math.round((m.clearcoat ?? 0) * 2), (m.sheen ?? 0) > 0, m.emissive?.getHex() ?? 0].join('|');   // шероховатость усредняется, сторона — двусторонняя при расхождении
+      : [m.type, m.depthTest, m.depthWrite, m.stencilWrite, m.stencilFunc, m.stencilRef, m.alphaHash, m.alphaToCoverage, m.blending, Math.round((m.metalness ?? 0) * 2), Math.round((m.clearcoat ?? 0) * 2), (m.sheen ?? 0) > 0, m.emissive?.getHex() ?? 0, this.flat ? m.side : 0].join('|');   // шероховатость усредняется, сторона — двусторонняя при расхождении
     for (const m of meshes) {
       if (!m.isMesh || m.isSkinnedMesh || !m.visible || m.material === HIDDEN_MAT) continue;
       const g = m.geometry, mat = m.material;

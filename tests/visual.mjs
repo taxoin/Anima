@@ -85,6 +85,8 @@ export const CASES = [
   { name: 'avatar-lincoln-flat-beard', avatar: '/tests/fixtures/lincoln.anima.json', flat: true, framing: 'close' },
   { name: 'avatar-monalisa-flat', avatar: '/tests/fixtures/monalisa.anima.json', flat: { pixel: 2 }, framing: 'close' },
   { name: 'female-flat-open-mouth', gender: 'female', look: { hair: '#7a5434' }, flat: true, channels: { jawOpen: 0.7, mouthFunnel: 0.3 }, framing: 'close' },   // полость рта (depthFunc) после упрощения
+  { name: 'male-flat-blazer-bust', gender: 'male', look: { outfit: 'blazer' }, flat: true, framing: 'bust', pose: { yaw: -0.3 } },   // слои одежды на грубой сетке
+  { name: 'male-flat-hoodie-bust', gender: 'male', look: { outfit: 'hoodie' }, flat: true, framing: 'bust' },
   { name: 'male-flat-full-mesh-glasses', gender: 'male', look: { glasses: 'round', beard: 'goatee' }, flat: { tris: 0 }, channels: SMILE, framing: 'close' },
   { name: 'avatar-monalisa-toon', avatar: '/tests/fixtures/monalisa.anima.json', lookAfter: { toon: 1 }, framing: 'close' },
 ];
