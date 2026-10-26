@@ -47,6 +47,7 @@ el?.setEmotion('happy');
 const el2: EmotionalHeadElement | null = el;
 console.log(el2?.head?.getDetail());
 head.setFlat({ pixel: 2, bands: 4 }).setFlat(false);
+head.setFlat({ tris: 3000 }).setFlat({ tris: 0 });
 head.on('flatChange', (f) => console.log(f?.pixel));
 
 // ожидаемые ошибки

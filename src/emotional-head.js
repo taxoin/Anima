@@ -551,7 +551,7 @@ export class EmotionalHead {
     const f = this.options.flat;
     if (!f) return null;
     const o = f === true ? {} : f;
-    return { bands: o.bands ?? 3, pixel: Math.max(1, o.pixel ?? 1), fps: o.fps ?? 30, detail: resolveDetail(o.detail ?? 'low') };
+    return { bands: o.bands ?? 3, pixel: Math.max(1, o.pixel ?? 1), fps: o.fps ?? 30, tris: o.tris ?? 2400, detail: resolveDetail(o.detail ?? 'low') };
   }
   /** Состояние адаптивного режима: { step, detail, pixelRatio, refreshHz, ceiling, changes } или null. */
   getAdaptive() {
@@ -891,7 +891,7 @@ export class EmotionalHead {
     if (this._portrait) overrides = { ...this._portrait.fit({ ...this._photoOpts, gender }), ...overrides };
     const shadows = this._applyShadows();                         // уровень детализации мог смениться через options.detail
     const F = this._flat();
-    return new ProceduralHead({ gender, shadows, overrides, detail: this._detailNow(), flat: F && { bands: F.bands } });
+    return new ProceduralHead({ gender, shadows, overrides, detail: this._detailNow(), flat: F && { bands: F.bands, tris: F.tris } });
   }
 
   /**

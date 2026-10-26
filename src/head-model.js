@@ -18,6 +18,7 @@
 import * as THREE from 'three';
 import { hasDecals, drawDecals, resolveMakeup, DECAL_BOUNDS } from './skin-decals.js';
 import { thinPlate } from './tps.js';
+import { decimate } from './decimate.js';
 
 // ------------------------------------------------------------------ утилиты
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
@@ -748,7 +749,7 @@ function buildDentition(P, zFront, upper, seg = [12, 10]) {
     const g = best.g, pap = smoothstep(0.55, 1.05, best.d);       // межзубный сосочек
     return upper ? g.yEdge + g.h * lerp(0.84, 0.62, pap) : g.yEdge - g.h * lerp(0.84, 0.62, pap);
   };
-  const cols = 72, rows = 4, gpos = [], gcol = [], gidx = [];
+  const cols = seg[0] >= 8 ? 72 : Math.max(24, seg[0] * 6), rows = 4, gpos = [], gcol = [], gidx = [];   // грубее — только в режиме минимума треугольников (11.2)
   for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
     const x = lerp(-xMax, xMax, c / cols), s = r / rows, y0 = line(x);
     const y = upper ? y0 + s * 0.06 : y0 - s * 0.06;
@@ -1097,6 +1098,8 @@ export class ProceduralHead {
     this.flat = flat;                                             // 11.1: плоский режим { bands } — дешёвые материалы с плоскими гранями
     this.detail = resolveDetail(detail);
     this.L = DETAIL[this.detail];
+    this.lp = flat?.tris ? 0.45 : 1;                               // 11.2: множитель разрешения частей, которые не упрощаются (динамические, на костях)
+    if (flat?.tris) this.L = { ...this.L, eye: [16, 12], lid: 14, teeth: [5, 4], acc: 0.3 };
     this.shadows = shadows;
     this.P = applyToon({ ...PRESETS[gender] || PRESETS.female, ...resolveLook(overrides) }, gender);
     if (flat && this.P.hairCards === undefined) this.P.hairCards = false;   // 11.1: без прядей-карточек — их прозрачность мерцает шумом
@@ -1200,6 +1203,7 @@ export class ProceduralHead {
 
     if (this.flat) this._flatten(this.flat);
     this._batchAll();
+    if (this.flat?.tris) this._decimateAll(this.flat.tris);
     root.traverse((o) => {
       if (o.isMesh && this.shadows && !o.userData.noShadow) { o.castShadow = true; o.receiveShadow = true; }
     });
@@ -1395,8 +1399,9 @@ export class ProceduralHead {
     corneaShader(this.mat.eye, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1, P.catchlight || 0);
     if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1, P.catchlight || 0);
     const phiS = Math.PI / 2 - 1.75, phiL = 3.5;
-    const upGeo = this._track(new THREE.SphereGeometry(E.rs, this.L.lid, 14, phiS, phiL, 0, Math.PI / 2));
-    const loGeo = this._track(new THREE.SphereGeometry(E.rl, this.L.lid, 10, phiS, phiL, Math.PI / 2, Math.PI / 2));
+    const lv = this.flat?.tris ? 0.6 : 1;
+    const upGeo = this._track(new THREE.SphereGeometry(E.rs, this.L.lid, Math.round(14 * lv), phiS, phiL, 0, Math.PI / 2));
+    const loGeo = this._track(new THREE.SphereGeometry(E.rl, this.L.lid, Math.round(10 * lv), phiS, phiL, Math.PI / 2, Math.PI / 2));
     // веко темнеет к складке (как кожа глазницы), светлое — только у кромки
     const shadeLid = (geo, upper) => {
       const p = geo.attributes.position, c = new Float32Array(p.count * 3);
@@ -1410,7 +1415,8 @@ export class ProceduralHead {
     };
     shadeLid(upGeo, true); shadeLid(loGeo, false);
     const liner = resolveMakeup(P.makeup)?.eyeliner || 0;           // подводка — толще линия ресниц
-    const lashGeo = this._track(new THREE.TorusGeometry(E.rs * 1.004, P.lash * (0.65 + 0.8 * liner), 5, 40, Math.PI));   // линия роста ресниц
+    const lp = this.lp, sq = (a, min = 3) => Math.max(min, Math.round(a * lp));
+    const lashGeo = this._track(new THREE.TorusGeometry(E.rs * 1.004, P.lash * (0.65 + 0.8 * liner), sq(5), sq(40), Math.PI));   // линия роста ресниц
     // ресницы-карточки: изогнутые ленты от кромки, длиннее к внешнему углу; upper — вверх, lower — вниз и реже
     const lashCards = (R, n, len, up, sg) => {
       const pos = [], idx = [];
@@ -1437,7 +1443,7 @@ export class ProceduralHead {
     const lashLen = (P.lashLen ?? (this.gender === 'female' ? 1 : 0.7)) * 0.034 * (E.r / 0.116) * (1 + 0.25 * liner);
     const lashCardMat = this._track(new THREE.MeshStandardMaterial({ color: '#120c0a', roughness: 0.8, side: THREE.DoubleSide }));
     lashGeo.rotateX(Math.PI / 2);
-    const lashLoGeo = this._track(new THREE.TorusGeometry(E.rl * 1.004, P.lash * 0.28, 4, 32, Math.PI * 0.8));
+    const lashLoGeo = this._track(new THREE.TorusGeometry(E.rl * 1.004, P.lash * 0.28, sq(4), sq(32), Math.PI * 0.8));
     lashLoGeo.rotateX(Math.PI / 2);
     lashLoGeo.rotateY(-Math.PI * 0.1);
     // мягкая тень от верхнего века: полоса с альфа-градиентом прямо под кромкой
@@ -1455,7 +1461,7 @@ export class ProceduralHead {
     const wetGeo = this._track(new THREE.TorusGeometry((E.r + E.rl) / 2, Math.max(0.0024, (E.rl - E.r) * 0.7), 6, 40, Math.PI));
     wetGeo.rotateX(Math.PI / 2);
     const wetMat = this._track(new THREE.MeshPhysicalMaterial({ color: new THREE.Color(P.skin).lerp(new THREE.Color('#d98a86'), 0.55), roughness: 0.25, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 1.1 }));
-    const carGeo = this._track(new THREE.SphereGeometry(1, 16, 12));
+    const carGeo = this._track(new THREE.SphereGeometry(1, sq(16, 6), sq(12, 4)));
     const carMat = this._track(new THREE.MeshPhysicalMaterial({ color: '#cf7f7a', roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.1, envMapIntensity: 1.0 }));
     const kr = E.r / 0.116;
     // нижние ресницы редкие и короткие: не чёрная обводка, а тёмная полупрозрачная линия
@@ -1467,7 +1473,7 @@ export class ProceduralHead {
     let creaseGeo = null;
     if (crease > 0.02 || hood > 0.02) {
       const tube = (0.003 + 0.004 * crease + 0.013 * hood) * kr;
-      creaseGeo = this._track(new THREE.TorusGeometry(E.rs * (1.02 + 0.03 * hood), tube, 6, 36, Math.PI * 0.86));
+      creaseGeo = this._track(new THREE.TorusGeometry(E.rs * (1.02 + 0.03 * hood), tube, sq(6), sq(36), Math.PI * 0.86));
       creaseGeo.rotateX(Math.PI / 2);
       creaseGeo.rotateY(Math.PI * 0.07);
       // тень под валиком: низ трубки темнее, края дуги растворяются в коже (тоньше к углам)
@@ -1510,8 +1516,8 @@ export class ProceduralHead {
       const cardsU = new THREE.Mesh(this._shapeLid(lashCards(E.rs * 1.003, 44, lashLen, 1, sg), sg, true, E.rs), lashCardMat);
       const cardsL = new THREE.Mesh(this._shapeLid(lashCards(E.rl * 1.003, 26, lashLen * 0.38, -1, sg), sg, false, E.rl), lashLoMat);
       cardsU.userData.noShadow = cardsL.userData.noShadow = true;
-      up.add(lash, sh, cardsU);
-      lo.add(lashLo, wet, cardsL);
+      if (this.flat?.tris) { up.add(lash); lo.add(lashLo); }      // минимум треугольников: без прядей ресниц, тени века и влажной кромки
+      else { up.add(lash, sh, cardsU); lo.add(lashLo, wet, cardsL); }
       // складка века (валик кожи над подвижным веком) и нависание; эпикантус — кожная складка во внутреннем углу
       if (creaseGeo) {
         const cr = new THREE.Mesh(this._shapeLid(creaseGeo, sg, true, E.rs), this.mat.lid);
@@ -1565,7 +1571,7 @@ export class ProceduralHead {
   _buildBrows() {
     this.brows = [];
     for (const sg of [1, -1]) {
-      const tube = new TaperedTube(28, 8);
+      const tube = new TaperedTube(Math.max(10, Math.round(28 * this.lp)), Math.max(4, Math.round(8 * this.lp)));
       this._track(tube.geo);
       const mesh = new THREE.Mesh(tube.geo, this.mat.brow);
       mesh.frustumCulled = false;
@@ -1617,7 +1623,7 @@ export class ProceduralHead {
     const tongueMat = this._track(new THREE.MeshStandardMaterial({ color: '#b5525a', roughness: 0.5, vertexColors: true, side: THREE.DoubleSide, ...inner }));   // сетка языка обходится «изнанкой» к камере
     M.teethMat = teethMat; M.gumMat = gumMat; M.cavMat = cavMat; M.tongueMat = tongueMat;
 
-    M.N = 36;
+    M.N = this.lp < 1 ? 20 : 36;                                    // столбцов у губ и полости рта (минимум треугольников — 20)
     M.cav = new THREE.Mesh(this._track(dynamicGrid(M.N, 8, true)), cavMat);
     M.tongue = new THREE.Mesh(this._track(dynamicGrid(16, 6, true)), tongueMat);
     // зубы и дёсны: верхние неподвижны, нижние — в группе, которая поворачивается вокруг оси челюсти
@@ -1860,7 +1866,9 @@ export class ProceduralHead {
       out[0] = tmp[0] + (nx / nl) * off; out[1] = tmp[1] + (ny / nl) * off; out[2] = tmp[2] + (nz / nl) * off;
       return y - yh;                                                         // > 0 — выше линии роста
     };
-    const geo = this._track(sphereGrid(this.L.hair[0], this.L.hair[1], shellAt));
+    const inside = [];                                                       // 11.2: вершины под кожей (ниже линии роста) — свой класс для упрощения
+    const geo = this._track(sphereGrid(this.L.hair[0], this.L.hair[1], (px, py, pz, out) => { inside.push(shellAt(px, py, pz, out) < -0.02 ? 1 : 0); }));
+    geo.userData.cls = Int8Array.from(inside);
     geo.computeVertexNormals();
     // цвет: корни темнее, верх с бликом
     const p = geo.attributes.position.array, col = new Float32Array(p.length);
@@ -1888,7 +1896,7 @@ export class ProceduralHead {
     if (long) {
       // "занавес" длинных волос сзади и по бокам
       const side = volAt(1, HC - 0.17);                                      // объём у висков (θ ≈ 100°)
-      const cols = P.hairClump ? 192 : 64, rows = 30, a0 = 1.0, wk = wkC = prof(P.gx, 0) / 0.755 * (side === null ? 1 : clamp(1 + (side - 0.07) / 0.84, 0.92, 1.35));   // занавес по ширине головы и волос
+      const cols = Math.round((P.hairClump ? 192 : 64) * (this.lp < 1 ? 0.4 : 1)), rows = this.lp < 1 ? 12 : 30, a0 = 1.0, wk = wkC = prof(P.gx, 0) / 0.755 * (side === null ? 1 : clamp(1 + (side - 0.07) / 0.84, 0.92, 1.35));   // занавес по ширине головы и волос
       const g = this._track(dynamicGrid(cols, rows, true));
       const pos = g.attributes.position.array, c = g.attributes.color.array, q = [0, 0, 0], sw = new Float32Array(pos.length / 3);
       for (let r = 0; r <= rows; r++) for (let i = 0; i <= cols; i++) {
@@ -2857,7 +2865,7 @@ export class ProceduralHead {
     }
     const grad = this._track(new THREE.DataTexture(px, W, 1));
     grad.minFilter = grad.magFilter = THREE.NearestFilter; grad.needsUpdate = true;
-    const KEYS = ['color', 'map', 'vertexColors', 'side', 'transparent', 'opacity', 'alphaTest', 'alphaHash', 'alphaToCoverage', 'depthTest', 'depthWrite', 'colorWrite',
+    const KEYS = ['color', 'map', 'vertexColors', 'side', 'transparent', 'opacity', 'alphaTest', 'alphaHash', 'alphaToCoverage', 'depthTest', 'depthWrite', 'depthFunc', 'colorWrite',
       'stencilWrite', 'stencilFunc', 'stencilRef', 'stencilFuncMask', 'stencilWriteMask', 'stencilFail', 'stencilZFail', 'stencilZPass', 'polygonOffset', 'polygonOffsetFactor', 'polygonOffsetUnits', 'blending', 'visible', 'name'];
     const cache = new Map([[HIDDEN_MAT, HIDDEN_MAT]]);
     const conv = (m) => {
@@ -2880,6 +2888,48 @@ export class ProceduralHead {
       if (o.customDepthMaterial) o.customDepthMaterial = conv(o.customDepthMaterial);
     });
     for (const k in this.mat) if (this.mat[k]) this.mat[k] = conv(this.mat[k]);   // ссылки для update и материалов-клонов
+  }
+
+  /**
+   * Минимум треугольников (11.2): упрощение кожи до tris треугольников; волосы — в той же пропорции (не меньше 8 %),
+   * остальные неподвижные сетки (глаза, аксессуары) — втрое мягче; тело с одеждой не трогаем (слои протыкают друг друга) (не меньше 30 %, не меньше 120 граней). Вершины — подмножество исходных, поэтому морфы, кости век и челюсти, UV фото
+   * и декалей остаются. Вес вершин выше на лице и сильнее всего у глаз, носа и рта; расхождение морфов дорого.
+   * Не трогаем сетки, которые пересчитываются на CPU (губы, брови, борода, полость рта), на костях (веки, зубы) и мелкие (< 300).
+   */
+  _decimateAll(tris) {
+    const skinT = this.skin.geometry.index.count / 3, ratio = clamp(tris / skinT, 0.02, 1), E = this.eye, MY = LAYOUT.mouthY;
+    const weightOf = (geo, face) => {
+      const p = geo.attributes.position, w = new Float32Array(p.count);
+      for (let i = 0; i < p.count; i++) {
+        const x = Math.abs(p.getX(i)), y = p.getY(i), z = p.getZ(i);
+        let k = 1;
+        if (face) {
+          const front = smoothstep(0.05, 0.45, z);
+          const eye = Math.exp(-(((x - E.x) / 0.22) ** 2 + ((y - E.y) / 0.16) ** 2));
+          const mouth = Math.exp(-((x / 0.32) ** 2 + ((y - MY) / 0.14) ** 2));
+          const nose = Math.exp(-((x / 0.14) ** 2 + ((y - (E.y + MY) / 2) / 0.26) ** 2));
+          k = 1 + front * (1 + 4 * eye + 4 * mouth + 6 * nose);       // умеренно: при больших весах упрощение съедает бока и силуэт головы
+        }
+        w[i] = k;
+      }
+      return w;
+    };
+    const stats = [], body = new Set();
+    this.body?.traverse((o) => body.add(o));                          // одежда — слои (рубашка под пиджаком): грубая сетка их протыкает
+    this.object3D.traverse((o) => {
+      if (!o.isMesh || o.material === HIDDEN_MAT || !o.geometry.index || body.has(o)) return;
+      const g = o.geometry, t = g.index.count / 3;
+      // на костях (веки, челюсть) не упрощаем: хорды грубой оболочки века срезают глазное яблоко
+      if (t < 300 || o.isSkinnedMesh || g.attributes.position.usage === THREE.DynamicDrawUsage) return;
+      const isSkin = o === this.skin, hair = o.name === 'hair' || o.name === 'hairLong';
+      const target = isSkin ? tris : Math.max(120, Math.round(t * (hair ? Math.max(ratio, 0.08) : Math.max(3 * ratio, 0.3))));
+      if (target >= t) return;
+      const ng = decimate(g, target, { weight: weightOf(g, isSkin), morphK: isSkin ? 4 : 0, cls: g.userData.cls });
+      if (ng === g) return;
+      this._track(ng); o.geometry = ng;
+      stats.push([o.name || '?', t, ng.index.count / 3]);
+    });
+    this.decimated = stats;
   }
 
   /** Все склейки головы: глаза (веки — кости), зубы и дёсны (нижняя челюсть — кость), неподвижные аксессуары, очки, тело. */
