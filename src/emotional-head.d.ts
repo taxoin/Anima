@@ -128,6 +128,8 @@ export interface EmotionalHeadOptions {
   maxPixelRatio?: number;
   /** auto — medium на телефонах; adaptive — по скорости кадров (событие detailChange). */
   detail?: DetailOption;
+  /** Плоский быстрый режим (11.1): true или параметры, см. setFlat. */
+  flat?: boolean | FlatOptions;
   tts?: 'webspeech' | 'none' | TTSFunction;
   voice?: VoiceOptions;
   look?: LookOption;
@@ -270,6 +272,13 @@ export interface EmotionalHeadEvents {
   photoAvatar: PhotoReport | null;
   lookChange: LookOption;
   detailChange: { detail: DetailLevel; pixelRatio: number; step: number; reason: string };
+  flatChange: Required<FlatOptions> | null;
+}
+/** Плоский режим: свет в bands ступеней (2…6), кадр в pixel раз мельче с крупным пикселем, геометрия уровня detail. */
+export interface FlatOptions {
+  bands?: number;
+  pixel?: number;
+  detail?: DetailLevel;
 }
 export type EmotionalHeadEvent = keyof EmotionalHeadEvents;
 
@@ -319,6 +328,9 @@ export declare class EmotionalHead {
   setFraming(name: Framing): this;
   setDetail(detail?: DetailOption): this;
   getDetail(): DetailLevel;
+  /** Плоский быстрый режим: дешёвые материалы с плоскими гранями, без теней и отражений, крупный пиксель. false — выключить. */
+  setFlat(cfg?: boolean | FlatOptions): this;
+  getFlat(): Required<FlatOptions> | null;
   getAdaptive(): AdaptiveState | null;
 
   // фото-аватар

@@ -1092,8 +1092,9 @@ export class ProceduralHead {
    * @param {boolean} o.shadows
    * @param {object} o.overrides  — переопределить параметры пресета (skin, hair, iris, cloth, ...)
    */
-  constructor({ gender = 'female', shadows = true, overrides = {}, detail = 'high' } = {}) {
+  constructor({ gender = 'female', shadows = true, overrides = {}, detail = 'high', flat = null } = {}) {
     this.gender = gender;
+    this.flat = flat;                                             // 11.1: плоский режим { bands } — дешёвые материалы с плоскими гранями
     this.detail = resolveDetail(detail);
     this.L = DETAIL[this.detail];
     this.shadows = shadows;
@@ -1196,6 +1197,7 @@ export class ProceduralHead {
     this._buildMask();
     this._contactAO();
 
+    if (this.flat) this._flatten(this.flat);
     this._batchAll();
     root.traverse((o) => {
       if (o.isMesh && this.shadows && !o.userData.noShadow) { o.castShadow = true; o.receiveShadow = true; }
@@ -2830,6 +2832,45 @@ export class ProceduralHead {
       saved += list.length - 1;
     }
     return saved;
+  }
+
+  /**
+   * Плоский режим (11.1): все материалы → MeshToonMaterial с плоскими гранями и светом в несколько ступеней (bands).
+   * Без PBR, отражений окружения, лака, отлива, рассеяния и анизотропии — пиксельный шейдер в разы дешевле, а одинаковый
+   * тип материала даёт склейке (_batchAll) больше общих групп. Цвет, карты, прозрачность, трафарет, порядок отрисовки и
+   * вставки в шейдер (раскачка волос, роговица, декали) переносятся; общие материалы остаются общими.
+   */
+  _flatten({ bands = 3 } = {}) {
+    // шкала ступеней: three берёт её по (cos + 1) / 2 — ступени кладём на косинус освещённой стороны (обратная — нижняя ступень)
+    const n = clamp(Math.round(bands), 2, 6), W = 64, px = new Uint8Array(W * 4);
+    for (let i = 0; i < W; i++) {
+      const c = 2 * (i + 0.5) / W - 1, lv = clamp(Math.ceil(c * (n - 1) - 1e-6) / (n - 1), 0, 1);
+      const v = Math.round(255 * lerp(0.12, 1, lv)); px.set([v, v, v, 255], i * 4);
+    }
+    const grad = this._track(new THREE.DataTexture(px, W, 1));
+    grad.minFilter = grad.magFilter = THREE.NearestFilter; grad.needsUpdate = true;
+    const KEYS = ['color', 'map', 'vertexColors', 'side', 'transparent', 'opacity', 'alphaTest', 'alphaHash', 'alphaToCoverage', 'depthTest', 'depthWrite', 'colorWrite',
+      'stencilWrite', 'stencilFunc', 'stencilRef', 'stencilFuncMask', 'stencilWriteMask', 'stencilFail', 'stencilZFail', 'stencilZPass', 'polygonOffset', 'polygonOffsetFactor', 'polygonOffsetUnits', 'blending', 'visible', 'name'];
+    const cache = new Map([[HIDDEN_MAT, HIDDEN_MAT]]);
+    const conv = (m) => {
+      if (!m || cache.has(m)) return cache.get(m) ?? m;
+      if (m.isMeshDepthMaterial || m.isShaderMaterial) { cache.set(m, m); return m; }
+      const t = this._track(new THREE.MeshToonMaterial({ gradientMap: grad }));
+      for (const k of KEYS) if (m[k] !== undefined) t[k] = m[k]?.isColor ? m[k].clone() : m[k];
+      t.flatShading = true;
+      if ((m.sheen ?? 0) > 0.4) t.color.multiplyScalar(1 + 0.9 * m.sheen);   // волосы и борода: отлив (sheen) давал заметную долю их яркости
+      if (m.emissive && m.emissive.getHex()) { t.emissive = m.emissive.clone(); t.emissiveIntensity = m.emissiveIntensity ?? 1; }
+      if (m.userData.patches?.length) for (const pt of m.userData.patches) { if (pt.fn) addShaderPatch(t, pt.key, pt.fn, pt.safe); }
+      else if (Object.prototype.hasOwnProperty.call(m, 'onBeforeCompile')) { t.onBeforeCompile = m.onBeforeCompile; t.customProgramCacheKey = m.customProgramCacheKey; }
+      cache.set(m, t);
+      return t;
+    };
+    this.object3D.traverse((o) => {
+      if (!o.isMesh) return;
+      o.material = Array.isArray(o.material) ? o.material.map(conv) : conv(o.material);
+      if (o.customDepthMaterial) o.customDepthMaterial = conv(o.customDepthMaterial);
+    });
+    for (const k in this.mat) if (this.mat[k]) this.mat[k] = conv(this.mat[k]);   // ссылки для update и материалов-клонов
   }
 
   /** Все склейки головы: глаза (веки — кости), зубы и дёсны (нижняя челюсть — кость), неподвижные аксессуары, очки, тело. */

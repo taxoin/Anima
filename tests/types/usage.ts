@@ -46,10 +46,14 @@ el?.addEventListener('speakEnd', (e) => console.log(e.detail));
 el?.setEmotion('happy');
 const el2: EmotionalHeadElement | null = el;
 console.log(el2?.head?.getDetail());
+head.setFlat({ pixel: 2, bands: 4 }).setFlat(false);
+head.on('flatChange', (f) => console.log(f?.pixel));
 
 // ожидаемые ошибки
 // @ts-expect-error неизвестная детализация
 head.setDetail('ultra');
+// @ts-expect-error неверная детализация плоского режима
+head.setFlat({ detail: 'tiny' });
 // @ts-expect-error неизвестное событие
 head.on('nope', () => {});
 // @ts-expect-error неизвестный канал

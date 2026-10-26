@@ -101,13 +101,14 @@ export class EmotionalHead {
    * @param {'webspeech'|'none'|Function} [options.tts='webspeech']  TTS по умолчанию для speak()
    * @param {object} [options.voice]  { lang, voice, rate, pitch } по умолчанию для speak()
    * @param {object} [options.look]  переопределения внешности: { skin, hair, iris:[c1,c2], cloth, lip }
+   * @param {boolean|object} [options.flat=false]  плоский быстрый режим (11.1): true или { bands: 3, pixel: 2, detail: 'low' } — см. setFlat
    */
   constructor(container, options = {}) {
     this.container = typeof container === 'string' ? document.querySelector(container) : container;
     if (!this.container) throw new Error('[emotional-head] container not found');
     this.options = {
       gender: 'female', background: 'dark', lighting: 'studio', framing: 'portrait', emotion: 'neutral',
-      idle: true, shadows: true, followPointer: false, vignette: true, maxPixelRatio: 2, detail: 'auto', tts: 'webspeech', voice: {}, look: {},
+      idle: true, shadows: true, followPointer: false, vignette: true, maxPixelRatio: 2, detail: 'auto', flat: false, tts: 'webspeech', voice: {}, look: {},
       ...options,
     };
     this._listeners = {};
@@ -524,7 +525,31 @@ export class EmotionalHead {
   /** Текущий уровень детализации (после разрешения 'auto'). */
   getDetail() { return this.rig?.detail || this._detailNow(); }
   /** Уровень, по которому строится голова: при 'adaptive' — текущая ступень лестницы. */
-  _detailNow() { return this._ad ? ADAPT_STEPS[this._ad.i].detail : resolveDetail(this.options.detail); }
+  _detailNow() { const F = this._flat(); return F ? F.detail : this._ad ? ADAPT_STEPS[this._ad.i].detail : resolveDetail(this.options.detail); }
+
+  /**
+   * Плоский быстрый режим (11.1): дешёвые материалы с плоскими гранями и светом в bands ступеней, без теней и отражений,
+   * геометрия уровня detail, кадр рисуется в pixel раз мельче и растягивается крупным пикселем. Риг, мимика, речь и
+   * внешность — те же. Пересобирает голову.
+   *   head.setFlat(true); head.setFlat({ bands: 4, pixel: 3 }); head.setFlat(false)
+   * @param {boolean|{bands?: number, pixel?: number, detail?: 'high'|'medium'|'low'}} cfg
+   */
+  setFlat(cfg = true) {
+    this.options.flat = cfg;
+    this._applyShadows();
+    if (this.renderer) this._resize();
+    if (this.rig instanceof ProceduralHead) this._rebuildRig();
+    this._emit('flatChange', this._flat());
+    return this;
+  }
+  /** Параметры плоского режима или null. */
+  getFlat() { const F = this._flat(); return F && { ...F }; }
+  _flat() {
+    const f = this.options.flat;
+    if (!f) return null;
+    const o = f === true ? {} : f;
+    return { bands: o.bands ?? 3, pixel: Math.max(1, o.pixel ?? 2), detail: resolveDetail(o.detail ?? 'low') };
+  }
   /** Состояние адаптивного режима: { step, detail, pixelRatio, refreshHz, ceiling, changes } или null. */
   getAdaptive() {
     const A = this._ad;
@@ -823,8 +848,9 @@ export class EmotionalHead {
     const fill = new THREE.DirectionalLight('#ffffff', 0.5);
     const rim = new THREE.DirectionalLight('#ffffff', 1.5);
     const hemi = new THREE.HemisphereLight('#ffffff', '#444444', 0.4);
-    this.scene.add(key, key.target, fill, rim, hemi);
-    this.lights = { key, fill, rim, hemi };
+    const flatAmb = new THREE.AmbientLight('#ffffff', 0);          // плоский режим: вместо отражений окружения (их у плоского материала нет)
+    this.scene.add(key, key.target, fill, rim, hemi, flatAmb);
+    this.lights = { key, fill, rim, hemi, flatAmb };
     this._applyShadows();
 
     this.setFraming(this.options.framing);
@@ -839,7 +865,10 @@ export class EmotionalHead {
 
   _resize() {
     const w = this.container.clientWidth || 400, h = this.container.clientHeight || 480;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.options.maxPixelRatio, this._ad ? ADAPT_STEPS[this._ad.i].pr : Infinity));
+    const FL = this._flat();
+    this.renderer.setPixelRatio(FL ? 1 / FL.pixel : Math.min(window.devicePixelRatio || 1, this.options.maxPixelRatio, this._ad ? ADAPT_STEPS[this._ad.i].pr : Infinity));
+    this.renderer.domElement.style.imageRendering = FL && FL.pixel > 1 ? 'pixelated' : '';   // крупный пиксель без размытия
+    if (this.lights) this.lights.flatAmb.intensity = FL ? 0.25 : 0;
     this.renderer.setSize(w, h, false);
     const F = this._framing || FRAMING.portrait;
     const aspect = w / h;
@@ -856,7 +885,8 @@ export class EmotionalHead {
     let overrides = look.female || look.male ? look[gender] || {} : look;   // { skin, hair } или { female: {...}, male: {...} }
     if (this._portrait) overrides = { ...this._portrait.fit({ ...this._photoOpts, gender }), ...overrides };
     const shadows = this._applyShadows();                         // уровень детализации мог смениться через options.detail
-    return new ProceduralHead({ gender, shadows, overrides, detail: this._detailNow() });
+    const F = this._flat();
+    return new ProceduralHead({ gender, shadows, overrides, detail: this._detailNow(), flat: F && { bands: F.bands } });
   }
 
   /**
@@ -864,7 +894,7 @@ export class EmotionalHead {
    * вместо тени под подбородком голова запекает затенение шеи (ProceduralHead при shadows: false).
    */
   _applyShadows() {
-    const sm = DETAIL[this._detailNow()].shadowMap, on = !!this.options.shadows && sm > 0, key = this.lights?.key;
+    const sm = DETAIL[this._detailNow()].shadowMap, on = !!this.options.shadows && sm > 0 && !this._flat(), key = this.lights?.key;
     this._shadowsOn = on;
     this.renderer.shadowMap.enabled = on;
     if (!key) return on;
