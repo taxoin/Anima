@@ -97,7 +97,7 @@
         <span class="hint" id="detailInfo"></span>
       </div>
       <div class="row"><label>Плоский режим</label>
-        <select id="flatSel" title="Быстрая отрисовка: плоские грани, свет ступенями, без теней и отражений; кадр мельче с крупным пикселем"><option value="">выкл</option><option value="1">пиксель 1</option><option value="2">пиксель 2</option><option value="3">пиксель 3</option><option value="4">пиксель 4</option></select>
+        <select id="flatSel" title="Быстрая отрисовка: плоские грани, свет ступенями, без теней и отражений; кадр мельче с крупным пикселем"><option value="">выкл</option><option value="1">гладкий</option><option value="2">пиксель 2</option><option value="3">пиксель 3</option><option value="4">пиксель 4</option></select>
         <span class="hint" id="fpsInfo"></span>
       </div>
       <div class="row"><label style="width:44px">кожа</label><span class="swatches" id="skinSw"></span></div>
@@ -274,7 +274,7 @@ const showDetail = () => {
   $('#detailInfo').textContent = `${head.getDetail()}${ad ? ` · ×${pr}` : ''}, ${Math.round(t / 1000)} тыс. треуг.`;
 };
 $('#flatSel').onchange = (e) => { const v = +e.target.value; api(v ? `head.setFlat({ pixel: ${v} })` : 'head.setFlat(false)', () => head.setFlat(v ? { pixel: v } : false)); setTimeout(showDetail); };
-{ let n = 0, t0 = performance.now(); const tick = (t) => { n++; if (t - t0 > 1000) { $('#fpsInfo').textContent = `${Math.round(n * 1000 / (t - t0))} к/с`; n = 0; t0 = t; } requestAnimationFrame(tick); }; requestAnimationFrame(tick); }
+{ let f0 = 0, t0 = performance.now(); setInterval(() => { const f = head.renderer.info.render.frame, t = performance.now(); $('#fpsInfo').textContent = `${Math.round((f - f0) * 1000 / (t - t0))} кадр/с`; f0 = f; t0 = t; }, 1000); }   // реально отрисованные кадры
 $('#detailSel').onchange = (e) => { api(`head.setDetail('${e.target.value}')`, () => head.setDetail(e.target.value)); showDetail(); };
 head.on('lookChange', () => setTimeout(showDetail)); head.on('detailChange', (e) => { log(`⟵ detailChange ${e.detail} ×${e.pixelRatio} (${e.reason})`); setTimeout(showDetail); }); head.on('photoAvatar', () => setTimeout(showDetail));
 setTimeout(showDetail);

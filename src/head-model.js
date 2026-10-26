@@ -1099,6 +1099,7 @@ export class ProceduralHead {
     this.L = DETAIL[this.detail];
     this.shadows = shadows;
     this.P = applyToon({ ...PRESETS[gender] || PRESETS.female, ...resolveLook(overrides) }, gender);
+    if (flat && this.P.hairCards === undefined) this.P.hairCards = false;   // 11.1: без прядей-карточек — их прозрачность мерцает шумом
     this.object3D = new THREE.Group();
     this.object3D.name = 'ProceduralHead';
     this._disposables = [];
@@ -2404,7 +2405,8 @@ export class ProceduralHead {
     const lipTop = MY + P.lipU + 0.012, lipBot = MY - P.lipL - 0.012;
     const ss = (a, b, x) => smoothstep(a, b, x);
     // мультяшная борода (10.3): сплошная гладкая масса с волнистой чёткой кромкой и жгутами, как волосы (tk — сила)
-    const tk = clamp(P.hairClump || 0, 0, 1);
+    // плоский режим — тоже сплошная масса с гладкой кромкой: шумовая прозрачность (alphaHash) на крупном пикселе мерцает
+    const tk = Math.max(clamp(P.hairClump || 0, 0, 1), this.flat ? 1 : 0);
     const clumpX = (x) => Math.sqrt(Math.abs(Math.sin(x * Math.PI / 0.075)));   // 0 в складке, 1 — гребень жгута
     const mat = this._track(new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: this._track(hairTexture({ ...hairTone(P, color, P.beardGray ?? P.hairGray), streak: 0 }, tk)), roughness: 0.7 - 0.3 * tk, sheen: 0.7 * (1 - 0.5 * tk), sheenRoughness: 0.4,
       sheenColor: hairMean(hairTone(P, color, P.beardGray ?? P.hairGray)).multiplyScalar(2.4).addScalar(0.08), vertexColors: true, alphaHash: true, side: THREE.DoubleSide }));
@@ -2465,7 +2467,7 @@ export class ProceduralHead {
         return m * lips(x, y) * ss(-1.2, -1.05, y);
       };
       const depth = (t) => 0.006 + (0.02 + 0.06 * L) * Math.sqrt(t);
-      const kb = this.L.beard;                                     // сетка бороды пересчитывается на CPU каждый кадр
+      const kb = this.L.beard;                                     // сетка бороды пересчитывается на CPU, когда сдвинулись челюсть или рот (_updateBeard)
       part('beard', -0.68, 0.68, -1.18, -0.06, Math.round(68 * kb), Math.round(56 * kb), mask, depth, true, { droop: 0.07 * L });
     }
     const ms = bd.moustache;
@@ -2488,6 +2490,12 @@ export class ProceduralHead {
   _updateBeard() {
     if (!this.beard) return;
     const J = this._jaw;
+    // пересчёт только когда сдвинулись челюсть или морфы рта (борода от них и зависит); в плоском режиме порог грубее
+    const sig = [J.open, J.fwd, J.left, J.right], eps = this.flat ? 0.004 : 1e-4;
+    for (const a of this._activeMorphs) sig.push(a.w);
+    const prev = this._beardSig;
+    if (prev && prev.length === sig.length && sig.every((v, i) => Math.abs(v - prev[i]) < eps)) return;
+    this._beardSig = sig;
     for (const pt of this.beard.parts) {
       const pos = pt.mesh.geometry.attributes.position.array, n = pos.length / 3;
       for (let i = 0; i < n; i++) this._mouthPoint(pt.rest[i * 3], pt.rest[i * 3 + 1], pt.rest[i * 3 + 2], pt.w[i], J, pos, i * 3);
@@ -2858,6 +2866,7 @@ export class ProceduralHead {
       const t = this._track(new THREE.MeshToonMaterial({ gradientMap: grad }));
       for (const k of KEYS) if (m[k] !== undefined) t[k] = m[k]?.isColor ? m[k].clone() : m[k];
       t.flatShading = true;
+      if (t.alphaHash || t.alphaToCoverage) { t.alphaHash = t.alphaToCoverage = false; t.alphaTest = Math.max(t.alphaTest, 0.5); }   // шумовая прозрачность мерцает — резкая кромка
       if ((m.sheen ?? 0) > 0.4) t.color.multiplyScalar(1 + 0.9 * m.sheen);   // волосы и борода: отлив (sheen) давал заметную долю их яркости
       if (m.emissive && m.emissive.getHex()) { t.emissive = m.emissive.clone(); t.emissiveIntensity = m.emissiveIntensity ?? 1; }
       if (m.userData.patches?.length) for (const pt of m.userData.patches) { if (pt.fn) addShaderPatch(t, pt.key, pt.fn, pt.safe); }

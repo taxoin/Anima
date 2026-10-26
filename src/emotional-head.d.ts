@@ -274,10 +274,11 @@ export interface EmotionalHeadEvents {
   detailChange: { detail: DetailLevel; pixelRatio: number; step: number; reason: string };
   flatChange: Required<FlatOptions> | null;
 }
-/** Плоский режим: свет в bands ступеней (2…6), кадр в pixel раз мельче с крупным пикселем, геометрия уровня detail. */
+/** Плоский режим: свет в bands ступеней (2…6), кадр в pixel раз мельче с крупным пикселем (1 — полное разрешение со сглаживанием), не больше fps кадров в секунду (0 — без ограничения), геометрия уровня detail. */
 export interface FlatOptions {
   bands?: number;
   pixel?: number;
+  fps?: number;
   detail?: DetailLevel;
 }
 export type EmotionalHeadEvent = keyof EmotionalHeadEvents;

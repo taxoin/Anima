@@ -101,7 +101,7 @@ export class EmotionalHead {
    * @param {'webspeech'|'none'|Function} [options.tts='webspeech']  TTS по умолчанию для speak()
    * @param {object} [options.voice]  { lang, voice, rate, pitch } по умолчанию для speak()
    * @param {object} [options.look]  переопределения внешности: { skin, hair, iris:[c1,c2], cloth, lip }
-   * @param {boolean|object} [options.flat=false]  плоский быстрый режим (11.1): true или { bands: 3, pixel: 2, detail: 'low' } — см. setFlat
+   * @param {boolean|object} [options.flat=false]  плоский быстрый режим (11.1): true или { bands: 3, pixel: 1, fps: 30, detail: 'low' } — см. setFlat
    */
   constructor(container, options = {}) {
     this.container = typeof container === 'string' ? document.querySelector(container) : container;
@@ -295,6 +295,7 @@ export class EmotionalHead {
 
   _rebuildRig() {
     this._customModel = false;
+    this._needRender = true;
     if (this.rig) this.rig.dispose();
     this.rig = this._makeRig(this.gender);
     this.scene.add(this.rig.object3D);
@@ -529,10 +530,12 @@ export class EmotionalHead {
 
   /**
    * Плоский быстрый режим (11.1): дешёвые материалы с плоскими гранями и светом в bands ступеней, без теней и отражений,
-   * геометрия уровня detail, кадр рисуется в pixel раз мельче и растягивается крупным пикселем. Риг, мимика, речь и
-   * внешность — те же. Пересобирает голову.
-   *   head.setFlat(true); head.setFlat({ bands: 4, pixel: 3 }); head.setFlat(false)
-   * @param {boolean|{bands?: number, pixel?: number, detail?: 'high'|'medium'|'low'}} cfg
+   * геометрия уровня detail; по умолчанию полное разрешение со сглаженными краями, pixel > 1 — кадр в pixel раз мельче
+   * с крупным пикселем. Не больше fps кадров в секунду (0 — без ограничения); кадр, в котором каналы и поза почти не
+   * сдвинулись, не пересчитывается и не перерисовывается. Борода — сплошная, без прядей-карточек и шумовой прозрачности.
+   * Риг, мимика, речь и внешность — те же. Пересобирает голову.
+   *   head.setFlat(true); head.setFlat({ bands: 4, pixel: 3, fps: 24 }); head.setFlat(false)
+   * @param {boolean|{bands?: number, pixel?: number, fps?: number, detail?: 'high'|'medium'|'low'}} cfg
    */
   setFlat(cfg = true) {
     this.options.flat = cfg;
@@ -548,7 +551,7 @@ export class EmotionalHead {
     const f = this.options.flat;
     if (!f) return null;
     const o = f === true ? {} : f;
-    return { bands: o.bands ?? 3, pixel: Math.max(1, o.pixel ?? 2), detail: resolveDetail(o.detail ?? 'low') };
+    return { bands: o.bands ?? 3, pixel: Math.max(1, o.pixel ?? 1), fps: o.fps ?? 30, detail: resolveDetail(o.detail ?? 'low') };
   }
   /** Состояние адаптивного режима: { step, detail, pixelRatio, refreshHz, ceiling, changes } или null. */
   getAdaptive() {
@@ -709,6 +712,7 @@ export class EmotionalHead {
     const amb = (0.5 * L.key[1] + L.fill[1] + 2 * L.hemi[2] + 0.1 * L.rim[1]) * L.exposure ** 2;
     this._lightPupil = clamp(-0.7 * Math.log2(Math.max(0.05, amb) / 3.02), -0.8, 0.8);
     this._lighting = preset;
+    this._needRender = true;
     return this;
   }
 
@@ -865,7 +869,8 @@ export class EmotionalHead {
 
   _resize() {
     const w = this.container.clientWidth || 400, h = this.container.clientHeight || 480;
-    const FL = this._flat();
+    const FL = this._flatCfg = this._flat();
+    this._needRender = true;
     this.renderer.setPixelRatio(FL ? 1 / FL.pixel : Math.min(window.devicePixelRatio || 1, this.options.maxPixelRatio, this._ad ? ADAPT_STEPS[this._ad.i].pr : Infinity));
     this.renderer.domElement.style.imageRendering = FL && FL.pixel > 1 ? 'pixelated' : '';   // крупный пиксель без размытия
     if (this.lights) this.lights.flatAmb.intensity = FL ? 0.25 : 0;
@@ -1039,6 +1044,8 @@ export class EmotionalHead {
   // ---------------- главный цикл
   _loop(now) {
     this._raf = requestAnimationFrame(this._loop);
+    const FL = this._flatCfg;
+    if (FL && FL.fps && now - this._last < 1000 / FL.fps - 2) return;   // плоский режим: ограничение частоты кадров (анимация — по накопленному времени)
     const raw = Math.max(0, (now - this._last) / 1000);
     const dt = Math.min(0.05, raw);                  // анимация: защищаемся от рывков
     this._rawDt = Math.min(0.5, raw);                // речь: реальное время, чтобы не отставать от звука на медленных устройствах
@@ -1048,7 +1055,10 @@ export class EmotionalHead {
       if (this._timers[i].t <= this._t) { const f = this._timers[i].fn; this._timers.splice(i, 1); f(); }
     }
     this._update(dt);
-    if (this._visible && !document.hidden) { this._render(); if (this._ad) this._adaptTick(raw * 1000); }
+    if (this._visible && !document.hidden) {
+      if (this._skipFrame) { this._skipFrame = false; return; }      // плоский режим: ничего заметно не сдвинулось — кадр не перерисовываем
+      this._render(); if (this._ad) this._adaptTick(raw * 1000);
+    }
   }
 
   _render() { this.renderer.render(this.scene, this.camera); }
@@ -1163,6 +1173,17 @@ export class EmotionalHead {
     if (this._pupilV === undefined) this._pupilV = pt;
     this._pupilV += (pt - this._pupilV) * Math.min(1, dt * (pt < this._pupilV ? 4 : 0.9));
     P.pupil = this._pupilV;
+    // плоский режим: если каналы и поза почти не сдвинулись с прошлого обновления рига — ни риг, ни кадр не пересчитываем
+    if (this._flatCfg && this.rig instanceof ProceduralHead && !this._needRender) {
+      const sig = this._sig ||= { ch: {}, p: {} }, eps = 0.003;
+      let moved = false;
+      for (const k in out) if (Math.abs((out[k] || 0) - (sig.ch[k] || 0)) > eps) { moved = true; break; }
+      if (!moved) for (const k in P) if (typeof P[k] === 'number' && Math.abs(P[k] - (sig.p[k] ?? 0)) > eps * 0.5) { moved = true; break; }
+      if (!moved) { this._skipFrame = true; return; }
+      Object.assign(sig.ch, out);
+      for (const k in P) if (typeof P[k] === 'number') sig.p[k] = P[k];
+    }
+    this._needRender = false;
     this.rig.update(out, P);
   }
 }
