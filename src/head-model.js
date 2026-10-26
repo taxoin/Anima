@@ -668,7 +668,7 @@ float pupilRemap( float a ) {
  * Координаты головы; верхняя дуга неподвижна, нижняя вращается вместе с челюстью (см. _updateMouth).
  * @returns {{teeth: THREE.BufferGeometry, gums: THREE.BufferGeometry}}
  */
-function buildDentition(P, zFront, upper, seg = [12, 10]) {
+function buildDentition(P, zFront, upper, seg = [12, 10], plate = false) {
   const MY = LAYOUT.mouthY, sc = (P.mouthHW / 0.185) * 0.92;
   const a = 1.25;                                                  // глубина дуги: z = zFront - a·x²
   const arch = (x) => zFront - a * x * x;
@@ -708,7 +708,26 @@ function buildDentition(P, zFront, upper, seg = [12, 10]) {
         }
         return [x + lx * ca + lz * sa, ly, arch(x) - lx * sa + lz * ca];   // lx — по касательной к дуге, lz — по нормали
       };
-      for (let v = 0; v < un; v++) {
+      if (plate) {
+        // минимум треугольников (11.2): зуб — гнутая пластинка 3×3 по губной поверхности (зубы видны только спереди);
+        // края пластинки отогнуты назад и темнее — щель между зубами, уголки режущего края скруглены
+        for (let rr = 0; rr <= 2; rr++) for (let cc = 0; cc <= 2; cc++) {
+          const ex = cc - 1, vv = upper ? 1 - rr / 2 : rr / 2, e = upper ? 1 - vv : vv;
+          const tf = i < 2 ? lerp(1, 0.32, e ** 1.4) : i === 2 ? lerp(1, 0.55, e) : lerp(1, 0.85, e);
+          const lx = ex * (w / 2) * 0.94 * lerp(0.86, 1, smoothstep(0, 0.4, e));
+          let ly = upper ? yEdge + vv * h : yEdge - (1 - vv) * h;
+          if (ex && e > 0.99) ly += (upper ? 1 : -1) * 0.14 * h;    // скруглённые уголки
+          if (i === 2 && !ex && e > 0.99) ly += (upper ? -1 : 1) * 0.006 * sc;   // клык чуть заострён
+          const lz = (t / 2) * tf - t / 2 + (ex ? -0.3 * t * tf : 0.004 * sc);
+          pos.push(...place(lx, ly, lz));
+          const ao = AO[i] * lerp(0.72, 1, smoothstep(0, 0.6, e)) * (upper ? 1 : 0.9) * (ex ? 0.78 : 1);
+          col.push(ao * tint, ao * tint, ao * tint * 0.98);
+        }
+        for (let rr = 0; rr < 2; rr++) for (let cc = 0; cc < 2; cc++) {
+          const q = base + rr * 3 + cc, d = q + 3;
+          if (upper) idx.push(q, d, q + 1, q + 1, d, d + 1); else idx.push(q, q + 1, d, q + 1, d + 1, d);
+        }
+      } else for (let v = 0; v < un; v++) {
         const nx = up.getX(v), ny = up.getY(v), nz = up.getZ(v);
         const ex = Math.sign(nx) * Math.abs(nx) ** 0.45, ey = Math.sign(ny) * Math.abs(ny) ** 0.6, ez = Math.sign(nz) * Math.abs(nz) ** 0.5;
         const vv = (ey + 1) / 2;                                   // 0 — низ, 1 — верх
@@ -725,7 +744,7 @@ function buildDentition(P, zFront, upper, seg = [12, 10]) {
         const trans = smoothstep(0.82, 1, e) * (i < 3 ? 1 : 0.3);  // полупрозрачный режущий край: холоднее
         col.push(ao * tint * (1 - 0.1 * trans), ao * tint * (1 - 0.06 * trans), ao * tint * (1 + 0.02 * trans) * 0.98);
       }
-      for (let k = 0; k < uidx.length; k++) idx.push(base + uidx[k]);
+      if (!plate) for (let k = 0; k < uidx.length; k++) idx.push(base + uidx[k]);
       gum.push({ x, w, h, yEdge });
       if (P.braces && i < 5) {
         // брекет — по центру губной поверхности (e = 0.55 от шейки)
@@ -750,7 +769,7 @@ function buildDentition(P, zFront, upper, seg = [12, 10]) {
     const g = best.g, pap = smoothstep(0.55, 1.05, best.d);       // межзубный сосочек
     return upper ? g.yEdge + g.h * lerp(0.84, 0.62, pap) : g.yEdge - g.h * lerp(0.84, 0.62, pap);
   };
-  const cols = seg[0] >= 8 ? 72 : Math.max(24, seg[0] * 6), rows = 4, gpos = [], gcol = [], gidx = [];   // грубее — только в режиме минимума треугольников (11.2)
+  const cols = plate ? 24 : seg[0] >= 8 ? 72 : Math.max(24, seg[0] * 6), rows = plate ? 2 : 4, gpos = [], gcol = [], gidx = [];   // грубее — только в режиме минимума треугольников (11.2)
   for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
     const x = lerp(-xMax, xMax, c / cols), s = r / rows, y0 = line(x);
     const y = upper ? y0 + s * 0.06 : y0 - s * 0.06;
@@ -1633,7 +1652,7 @@ export class ProceduralHead {
     M.tongue = new THREE.Mesh(this._track(dynamicGrid(16, 6, true)), tongueMat);
     // зубы и дёсны: верхние неподвижны, нижние — в группе, которая поворачивается вокруг оси челюсти
     const zFront = this.hm.get(0, LAYOUT.mouthY) - 0.012;
-    const dU = buildDentition(P, zFront, true, this.L.teeth), dL = buildDentition(P, zFront - 0.024, false, this.L.teeth);
+    const dU = buildDentition(P, zFront, true, this.L.teeth, !!this.flat?.tris), dL = buildDentition(P, zFront - 0.024, false, this.L.teeth, !!this.flat?.tris);
     for (const g of [dU.teeth, dU.gums, dL.teeth, dL.gums]) this._track(g);
     M.teethU = new THREE.Mesh(dU.teeth, teethMat); M.gumsU = new THREE.Mesh(dU.gums, gumMat);
     M.jaw = new THREE.Group();
@@ -2426,7 +2445,12 @@ export class ProceduralHead {
     mat.map.repeat.set(10, 3);
     if (tk > 0.5) { mat.alphaHash = false; mat.alphaTest = 0.5; }       // мультяшная — резкая кромка без «пыли» по краю
     this.beard = { parts: [] };
+    // минимум треугольников (11.2): грубая сетка, гладкая кромка — из маски-текстуры (alphaMap), пустые клетки выброшены
+    const texMask = !!this.flat?.tris && tk > 0.5;
+    const edgeA = (mx, my) => { const t = clamp(mask0(mx, my), 0, 1); return clamp((t + 0.14 * (clumpX(mx) - 0.5) - 0.1) / 0.6, 0, 1); };
+    let mask0 = null;
     const part = (name, x0, x1, y0, y1, cols, rows, mask, depth, jaw, extra = {}) => {
+      mask0 = mask;
       const geo = this._track(dynamicGrid(cols, rows, false));
       const n = (cols + 1) * (rows + 1), col = new Float32Array(n * 4), rest = new Float32Array(n * 3), w = new Float32Array(n), badV = new Uint8Array(n);
       for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
@@ -2444,20 +2468,44 @@ export class ProceduralHead {
         const x = q[0], y = q[1], z0 = this.hm.get(x, y);
         // под маской борода прижата (иначе торчит сквозь ткань); видна только по краям
         const um = P.mask ? 1 - 0.92 * smoothstep(0.6, 0.48, Math.abs(x)) * smoothstep(-0.06, -0.16, y) * smoothstep(-1.04, -0.94, y) : 1;
-        rest[i * 3] = x; rest[i * 3 + 1] = y - (extra.droop || 0) * t; rest[i * 3 + 2] = (depth(t, x, y) + tk * 0.012 * (clumpX(mx) - 0.5) * t) * um;
+        const td = texMask ? smoothstep(0, 0.35, te) : t;            // грубая сетка: толщина набирается раньше кромки, иначе кожа протыкает край
+        rest[i * 3] = x; rest[i * 3 + 1] = y - (extra.droop || 0) * t; rest[i * 3 + 2] = (depth(td, x, y) + tk * 0.012 * (clumpX(mx) - 0.5) * td) * um;
         w[i] = jaw ? jawWeight(x, y, z0) : 0;
         const v = lerp(0.55, 1, t) * (0.9 + 0.1 * Math.sin(c * 2.3 + r * 1.7));
-        col.set([v, v, v, bad ? 0 : lerp(ss(0.02, 0.55, t), clamp((te - 0.1) / 0.6, 0, 1), tk)], i * 4);
+        col.set([v, v, v, texMask ? 1 : bad ? 0 : lerp(ss(0.02, 0.55, t), clamp((te - 0.1) / 0.6, 0, 1), tk)], i * 4);
         if (bad) badV[i] = 1;
       }
       // у резкой кромки (alphaTest) растянутые треугольники к точкам вне лица видны полосой — соседей таких точек тоже прячем
-      if (tk > 0.5) for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
+      if (tk > 0.5 && !texMask) for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
         let nb = 0;
         for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) { const rr = r + dr, cc = c + dc; if (rr >= 0 && rr <= rows && cc >= 0 && cc <= cols && badV[rr * (cols + 1) + cc]) nb = 1; }
         if (nb) col[(r * (cols + 1) + c) * 4 + 3] = 0;
       }
       geo.setAttribute('color', new THREE.BufferAttribute(col, 4));
-      const mesh = new THREE.Mesh(geo, extra.mat || mat);
+      const pm = extra.mat || mat;
+      if (texMask) {
+        const TW = 256, TH = Math.max(32, Math.round(TW * (y1 - y0) / (x1 - x0))), px = new Uint8Array(TW * TH * 4);
+        const q = [0, 0, 0.5];
+        for (let j = 0; j < TH; j++) for (let k = 0; k < TW; k++) {
+          const mx = lerp(x0, x1, (k + 0.5) / TW), my = lerp(y0, y1, (j + 0.5) / TH);
+          let a = edgeA(mx, my);
+          if (a > 0) { q[0] = mx; q[1] = my; q[2] = 0.5; if (this._warpF) this._warpF(q); if (this.hm.get(q[0], q[1] - (extra.droop || 0) * clamp(mask(mx, my), 0, 1)) < -1) a = 0; }   // вне лица — по маске, а не по вершинам (на грубой сетке — «пила»)
+          a = Math.round(255 * a); px.set([a, a, a, 255], (j * TW + k) * 4);
+        }
+        const at = this._track(new THREE.DataTexture(px, TW, TH));
+        at.magFilter = at.minFilter = THREE.LinearFilter; at.needsUpdate = true;
+        pm.alphaMap = at;
+        // клетки, в которых маска нигде не дотягивает до кромки, — не нужны
+        const keep = [];
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+          let m = 0;
+          for (let a = 0; a <= 4 && m < 0.3; a++) for (let b = 0; b <= 4; b++) m = Math.max(m, edgeA(lerp(x0, x1, (c + a / 4) / cols), lerp(y1, y0, (r + b / 4) / rows)));
+          const q = r * (cols + 1) + c, d = q + cols + 1;
+          if (m >= 0.3 && !(badV[q] && badV[q + 1] && badV[d] && badV[d + 1])) keep.push(q, d, q + 1, q + 1, d, d + 1);
+        }
+        geo.setIndex(keep);
+      }
+      const mesh = new THREE.Mesh(geo, pm);
       mesh.frustumCulled = false; mesh.name = name;
       mesh.userData.noShadow = true;                               // тень не учитывает alphaHash: вся сетка дала бы тень-прямоугольник
       if (extra.renderOrder) mesh.renderOrder = extra.renderOrder;
@@ -2480,7 +2528,7 @@ export class ProceduralHead {
         return m * lips(x, y) * ss(-1.2, -1.05, y);
       };
       const depth = (t) => 0.006 + (0.02 + 0.06 * L) * Math.sqrt(t);
-      const kb = this.L.beard;                                     // сетка бороды пересчитывается на CPU, когда сдвинулись челюсть или рот (_updateBeard)
+      const kb = texMask ? 0.34 : this.L.beard;                     // сетка бороды пересчитывается на CPU, когда сдвинулись челюсть или рот (_updateBeard)
       part('beard', -0.68, 0.68, -1.18, -0.06, Math.round(68 * kb), Math.round(56 * kb), mask, depth, true, { droop: 0.07 * L });
     }
     const ms = bd.moustache;
@@ -2496,7 +2544,7 @@ export class ProceduralHead {
       const mmat = this._track(mat.clone());
       mmat.depthTest = false;                                       // поверх губ (они тоже без теста глубины)
       const depth = (t, x, y) => 0.034 + (0.012 + 0.03 * L) * Math.sqrt(t) * (0.75 + 0.25 * Math.cos(Math.min(1, Math.abs(x) / (hw * wide)) * Math.PI / 2));
-      part('moustache', -hw * 1.35, hw * 1.35, lipTop - 0.09, lipTop + 0.13, Math.round(40 * this.L.beard), Math.round(20 * this.L.beard), mask, depth, false, { mat: mmat, renderOrder: 25 });
+      part('moustache', -hw * 1.35, hw * 1.35, lipTop - 0.09, lipTop + 0.13, Math.round(40 * (texMask ? 0.34 : this.L.beard)), Math.round(20 * (texMask ? 0.4 : this.L.beard)), mask, depth, false, { mat: mmat, renderOrder: 25 });
     }
   }
 
@@ -2873,7 +2921,7 @@ export class ProceduralHead {
     }
     const grad = this._track(new THREE.DataTexture(px, W, 1));
     grad.minFilter = grad.magFilter = THREE.NearestFilter; grad.needsUpdate = true;
-    const KEYS = ['color', 'map', 'vertexColors', 'side', 'transparent', 'opacity', 'alphaTest', 'alphaHash', 'alphaToCoverage', 'depthTest', 'depthWrite', 'depthFunc', 'colorWrite',
+    const KEYS = ['color', 'map', 'alphaMap', 'vertexColors', 'side', 'transparent', 'opacity', 'alphaTest', 'alphaHash', 'alphaToCoverage', 'depthTest', 'depthWrite', 'depthFunc', 'colorWrite',
       'stencilWrite', 'stencilFunc', 'stencilRef', 'stencilFuncMask', 'stencilWriteMask', 'stencilFail', 'stencilZFail', 'stencilZPass', 'polygonOffset', 'polygonOffsetFactor', 'polygonOffsetUnits', 'blending', 'visible', 'name'];
     const cache = new Map([[HIDDEN_MAT, HIDDEN_MAT]]);
     const conv = (m) => {
