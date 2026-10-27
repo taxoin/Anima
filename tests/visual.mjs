@@ -88,6 +88,11 @@ export const CASES = [
   { name: 'male-flat-blazer-bust', gender: 'male', look: { outfit: 'blazer' }, flat: true, framing: 'bust', pose: { yaw: -0.3 } },   // слои одежды на грубой сетке
   { name: 'male-flat-hoodie-bust', gender: 'male', look: { outfit: 'hoodie' }, flat: true, framing: 'bust' },
   { name: 'male-flat-full-mesh-glasses', gender: 'male', look: { glasses: 'round', beard: 'goatee' }, flat: { tris: 0 }, channels: SMILE, framing: 'close' },
+  { name: 'female-lite', gender: 'female', quality: 'lite', framing: 'close' },   // 12.1: лёгкое качество — без теней и окружения, упрощённая кожа
+  { name: 'male-lite-beard-glasses-smile', gender: 'male', quality: 'lite', look: { beard: 'full', glasses: 'rect', hair: '#5a3a24' }, channels: SMILE, framing: 'close', pose: { yaw: 0.3 } },
+  { name: 'male-lite-blazer-bust', gender: 'male', quality: 'lite', look: { outfit: 'blazer', cloth: '#2a3040', tie: '#7a2030' }, framing: 'bust', pose: { yaw: 0.25 } },
+  { name: 'female-lite-hoops-look-side', gender: 'female', quality: 'lite', look: { earrings: 'hoop', hairStyle: 'bob', makeup: 'evening' }, pose: { yaw: -0.4, eyeYaw: 0.4 } },
+  { name: 'avatar-monalisa-lite', avatar: '/tests/fixtures/monalisa.anima.json', quality: 'lite', channels: SMILE, framing: 'close' },
   { name: 'avatar-monalisa-toon', avatar: '/tests/fixtures/monalisa.anima.json', lookAfter: { toon: 1 }, framing: 'close' },
 ];
 

@@ -128,6 +128,8 @@ export interface EmotionalHeadOptions {
   maxPixelRatio?: number;
   /** auto — medium на телефонах; adaptive — по скорости кадров (событие detailChange). */
   detail?: DetailOption;
+  /** Качество отрисовки (12.1): lite (по умолчанию) — лёгкое, high — тени, отражения окружения, отлив и лак; см. setQuality. */
+  quality?: Quality;
   /** Плоский быстрый режим (11.1): true или параметры, см. setFlat. */
   flat?: boolean | FlatOptions;
   tts?: 'webspeech' | 'none' | TTSFunction;
@@ -273,7 +275,10 @@ export interface EmotionalHeadEvents {
   lookChange: LookOption;
   detailChange: { detail: DetailLevel; pixelRatio: number; step: number; reason: string };
   flatChange: Required<FlatOptions> | null;
+  qualityChange: { quality: Quality };
 }
+/** lite — упрощённая сетка, без теней и отражений окружения (кроме глаз, стёкол, металла), без отлива и лака, pixelRatio ≤ 1.5; high — прежнее полное качество, сетка по detail. */
+export type Quality = 'lite' | 'high';
 /** Плоский режим: свет в bands ступеней (2…6), кадр в pixel раз мельче с крупным пикселем (1 — полное разрешение со сглаживанием), не больше fps кадров в секунду (0 — без ограничения), геометрия уровня detail, кожа упрощена до tris треугольников (по умолчанию 2400; 0 — без упрощения), морфы сохраняются. */
 export interface FlatOptions {
   bands?: number;
@@ -333,6 +338,9 @@ export declare class EmotionalHead {
   /** Плоский быстрый режим: дешёвые материалы с плоскими гранями, без теней и отражений, крупный пиксель. false — выключить. */
   setFlat(cfg?: boolean | FlatOptions): this;
   getFlat(): Required<FlatOptions> | null;
+  /** Качество отрисовки: 'lite' — лёгкое (по умолчанию, кадр в разы дешевле), 'high' — полное. Пересобирает голову. */
+  setQuality(q?: Quality): this;
+  getQuality(): Quality;
   getAdaptive(): AdaptiveState | null;
 
   // фото-аватар

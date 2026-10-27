@@ -14,11 +14,11 @@ import { EmotionalHead } from './emotional-head.js';
 
 const METHODS = ['setEmotion', 'addEmotion', 'getEmotion', 'getState', 'micro', 'gesture', 'express', 'speak', 'speakAudio', 'listenStream',
   'stopSpeaking', 'setGender', 'lookAt', 'followPointer', 'setIdle', 'setChannels', 'clearChannels', 'setLighting', 'setBackground',
-  'setFraming', 'loadModel', 'useProcedural', 'snapshot', 'fromPhoto', 'addProfile', 'clearProfile', 'setPhotoOptions', 'clearPhoto', 'exportAvatar', 'importAvatar', 'exportGLB', 'setLook', 'getLook', 'setDetail', 'getDetail', 'getAdaptive', 'pause', 'resume', 'likeness', 'refinePhoto', 'refineShape'];
-const EVENTS = ['emotionChange', 'speakStart', 'speakEnd', 'word', 'cue', 'gesture', 'micro', 'express', 'genderChange', 'blink', 'modelLoaded', 'photoAvatar', 'lookChange', 'detailChange'];
+  'setFraming', 'loadModel', 'useProcedural', 'snapshot', 'fromPhoto', 'addProfile', 'clearProfile', 'setPhotoOptions', 'clearPhoto', 'exportAvatar', 'importAvatar', 'exportGLB', 'setLook', 'getLook', 'setDetail', 'getDetail', 'getAdaptive', 'setQuality', 'getQuality', 'pause', 'resume', 'likeness', 'refinePhoto', 'refineShape'];
+const EVENTS = ['emotionChange', 'speakStart', 'speakEnd', 'word', 'cue', 'gesture', 'micro', 'express', 'genderChange', 'blink', 'modelLoaded', 'photoAvatar', 'lookChange', 'detailChange', 'qualityChange'];
 
 export class EmotionalHeadElement extends HTMLElement {
-  static get observedAttributes() { return ['gender', 'emotion', 'intensity', 'restraint', 'background', 'lighting', 'framing', 'idle', 'follow-pointer', 'detail']; }
+  static get observedAttributes() { return ['gender', 'emotion', 'intensity', 'restraint', 'background', 'lighting', 'framing', 'idle', 'follow-pointer', 'detail', 'quality']; }
 
   connectedCallback() {
     if (this.head) return;
@@ -35,6 +35,7 @@ export class EmotionalHeadElement extends HTMLElement {
       idle: a('idle', 'true') !== 'false',
       shadows: a('shadows', 'true') !== 'false',
       detail: a('detail', 'auto'),
+      quality: a('quality', 'lite'),
       followPointer: this.hasAttribute('follow-pointer'),
     });
     for (const ev of EVENTS) this.head.on(ev, (detail) => this.dispatchEvent(new CustomEvent(ev, { detail })));
@@ -60,6 +61,7 @@ export class EmotionalHeadElement extends HTMLElement {
       case 'idle': h.setIdle(v !== 'false'); break;
       case 'follow-pointer': h.followPointer(v !== null); break;
       case 'detail': h.setDetail(v || 'auto'); break;
+      case 'quality': h.setQuality(v || 'lite'); break;
     }
   }
 }

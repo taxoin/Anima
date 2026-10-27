@@ -92,8 +92,10 @@
         <select id="lighting"><option>studio</option><option>warm</option><option>cool</option><option>noir</option><option>soft</option></select>
         <label>Кадр</label>
         <select id="framing"><option>portrait</option><option>close</option><option>bust</option></select>
+        <label>Качество</label>
+        <select id="qualitySel" title="Лёгкое — упрощённая сетка, без теней и отражений окружения, кадр в 3–5 раз дешевле; высокое — тени, отражения, отлив и лак, сетка по выбору"><option value="lite">лёгкое</option><option value="high">высокое</option></select>
         <label>Сетка</label>
-        <select id="detailSel" title="Детализация геометрии: авто — medium на телефонах; адаптивно — по скорости кадров"><option value="auto">авто</option><option value="adaptive">адаптивно</option><option>high</option><option>medium</option><option>low</option></select>
+        <select id="detailSel" disabled title="Детализация геометрии (для высокого качества): авто — medium на телефонах; адаптивно — по скорости кадров"><option value="auto">авто</option><option value="adaptive">адаптивно</option><option>high</option><option>medium</option><option>low</option></select>
         <span class="hint" id="detailInfo"></span>
       </div>
       <div class="row"><label>Плоский режим</label>
@@ -271,10 +273,11 @@ $('#framing').onchange = (e) => api(`head.setFraming('${e.target.value}')`, () =
 const showDetail = () => {
   let t = 0; head.rig?.object3D?.traverse((o) => { if (o.isMesh && o.visible && o.material.visible !== false) t += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
   const ad = head.getAdaptive(), pr = head.renderer.getPixelRatio();
-  $('#detailInfo').textContent = `${head.getDetail()}${ad ? ` · ×${pr}` : ''}, ${Math.round(t / 1000)} тыс. треуг.`;
+  $('#detailInfo').textContent = `${head.getQuality() === 'lite' && !head.getFlat() ? 'лёгкое' : head.getDetail()}${ad ? ` · ×${pr}` : ''}, ${Math.round(t / 1000)} тыс. треуг.`;
 };
 $('#flatSel').onchange = (e) => { const v = +e.target.value; api(v ? `head.setFlat({ pixel: ${v} })` : 'head.setFlat(false)', () => head.setFlat(v ? { pixel: v } : false)); setTimeout(showDetail); };
 { let f0 = 0, t0 = performance.now(); setInterval(() => { const f = head.renderer.info.render.frame, t = performance.now(); $('#fpsInfo').textContent = `${Math.round((f - f0) * 1000 / (t - t0))} кадр/с`; f0 = f; t0 = t; }, 1000); }   // реально отрисованные кадры
+$('#qualitySel').onchange = (e) => { const q = e.target.value; api(`head.setQuality('${q}')`, () => head.setQuality(q)); $('#detailSel').disabled = q !== 'high'; setTimeout(showDetail); };
 $('#detailSel').onchange = (e) => { api(`head.setDetail('${e.target.value}')`, () => head.setDetail(e.target.value)); showDetail(); };
 head.on('lookChange', () => setTimeout(showDetail)); head.on('detailChange', (e) => { log(`⟵ detailChange ${e.detail} ×${e.pixelRatio} (${e.reason})`); setTimeout(showDetail); }); head.on('photoAvatar', () => setTimeout(showDetail));
 setTimeout(showDetail);

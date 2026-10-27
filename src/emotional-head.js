@@ -46,6 +46,12 @@ export const BACKGROUNDS = {
 const ADAPT_STEPS = [
   { detail: 'high', pr: 2 }, { detail: 'medium', pr: 2 }, { detail: 'medium', pr: 1.5 }, { detail: 'low', pr: 1.5 }, { detail: 'low', pr: 1 },
 ];
+/**
+ * Лёгкое качество (12.1, по умолчанию): геометрия low, упрощённая до tris треугольников кожи, без теней, без отражений
+ * окружения (кроме глаз, стёкол и металла; рассеянный вклад окружения заменяют полусферный свет hemi += hemiK · env
+ * с более светлым низом — окружение подсвечивало подбородок снизу — и общий ambK · env), без отлива и лака, pixelRatio не больше pr, неизменный кадр не перерисовывается. Высокое — как до 12.1.
+ */
+const LITE = { tris: 5000, pr: 1.5, hemiK: 1.0, ambK: 0.38, ground: '#a09080' };
 const FRAMING = {
   portrait: { fov: 24, pos: [0, -0.2, 8.4], target: [0, -0.4, 0] },
   close: { fov: 24, pos: [0, 0.05, 5.6], target: [0, -0.1, 0] },
@@ -101,6 +107,7 @@ export class EmotionalHead {
    * @param {'webspeech'|'none'|Function} [options.tts='webspeech']  TTS по умолчанию для speak()
    * @param {object} [options.voice]  { lang, voice, rate, pitch } по умолчанию для speak()
    * @param {object} [options.look]  переопределения внешности: { skin, hair, iris:[c1,c2], cloth, lip }
+   * @param {'lite'|'high'} [options.quality='lite']  качество отрисовки (12.1): lite — лёгкое, в разы дешевле; high — тени, отражения окружения, отлив и лак, детализация по options.detail (см. setQuality)
    * @param {boolean|object} [options.flat=false]  плоский быстрый режим (11.1): true или { bands: 3, pixel: 1, fps: 30, detail: 'low' } — см. setFlat
    */
   constructor(container, options = {}) {
@@ -108,7 +115,7 @@ export class EmotionalHead {
     if (!this.container) throw new Error('[emotional-head] container not found');
     this.options = {
       gender: 'female', background: 'dark', lighting: 'studio', framing: 'portrait', emotion: 'neutral',
-      idle: true, shadows: true, followPointer: false, vignette: true, maxPixelRatio: 2, detail: 'auto', flat: false, tts: 'webspeech', voice: {}, look: {},
+      idle: true, shadows: true, followPointer: false, vignette: true, maxPixelRatio: 2, detail: 'auto', quality: 'lite', flat: false, tts: 'webspeech', voice: {}, look: {},
       ...options,
     };
     this._listeners = {};
@@ -299,6 +306,7 @@ export class EmotionalHead {
     if (this.rig) this.rig.dispose();
     this.rig = this._makeRig(this.gender);
     this.scene.add(this.rig.object3D);
+    this._applyEnv();
   }
 
   /**
@@ -526,7 +534,42 @@ export class EmotionalHead {
   /** Текущий уровень детализации (после разрешения 'auto'). */
   getDetail() { return this.rig?.detail || this._detailNow(); }
   /** Уровень, по которому строится голова: при 'adaptive' — текущая ступень лестницы. */
-  _detailNow() { const F = this._flat(); return F ? F.detail : this._ad ? ADAPT_STEPS[this._ad.i].detail : resolveDetail(this.options.detail); }
+  _detailNow() { const F = this._flat(); return F ? F.detail : this._lite() ? 'low' : this._ad ? ADAPT_STEPS[this._ad.i].detail : resolveDetail(this.options.detail); }
+
+  /**
+   * Качество отрисовки (12.1): 'lite' (по умолчанию) — лёгкое: упрощённая сетка (~5 тыс. треугольников кожи), без теней
+   * и отражений окружения (их оставляют только глаза, стёкла и металл), без отлива, лака и анизотропии, pixelRatio ≤ 1.5,
+   * неизменный кадр не перерисовывается; кадр в 3–4 раза дешевле. 'high' — прежнее качество: тени, окружение, физические
+   * материалы, детализация по options.detail (в т. ч. 'adaptive'). Плоский режим (setFlat) — поверх обоих. Пересобирает голову.
+   * @param {'lite'|'high'} q
+   */
+  setQuality(q = 'lite') {
+    this.options.quality = q === 'high' ? 'high' : 'lite';
+    this._applyShadows();
+    if (this.renderer) this._resize();
+    if (this.rig instanceof ProceduralHead) this._rebuildRig(); else this._applyEnv();
+    this.setLighting(this._lighting || this.options.lighting);
+    this._emit('qualityChange', { quality: this.options.quality });
+    return this;
+  }
+  getQuality() { return this.options.quality === 'high' ? 'high' : 'lite'; }
+  /** Лёгкие материалы и свет — в лёгком качестве и не в плоском режиме. */
+  _lite() { return this.options.quality !== 'high' && !this._flat(); }
+
+  /** Отражения окружения: в лёгком качестве — только материалам с userData.env (глаза, стёкла, металл). */
+  _applyEnv() {
+    if (!this._env) return;
+    const lite = this._lite(), k = this._envK ?? 1;
+    this.scene.environment = lite ? null : this._env;
+    if (!lite || !this.rig?.object3D) return;
+    this.rig.object3D.traverse((o) => {
+      if (o.isMesh) for (const m of [].concat(o.material)) if (m.userData?.env) {
+        m.userData.envI ??= m.envMapIntensity;
+        if (m.envMap !== this._env) { m.envMap = this._env; m.needsUpdate = true; }
+        m.envMapIntensity = m.userData.envI * k;                   // у своего envMap материала environmentIntensity сцены не действует
+      }
+    });
+  }
 
   /**
    * Плоский быстрый режим (11.1): дешёвые материалы с плоскими гранями и светом в bands ступеней, без теней и отражений,
@@ -705,8 +748,15 @@ export class EmotionalHead {
     const L = typeof preset === 'string' ? LIGHTING[preset] || LIGHTING.studio : { ...LIGHTING.studio, ...preset };
     const set = (light, [color, intensity, pos]) => { light.color.set(color); light.intensity = intensity; light.position.set(...pos).normalize().multiplyScalar(8); };
     set(this.lights.key, L.key); set(this.lights.fill, L.fill); set(this.lights.rim, L.rim);
+    const lite = this._lite();
     this.lights.hemi.color.set(L.hemi[0]); this.lights.hemi.groundColor.set(L.hemi[1]); this.lights.hemi.intensity = L.hemi[2];
+    if (lite) {                                                   // лёгкое: рассеянный вклад окружения — полусферным и общим светом
+      this.lights.hemi.intensity += LITE.hemiK * L.env;
+      this.lights.hemi.groundColor.lerp(new THREE.Color(LITE.ground), Math.min(1, L.env));
+    }
+    this.lights.flatAmb.intensity = this._flat() ? 0.25 : lite ? LITE.ambK * L.env : 0;
     this.scene.environmentIntensity = L.env;   // three r163+; для старых версий используется envMapIntensity материалов
+    this._envK = L.env; this._applyEnv();
     this.renderer.toneMappingExposure = L.exposure;
     // зрачок от света (2.8): рассеянный свет весит больше направленного; studio ≈ 0, тёмный noir — шире, soft — уже
     const amb = (0.5 * L.key[1] + L.fill[1] + 2 * L.hemi[2] + 0.1 * L.rim[1]) * L.exposure ** 2;
@@ -812,7 +862,7 @@ export class EmotionalHead {
     this._ro?.disconnect(); this._io?.disconnect();
     document.removeEventListener('visibilitychange', this._onVis);
     this.rig?.dispose();
-    this.scene.environment?.dispose();
+    this._env?.dispose();
     this.renderer.dispose();
     this.wrap.remove();
     this._listeners = {};
@@ -839,7 +889,7 @@ export class EmotionalHead {
     Object.assign(this, { wrap, renderer, vignette });
 
     this.scene = new THREE.Scene();
-    this.scene.environment = makeEnvironment(renderer);
+    this.scene.environment = this._env = makeEnvironment(renderer);
     this.camera = new THREE.PerspectiveCamera(24, 1, 0.1, 60);
     const key = new THREE.DirectionalLight('#ffffff', 2);
     key.castShadow = !!this.options.shadows;
@@ -852,7 +902,7 @@ export class EmotionalHead {
     const fill = new THREE.DirectionalLight('#ffffff', 0.5);
     const rim = new THREE.DirectionalLight('#ffffff', 1.5);
     const hemi = new THREE.HemisphereLight('#ffffff', '#444444', 0.4);
-    const flatAmb = new THREE.AmbientLight('#ffffff', 0);          // плоский режим: вместо отражений окружения (их у плоского материала нет)
+    const flatAmb = new THREE.AmbientLight('#ffffff', 0);          // плоский режим и лёгкое качество: вместо отражений окружения
     this.scene.add(key, key.target, fill, rim, hemi, flatAmb);
     this.lights = { key, fill, rim, hemi, flatAmb };
     this._applyShadows();
@@ -871,9 +921,10 @@ export class EmotionalHead {
     const w = this.container.clientWidth || 400, h = this.container.clientHeight || 480;
     const FL = this._flatCfg = this._flat();
     this._needRender = true;
-    this.renderer.setPixelRatio(FL ? 1 / FL.pixel : Math.min(window.devicePixelRatio || 1, this.options.maxPixelRatio, this._ad ? ADAPT_STEPS[this._ad.i].pr : Infinity));
+    const lite = this._liteOn = this._lite();
+    this.renderer.setPixelRatio(FL ? 1 / FL.pixel : Math.min(window.devicePixelRatio || 1, this.options.maxPixelRatio, lite ? LITE.pr : this._ad ? ADAPT_STEPS[this._ad.i].pr : Infinity));
     this.renderer.domElement.style.imageRendering = FL && FL.pixel > 1 ? 'pixelated' : '';   // крупный пиксель без размытия
-    if (this.lights) this.lights.flatAmb.intensity = FL ? 0.25 : 0;
+    if (this.lights) this.lights.flatAmb.intensity = FL ? 0.25 : lite ? LITE.ambK * (this._envK ?? 1) : 0;
     this.renderer.setSize(w, h, false);
     const F = this._framing || FRAMING.portrait;
     const aspect = w / h;
@@ -891,7 +942,8 @@ export class EmotionalHead {
     if (this._portrait) overrides = { ...this._portrait.fit({ ...this._photoOpts, gender }), ...overrides };
     const shadows = this._applyShadows();                         // уровень детализации мог смениться через options.detail
     const F = this._flat();
-    return new ProceduralHead({ gender, shadows, overrides, detail: this._detailNow(), flat: F && { bands: F.bands, tris: F.tris } });
+    const lite = this._lite();
+    return new ProceduralHead({ gender, shadows, overrides, detail: this._detailNow(), flat: F && { bands: F.bands, tris: F.tris }, lite, tris: lite ? LITE.tris : 0 });
   }
 
   /**
@@ -899,7 +951,7 @@ export class EmotionalHead {
    * вместо тени под подбородком голова запекает затенение шеи (ProceduralHead при shadows: false).
    */
   _applyShadows() {
-    const sm = DETAIL[this._detailNow()].shadowMap, on = !!this.options.shadows && sm > 0 && !this._flat(), key = this.lights?.key;
+    const sm = DETAIL[this._detailNow()].shadowMap, on = !!this.options.shadows && sm > 0 && !this._flat() && !this._lite(), key = this.lights?.key;
     this._shadowsOn = on;
     this.renderer.shadowMap.enabled = on;
     if (!key) return on;
@@ -1056,8 +1108,8 @@ export class EmotionalHead {
     }
     this._update(dt);
     if (this._visible && !document.hidden) {
-      if (this._skipFrame) { this._skipFrame = false; return; }      // плоский режим: ничего заметно не сдвинулось — кадр не перерисовываем
-      this._render(); if (this._ad) this._adaptTick(raw * 1000);
+      if (this._skipFrame) { this._skipFrame = false; return; }      // плоский режим и лёгкое качество: ничего заметно не сдвинулось — кадр не перерисовываем
+      this._render(); if (this._ad && !this._liteOn) this._adaptTick(raw * 1000);
     }
   }
 
@@ -1173,9 +1225,9 @@ export class EmotionalHead {
     if (this._pupilV === undefined) this._pupilV = pt;
     this._pupilV += (pt - this._pupilV) * Math.min(1, dt * (pt < this._pupilV ? 4 : 0.9));
     P.pupil = this._pupilV;
-    // плоский режим: если каналы и поза почти не сдвинулись с прошлого обновления рига — ни риг, ни кадр не пересчитываем
-    if (this._flatCfg && this.rig instanceof ProceduralHead && !this._needRender) {
-      const sig = this._sig ||= { ch: {}, p: {} }, eps = 0.003;
+    // плоский режим и лёгкое качество: если каналы и поза почти не сдвинулись с прошлого обновления рига — ни риг, ни кадр не пересчитываем
+    if ((this._flatCfg || this._liteOn) && this.rig instanceof ProceduralHead && !this._needRender) {
+      const sig = this._sig ||= { ch: {}, p: {} }, eps = this._flatCfg ? 0.003 : 0.001;
       let moved = false;
       for (const k in out) if (Math.abs((out[k] || 0) - (sig.ch[k] || 0)) > eps) { moved = true; break; }
       if (!moved) for (const k in P) if (typeof P[k] === 'number' && Math.abs(P[k] - (sig.p[k] ?? 0)) > eps * 0.5) { moved = true; break; }

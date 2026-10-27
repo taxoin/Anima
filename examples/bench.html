@@ -33,7 +33,7 @@
 </head>
 <body>
   <h1>Anima — бенчмарк производительности</h1>
-  <p>Голова говорит и двигается, пока идут замеры: 3 набора × 3 уровня детализации и адаптивный режим, около полутора минут. Не сворачивайте вкладку и не трогайте экран. Потом нажмите «Скопировать результаты» и пришлите текст.</p>
+  <p>Голова говорит и двигается, пока идут замеры: 3 набора × (лёгкое качество и 3 уровня детализации высокого) и адаптивный режим, около двух минут. Не сворачивайте вкладку и не трогайте экран. Потом нажмите «Скопировать результаты» и пришлите текст.</p>
   <div id="stage"></div>
   <div class="row">
     <button class="primary" id="start">Запустить</button>
@@ -58,7 +58,7 @@
       { name: 'тяжёлая', apply: (h) => { h.options.look = { beard: 'full', outfit: 'blazer', headphones: 'headset', glasses: 'rect' }; h.useProcedural('male'); } },
       { name: 'фото-аватар', apply: async (h) => { await h.importAvatar('../tests/fixtures/lincoln-shape.anima.json', { gender: 'male' }); } },
     ];
-    const LEVELS = ['high', 'medium', 'low'];
+    const LEVELS = ['lite', 'high', 'medium', 'low'];   // lite — лёгкое качество (12.1), остальные — высокое с этой детализацией
     const TEXT = 'Это слишком банально, давайте попробуем ещё раз. Медленно, с паузами и с выражением, чтобы губы двигались всё время замера.';
 
     // устройство
@@ -117,7 +117,7 @@
       $('#results tbody').innerHTML = '';
       const dur = +$('#dur').value * 1000, maxPR = +$('#dpr').value;
       if (head) head.dispose();
-      head = new EmotionalHead('#stage', { gender: 'female', background: 'dark', detail: 'high', maxPixelRatio: maxPR, idle: true });
+      head = new EmotionalHead('#stage', { gender: 'female', background: 'dark', detail: 'high', quality: 'high', maxPixelRatio: maxPR, idle: true });
       const S = instrument(head);
       // частота экрана: голова на паузе, пустые кадры
       head.pause(); $('#status').textContent = 'Меряю частоту экрана…';
@@ -129,10 +129,12 @@
       const rows = [];
       for (const cfg of CONFIGS) for (const lvl of LEVELS) {
         $('#status').textContent = `${cfg.name}, ${lvl}: сборка…`;
-        head.options.detail = lvl;
+        const q = lvl === 'lite' ? 'lite' : 'high';
+        if (head.getQuality() !== q) head.setQuality(q);
+        if (q === 'high') head.options.detail = lvl;
         const tb = performance.now();
         await cfg.apply(head);
-        if (head.getDetail() !== lvl) head.setDetail(lvl);
+        if (q === 'high' && head.getDetail() !== lvl) head.setDetail(lvl);
         const build = performance.now() - tb;
         head.setEmotion('contempt + slight_amusement', 0.8, 0.3);
         head.speak(TEXT, { voice: false });
@@ -161,7 +163,7 @@
       }
       // адаптивный режим: базовая голова, 15 с — куда он придёт на этом устройстве
       $('#status').textContent = 'адаптивный режим: 15 с…';
-      head.options.look = {}; head.setDetail('adaptive'); head.useProcedural('female');
+      head.options.look = {}; head.setQuality('high'); head.setDetail('adaptive'); head.useProcedural('female');
       head.speak(TEXT + ' ' + TEXT, { voice: false });
       await sleep(15000);
       const ad = head.getAdaptive();

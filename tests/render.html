@@ -20,20 +20,22 @@
   <div id="head"></div>
   <script type="module">
     import { EmotionalHead } from '../src/emotional-head.js';
-    const head = new EmotionalHead('#head', { idle: false, maxPixelRatio: 1, vignette: false, background: 'dark', detail: 'high' });
+    const head = new EmotionalHead('#head', { idle: false, maxPixelRatio: 1, vignette: false, background: 'dark', detail: 'high', quality: 'high' });
     head.pause();
     window.head = head;
-    /** c: { gender, look, detail, flat, avatar (URL файла аватара) | photo + photoOpts, channels, pose, framing } → PNG data URL */
+    /** c: { gender, look, detail, quality ('high' по умолчанию), flat, avatar (URL файла аватара) | photo + photoOpts, channels, pose, framing } → PNG data URL */
     window.renderCase = async (c) => {
       __seed(c.seed ?? 1);
       head.options.look = c.look || {};
       head.options.detail = c.detail || 'high';
       head.options.flat = c.flat || false; head._applyShadows();      // плоский режим (11.1)
+      head.options.quality = c.quality || 'high'; head._applyShadows(); head.setLighting(head.options.lighting);   // лёгкое качество (12.1)
       if (c.photo) await head.fromPhoto(c.photo, { ...(c.photoOpts || {}), ...(c.gender ? { gender: c.gender } : {}) });   // нужен MediaPipe (сеть)
       else if (c.avatar) await head.importAvatar(c.avatar, c.gender ? { gender: c.gender } : {});
       else { head.useProcedural(c.gender || 'female'); }
       if (c.lookAfter) head.setLook(c.lookAfter);                     // поверх внешности из файла аватара
       head.setFraming(c.framing || 'portrait');
+      head._applyEnv();
       head.renderStill(c.channels, c.pose);
       return head.renderer.domElement.toDataURL('image/png');
     };

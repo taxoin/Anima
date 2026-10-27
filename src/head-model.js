@@ -1112,14 +1112,19 @@ export class ProceduralHead {
    * @param {'female'|'male'} o.gender
    * @param {boolean} o.shadows
    * @param {object} o.overrides  — переопределить параметры пресета (skin, hair, iris, cloth, ...)
+   * @param {boolean} [o.lite]  лёгкие материалы (12.1): без отлива, лака и анизотропии; отражения окружения — только
+   *   у глаз, металла и стёкол (userData.env, их подключает EmotionalHead)
+   * @param {number} [o.tris]  упрощение сетки (11.2): треугольников кожи, 0 — без упрощения (в плоском режиме — flat.tris)
    */
-  constructor({ gender = 'female', shadows = true, overrides = {}, detail = 'high', flat = null } = {}) {
+  constructor({ gender = 'female', shadows = true, overrides = {}, detail = 'high', flat = null, lite = false, tris = 0 } = {}) {
     this.gender = gender;
     this.flat = flat;                                             // 11.1: плоский режим { bands } — дешёвые материалы с плоскими гранями
+    this.lite = !flat && lite;
+    this.tris = flat ? flat.tris || 0 : tris;
     this.detail = resolveDetail(detail);
     this.L = DETAIL[this.detail];
-    this.lp = flat?.tris ? 0.45 : 1;                               // 11.2: множитель разрешения частей, которые не упрощаются (динамические, на костях)
-    if (flat?.tris) this.L = { ...this.L, eye: [12, 6], lid: 10, teeth: [5, 4], acc: 0.3 };
+    this.lp = this.tris ? (flat ? 0.45 : 0.6) : 1;                 // 11.2: множитель разрешения частей, которые не упрощаются (динамические, на костях)
+    if (this.tris) this.L = { ...this.L, eye: flat ? [12, 6] : [16, 8], lid: flat ? 10 : 14, teeth: [5, 4], acc: flat ? 0.3 : 0.35 };
     this.shadows = shadows;
     this.P = applyToon({ ...PRESETS[gender] || PRESETS.female, ...resolveLook(overrides) }, gender);
     if (flat && this.P.hairCards === undefined) this.P.hairCards = false;   // 11.1: без прядей-карточек — их прозрачность мерцает шумом
@@ -1222,8 +1227,9 @@ export class ProceduralHead {
     this._contactAO();
 
     if (this.flat) this._flatten(this.flat);
+    if (this.lite) this._liten();
     this._batchAll();
-    if (this.flat?.tris) this._decimateAll(this.flat.tris);
+    if (this.tris) this._decimateAll(this.tris);
     root.traverse((o) => {
       if (o.isMesh && this.shadows && !o.userData.noShadow) { o.castShadow = true; o.receiveShadow = true; }
     });
@@ -1412,7 +1418,7 @@ export class ProceduralHead {
   _buildEyes() {
     const P = this.P, E = this.eye;
     const [ews, ehs] = this.L.eye;
-    const cap = this.flat?.tris ? 2.2 : Math.PI;                       // 11.2: только передняя часть яблока (взгляд ±0,6 рад + угол разреза), зад закрыт глазницей
+    const cap = this.tris ? 2.2 : Math.PI;                       // 11.2: только передняя часть яблока (взгляд ±0,6 рад + угол разреза), зад закрыт глазницей
     const ballGeo = this._track(P.cornea === false ? new THREE.SphereGeometry(E.r, ews, ehs, 0, Math.PI * 2, 0, cap).rotateX(Math.PI / 2) : eyeballGeometry(E.r, ews, ehs, CORNEA_A * (P.irisScale ?? 1), cap));
     this._corneaU = { value: 1 };
     this._pupilU = { value: 1 };
@@ -1420,9 +1426,9 @@ export class ProceduralHead {
     corneaShader(this.mat.eye, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1, P.catchlight || 0);
     if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1, P.catchlight || 0);
     const phiS = Math.PI / 2 - 1.75, phiL = 3.5;
-    const lv = this.flat?.tris ? 0.36 : 1, ru = Math.round(14 * lv), rlo = Math.round(10 * lv);
+    const lv = this.tris ? (this.flat ? 0.36 : 0.5) : 1, ru = Math.round(14 * lv), rlo = Math.round(10 * lv);
     // грубая оболочка века: хорды проходят внутри сферы — раздуваем её на прогиб хорды (описанный многогранник), иначе веко срезает роговицу
-    const kLid = this.flat?.tris ? 1 / (Math.cos(phiL / this.L.lid / 2) * Math.cos(Math.PI / 4 / Math.min(ru, rlo))) : 1;
+    const kLid = this.tris ? 1 / (Math.cos(phiL / this.L.lid / 2) * Math.cos(Math.PI / 4 / Math.min(ru, rlo))) : 1;
     const upGeo = this._track(new THREE.SphereGeometry(E.rs, this.L.lid, ru, phiS, phiL, 0, Math.PI / 2));
     const loGeo = this._track(new THREE.SphereGeometry(E.rl, this.L.lid, rlo, phiS, phiL, Math.PI / 2, Math.PI / 2));
     if (kLid > 1) { upGeo.scale(kLid, kLid, kLid); loGeo.scale(kLid, kLid, kLid); }
@@ -1540,7 +1546,7 @@ export class ProceduralHead {
       const cardsU = new THREE.Mesh(this._shapeLid(lashCards(E.rs * 1.003, 44, lashLen, 1, sg), sg, true, E.rs), lashCardMat);
       const cardsL = new THREE.Mesh(this._shapeLid(lashCards(E.rl * 1.003, 26, lashLen * 0.38, -1, sg), sg, false, E.rl), lashLoMat);
       cardsU.userData.noShadow = cardsL.userData.noShadow = true;
-      if (this.flat?.tris) { up.add(lash); lo.add(lashLo); }      // минимум треугольников: без прядей ресниц, тени века и влажной кромки
+      if (this.flat && this.tris) { up.add(lash); lo.add(lashLo); }      // минимум треугольников: без прядей ресниц, тени века и влажной кромки
       else { up.add(lash, sh, cardsU); lo.add(lashLo, wet, cardsL); }
       // складка века (валик кожи над подвижным веком) и нависание; эпикантус — кожная складка во внутреннем углу
       if (creaseGeo) {
@@ -1652,7 +1658,7 @@ export class ProceduralHead {
     M.tongue = new THREE.Mesh(this._track(dynamicGrid(16, 6, true)), tongueMat);
     // зубы и дёсны: верхние неподвижны, нижние — в группе, которая поворачивается вокруг оси челюсти
     const zFront = this.hm.get(0, LAYOUT.mouthY) - 0.012;
-    const dU = buildDentition(P, zFront, true, this.L.teeth, !!this.flat?.tris), dL = buildDentition(P, zFront - 0.024, false, this.L.teeth, !!this.flat?.tris);
+    const dU = buildDentition(P, zFront, true, this.L.teeth, !!this.tris), dL = buildDentition(P, zFront - 0.024, false, this.L.teeth, !!this.tris);
     for (const g of [dU.teeth, dU.gums, dL.teeth, dL.gums]) this._track(g);
     M.teethU = new THREE.Mesh(dU.teeth, teethMat); M.gumsU = new THREE.Mesh(dU.gums, gumMat);
     M.jaw = new THREE.Group();
@@ -2446,7 +2452,7 @@ export class ProceduralHead {
     if (tk > 0.5) { mat.alphaHash = false; mat.alphaTest = 0.5; }       // мультяшная — резкая кромка без «пыли» по краю
     this.beard = { parts: [] };
     // минимум треугольников (11.2): грубая сетка, гладкая кромка — из маски-текстуры (alphaMap), пустые клетки выброшены
-    const texMask = !!this.flat?.tris && tk > 0.5;
+    const texMask = !!this.tris && tk > 0.5;
     const edgeA = (mx, my) => { const t = clamp(mask0(mx, my), 0, 1); return clamp((t + 0.14 * (clumpX(mx) - 0.5) - 0.1) / 0.6, 0, 1); };
     let mask0 = null;
     const part = (name, x0, x1, y0, y1, cols, rows, mask, depth, jaw, extra = {}) => {
@@ -2644,9 +2650,9 @@ export class ProceduralHead {
       return clothPts[clothPts.length - 1][0];
     };
     const neckPts = (outfit !== 'crew' && outfit !== 'turtleneck' && outfit !== 'hoodie'
-      ? [[r, -0.45], [r * 0.97, -0.9], [r * 1.05, -1.25], [r * 1.5, -1.5], ...[-1.62, -1.74, -1.9, -2.15, -2.6].map((y) => [Math.max(r * 1.5, Rof(y) * (this.flat?.tris ? 0.92 : 0.965)), y])]
+      ? [[r, -0.45], [r * 0.97, -0.9], [r * 1.05, -1.25], [r * 1.5, -1.5], ...[-1.62, -1.74, -1.9, -2.15, -2.6].map((y) => [Math.max(r * 1.5, Rof(y) * (this.tris ? 0.92 : 0.965)), y])]
       : [[r, -0.45], [r * 0.97, -0.9], [r * 1.05, -1.25], [r * 1.5, -1.5], [r * 2.6, -1.72], [r * 3.6, -1.92]]).map(([x, y]) => new THREE.Vector2(x, y));
-    const neckGeo = this._track(new THREE.LatheGeometry(neckPts, this.flat?.tris ? 32 : 48));   // шея и ворот — одинаковые грани на всех уровнях (иначе кожа просвечивает у ворота)
+    const neckGeo = this._track(new THREE.LatheGeometry(neckPts, this.tris ? 32 : 48));   // шея и ворот — одинаковые грани на всех уровнях (иначе кожа просвечивает у ворота)
     neckGeo.scale(1, 1, 0.6);
     let neckMat = this.mat.neck;
     if (!this.shadows) {
@@ -2699,7 +2705,7 @@ export class ProceduralHead {
     }));
     // торс с вырезом topFn; k — масштаб радиуса (нижний слой — чуть внутри)
     const torso = (topFn, k = 1, mat = bodyMat, phiMax = Math.PI, botFn = null) => {
-      const lowT = this.flat?.tris, N = lowT ? 33 : this._q(112, 40), ROWS = lowT ? 9 : this._q(44, 18), rows = [], uv = [];   // 11.2: минимум треугольников; нечётное N — нет столбца ровно на острие выреза (иначе воротник его не закрывает)
+      const lowT = this.tris, N = lowT ? 33 : this._q(112, 40), ROWS = lowT ? 9 : this._q(44, 18), rows = [], uv = [];   // 11.2: минимум треугольников; нечётное N — нет столбца ровно на острие выреза (иначе воротник его не закрывает)
       const full = phiMax >= Math.PI;
       for (let i = 0; i <= ROWS; i++) {
         const v = i / ROWS, row = [];
@@ -2721,12 +2727,12 @@ export class ProceduralHead {
       for (let j = 0; j <= 96; j++) { const phi = lerp(phiA, phiB, j / 96); pts.push(surf(phi, topFn(phi), k, 0.004)); }
       const closed = phiB - phiA >= Math.PI * 2 - 1e-6;
       if (closed) pts.pop();
-      return add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, closed), this.flat?.tris ? 32 : this._q(160, 48), rad, this.flat?.tris ? 3 : this._q(6, 4), closed), mat);
+      return add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, closed), this.tris ? 32 : this._q(160, 48), rad, this.tris ? 3 : this._q(6, 4), closed), mat);
     };
     // воротник рубашки: стойка + отворот, к переду — уголки; phi0 — половина ширины выреза спереди
     const collar = (topFn, mat, phi0, k = 1, h = 0.085, fall = 0.12, point = 0.13) => {
       const rows = [[], [], [], []];
-      const H = this.flat?.tris ? 16 : 40;                              // столбцов на половину воротника
+      const H = this.tris ? 16 : 40;                              // столбцов на половину воротника
       for (let j = 0; j <= 2 * H; j++) {
         const side = j <= H ? -1 : 1, u = j <= H ? j / H : (2 * H - j) / H;   // 0 — сзади, 1 — у выреза
         const phi = side * lerp(Math.PI, phi0, u), yt = topFn(phi), front = smoothstep(0.6, 1, u);
@@ -2767,7 +2773,7 @@ export class ProceduralHead {
     if (outfit === 'blazer') {
       const shirtFn = vcut(0.1, 0.24), jacketFn = vcut(0.62, 0.62, 1.05);
       // рубашка — только в вырезе пиджака и чуть ниже его края: на изгибе плеча хорды пиджака проваливаются внутрь, и полная рубашка под ним проступала
-      torso(shirtFn, 0.985, mat2, 0.8, (phi) => jacketFn(phi) - 0.08);
+      torso(shirtFn, this.tris ? 0.97 : 0.985, mat2, 0.8, (phi) => jacketFn(phi) - 0.08);   // грубая сетка: хорды пиджака по высоте глубже — рубашка тоже
       collar(shirtFn, mat2, 0.22, 0.985, 0.075, 0.08, 0.1);
       torso(jacketFn);
       // лацканы: полосы вдоль краёв выреза пиджака, отворот к плечу; сверху переходят в воротник пиджака
@@ -2789,7 +2795,7 @@ export class ProceduralHead {
         const knot = new THREE.Mesh(this._track(new THREE.SphereGeometry(1, 12, 8)), tm);
         knot.scale.set(0.045, 0.05, 0.025); knot.position.copy(surf(0, yk, 0.985, 0.022)); this.body.add(knot);
         const L = [], R = [];
-        const tl = this.flat?.tris ? yk - jacketFn(0) + 0.02 : 0.85;  // грубый пиджак: галстук только до низа выреза (ниже проступал сквозь хорды)
+        const tl = this.tris ? yk - jacketFn(0) + 0.02 : 0.85;  // грубый пиджак: галстук только до низа выреза (ниже проступал сквозь хорды)
         for (let i = 0; i <= 16; i++) {
           const t = i / 16, y = yk - 0.04 - t * tl, w = lerp(0.035, 0.075, Math.min(1, t * 1.6)) / Math.max(0.5, Rof(y));
           L.push(surf(-w, y, 0.985, 0.014)); R.push(surf(w, y, 0.985, 0.014));
@@ -2907,6 +2913,27 @@ export class ProceduralHead {
   }
 
   /**
+   * Лёгкие материалы (12.1): у физических материалов выключаются отлив и лак (каждый — отдельный слой освещения
+   * в пиксельном шейдере); анизотропный блик волос стоит мало и без окружения даёт им почти всю яркость — остаётся. Глазам, влажной кромке, стёклам и металлу (лак ≈ 1 или металличность ≥ 0,5) нужны
+   * отражения окружения — они помечаются userData.env и сохраняют лак; остальным EmotionalHead окружение не даёт
+   * (оно — самая дорогая часть кадра), его рассеянный вклад заменяет полусферный свет.
+   */
+  _liten() {
+    const seen = new Set();
+    this.object3D.traverse((o) => {
+      if (!o.isMesh) return;
+      for (const m of [].concat(o.material)) {
+        if (seen.has(m) || !m.isMeshStandardMaterial) continue;
+        seen.add(m);
+        if ((m.metalness ?? 0) >= 0.5 || (m.clearcoat ?? 0) >= 0.99) { m.userData.env = true; continue; }
+        if (!m.isMeshPhysicalMaterial) continue;
+        if (m.sheen > 0.4) m.color.multiplyScalar(1 + 0.9 * m.sheen);   // волосы и борода: отлив давал заметную долю яркости (как в _flatten)
+        m.sheen = 0; m.clearcoat = 0;                                // анизотропия волос остаётся: без неё и окружения волосы — чёрный пластик
+      }
+    });
+  }
+
+  /**
    * Плоский режим (11.1): все материалы → MeshToonMaterial с плоскими гранями и светом в несколько ступеней (bands).
    * Без PBR, отражений окружения, лака, отлива, рассеяния и анизотропии — пиксельный шейдер в разы дешевле, а одинаковый
    * тип материала даёт склейке (_batchAll) больше общих групп. Цвет, карты, прозрачность, трафарет, порядок отрисовки и
@@ -2978,6 +3005,10 @@ export class ProceduralHead {
       // на костях (веки, челюсть) не упрощаем: хорды грубой оболочки века срезают глазное яблоко
       if (t < 300 || o.isSkinnedMesh || g.attributes.position.usage === THREE.DynamicDrawUsage) return;
       const isSkin = o === this.skin, hair = o.name === 'hair' || o.name === 'hairLong';
+      // гладкое освещение (12.1): оболочку волос не упрощаем — направление анизотропного блика three берёт из производных
+      // в пикселе (без атрибута касательных), оно постоянно в треугольнике, и на крупных гранях блик рассыпается «битым
+      // стеклом»; с касательными (computeTangents) блик ровный, но тусклый — у этих векторов другая длина
+      if (hair && !this.flat) return;
       const target = isSkin ? tris : Math.max(120, Math.round(t * (hair ? Math.max(ratio, 0.08) : Math.max(3 * ratio, 0.3))));
       if (target >= t) return;
       const ng = decimate(g, target, { weight: weightOf(g, isSkin), morphK: isSkin ? 4 : 0, cls: g.userData.cls });

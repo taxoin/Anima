@@ -6,9 +6,9 @@ export * from './emotional-head.js';
 type Proxied = 'setEmotion' | 'addEmotion' | 'getEmotion' | 'getState' | 'micro' | 'gesture' | 'express' | 'speak' | 'speakAudio' | 'listenStream'
   | 'stopSpeaking' | 'setGender' | 'lookAt' | 'followPointer' | 'setIdle' | 'setChannels' | 'clearChannels' | 'setLighting' | 'setBackground'
   | 'setFraming' | 'loadModel' | 'useProcedural' | 'snapshot' | 'fromPhoto' | 'addProfile' | 'clearProfile' | 'setPhotoOptions' | 'clearPhoto' | 'exportAvatar' | 'importAvatar' | 'exportGLB'
-  | 'setLook' | 'getLook' | 'setDetail' | 'getDetail' | 'getAdaptive' | 'pause' | 'resume' | 'likeness' | 'refinePhoto' | 'refineShape';
+  | 'setLook' | 'getLook' | 'setDetail' | 'getDetail' | 'getAdaptive' | 'setQuality' | 'getQuality' | 'pause' | 'resume' | 'likeness' | 'refinePhoto' | 'refineShape';
 
-/** Атрибуты: gender, emotion, intensity, restraint, background, lighting, framing, idle, follow-pointer, detail, shadows. */
+/** Атрибуты: gender, emotion, intensity, restraint, background, lighting, framing, idle, follow-pointer, detail, quality, shadows. */
 export interface EmotionalHeadElement extends Pick<EmotionalHead, Proxied> {}
 export declare class EmotionalHeadElement extends HTMLElement {
   /** Сам экземпляр EmotionalHead (после подключения к DOM). */
