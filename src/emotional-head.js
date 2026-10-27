@@ -101,6 +101,7 @@ export class EmotionalHead {
    * @param {boolean} [options.idle=true]
    * @param {boolean} [options.shadows=true]
    * @param {boolean} [options.followPointer=false]  глаза следят за курсором
+   * @param {object}  [options.insets]  поля поверх холста { top, bottom, left, right } в CSS-пикселях — см. setInsets
    * @param {boolean} [options.vignette=true]
    * @param {number}  [options.maxPixelRatio=2]
    * @param {'auto'|'adaptive'|'high'|'medium'|'low'} [options.detail='auto']  детализация геометрии: auto — medium на телефонах; adaptive — по реальной скорости кадров (уровень и pixelRatio, событие detailChange)
@@ -719,9 +720,9 @@ export class EmotionalHead {
     if (this._pointerHandler) { window.removeEventListener('pointermove', this._pointerHandler); this._pointerHandler = null; }
     if (on) {
       this._pointerHandler = (e) => {
-        const r = this.renderer.domElement.getBoundingClientRect();
-        const cx = r.left + r.width / 2, cy = r.top + r.height * 0.4;
-        this.lookAt((e.clientX - cx) / (r.width * 0.6), -(e.clientY - cy) / (r.height * 0.6), { head: 0.3 });
+        const r = this.renderer.domElement.getBoundingClientRect(), V = this._view(r.width, r.height);
+        const cx = r.left + V.x + V.w / 2, cy = r.top + V.y + V.h * 0.4;
+        this.lookAt((e.clientX - cx) / (V.w * 0.6), -(e.clientY - cy) / (V.h * 0.6), { head: 0.3 });
       };
       window.addEventListener('pointermove', this._pointerHandler, { passive: true });
     } else this.lookAt(null);
@@ -784,6 +785,23 @@ export class EmotionalHead {
     this.camera.fov = F.fov;
     this._resize();
     return this;
+  }
+
+  /**
+   * Поля поверх холста (12.2), в CSS-пикселях: голова кадрируется в свободной части, фон остаётся на весь холст —
+   * для интерфейса с полупрозрачными панелями поверх сцены (снизу меню — голова выше, а не под ним).
+   * @param {{top?:number, bottom?:number, left?:number, right?:number}|null} [ins]
+   */
+  setInsets(ins = null) {
+    this.options.insets = ins;
+    if (this.renderer) this._resize();
+    return this;
+  }
+  /** Свободная часть холста: { x, y, w, h } в CSS-пикселях. */
+  _view(w, h) {
+    const I = this.options.insets || {}, c = (v, m) => Math.max(0, Math.min(+v || 0, m));
+    const t = c(I.top, h * 0.8), b = c(I.bottom, h * 0.8 - t), l = c(I.left, w * 0.8), r = c(I.right, w * 0.8 - l);
+    return { x: l, y: t, w: w - l - r, h: h - t - b };
   }
 
   /** Подписка на события: 'emotionChange' | 'speakStart' | 'speakEnd' | 'word' | 'cue' | 'gesture' | 'micro' | 'express' | 'genderChange' | 'blink' */
@@ -927,8 +945,10 @@ export class EmotionalHead {
     if (this.lights) this.lights.flatAmb.intensity = FL ? 0.25 : lite ? LITE.ambK * (this._envK ?? 1) : 0;
     this.renderer.setSize(w, h, false);
     const F = this._framing || FRAMING.portrait;
-    const aspect = w / h;
+    const V = this._view(w, h), aspect = V.w / V.h;
     this.camera.aspect = aspect;
+    // кадр строится для свободной части, холст — её продолжение за поля (камера та же, окно шире)
+    if (V.w !== w || V.h !== h) this.camera.setViewOffset(V.w, V.h, -V.x, -V.y, w, h); else this.camera.clearViewOffset();
     const fit = aspect < 0.75 ? 0.75 / aspect : 1;                    // узкий контейнер — отъезжаем
     const [px, py, pz] = F.pos, [tx, ty, tz] = F.target;
     this.camera.position.set(px, py, tz + (pz - tz) * fit);

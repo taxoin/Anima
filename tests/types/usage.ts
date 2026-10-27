@@ -51,6 +51,7 @@ head.setFlat({ tris: 3000 }).setFlat({ tris: 0 });
 head.on('flatChange', (f) => console.log(f?.pixel));
 const q: 'lite' | 'high' = head.setQuality('high').setQuality().getQuality();
 head.on('qualityChange', (e) => console.log(e.quality, q));
+head.setInsets({ bottom: 320, top: 40 }).setInsets(null);
 
 // ожидаемые ошибки
 // @ts-expect-error неизвестная детализация

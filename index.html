@@ -63,7 +63,63 @@
   #log .api { color:#9fc1ff; } #log .ev { color:#8a91a3; } #log .err { color:var(--acc2); }
   .hint { color:var(--dim); font-size:12px; }
   code { background:#11141b; padding:1px 5px; border-radius:4px; font-size:12px; }
-  @media (max-width: 900px) { .app { grid-template-columns: 1fr; height:auto; } #stage { height:62vh; } aside { border-left:0; border-top:1px solid var(--line); } }
+  .dock, .fab, .sheet-head { display:none; }
+  /* телефон (12.2): сцена на весь экран и не прокручивается, голова всегда на месте — в верхней части (head.setInsets);
+     снизу док с плавающими кнопками, каждая открывает полупрозрачную панель своего раздела — любой контрол в 1–2 касания */
+  @media (max-width: 900px) {
+    html, body { height:100%; overflow:hidden; overscroll-behavior:none; }
+    .app { display:block; height:100dvh; }
+    #stage { position:fixed; inset:0; min-height:0; }
+    .hud { top:calc(10px + env(safe-area-inset-top, 0px)); bottom:auto; left:12px; right:12px; }
+    .caption { bottom:calc(var(--dockH) + 84px + env(safe-area-inset-bottom, 0px)); font-size:15px; }
+    .tap { top:calc(44px + env(safe-area-inset-top, 0px)); }
+    .dock { display:flex; position:fixed; z-index:5; left:8px; right:8px; bottom:calc(8px + env(safe-area-inset-bottom, 0px)); justify-content:space-between; gap:4px; }
+    .dock button { flex:1; min-width:0; height:var(--dockH); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:0; border-radius:14px;
+      font-size:10px; color:#cfd5e4; background:rgba(14,16,24,.55); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); border:1px solid rgba(255,255,255,.12); }
+    .dock button i { font-style:normal; font-size:19px; line-height:1; }
+    .dock button.on { background:rgba(43,74,143,.8); border-color:#7aa2ff; color:#fff; }
+    .fab { display:grid; place-items:center; position:fixed; z-index:5; right:12px; bottom:calc(var(--dockH) + 18px + env(safe-area-inset-bottom, 0px)); width:52px; height:52px; padding:0; border-radius:50%;
+      font-size:20px; color:#fff; background:rgba(43,74,143,.85); border:1px solid #7aa2ff; box-shadow:0 4px 14px rgba(0,0,0,.4); }
+    .fab.speaking { background:rgba(190,80,60,.9); border-color:var(--acc2); }
+    body.sheet .fab { display:none; }
+    aside { position:fixed; z-index:4; left:8px; right:8px; bottom:calc(var(--dockH) + 16px + env(safe-area-inset-bottom, 0px)); max-height:var(--sheetH); overflow:auto; overscroll-behavior:contain;
+      padding:0 12px 6px; border:1px solid rgba(255,255,255,.12); border-radius:16px; background:rgba(18,21,30,.72); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+      transform:translateY(12px); opacity:0; pointer-events:none; transition:opacity .18s, transform .18s; }
+    body.sheet aside { transform:none; opacity:1; pointer-events:auto; }
+    aside h1, aside .sub, aside .more, aside summary { display:none; }
+    aside details { display:none; border:0; padding:4px 0; }
+    aside details.cur { display:block; }
+    aside details.cur + details.cur { border-top:1px solid rgba(255,255,255,.1); padding-top:8px; }
+    aside details.cur + details.cur summary { display:block; margin-bottom:4px; }
+    aside details.cur + details.cur summary::before { content:""; }
+    .sheet-head { display:flex; position:sticky; top:0; z-index:1; align-items:center; justify-content:space-between; margin:0 -12px 0; padding:5px 6px 3px 14px; background:rgba(18,21,30,.85); }
+    .sheet-head b { flex:1; } #advBtn { font-size:12px; color:var(--acc); }
+    aside .adv { display:none; } body.adv aside .adv { display:block; }
+    .pairs { display:grid; grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr); gap:5px 6px; }
+    .pairs select, .pairs input[type=color] { width:100%; min-width:0; } .pairs > .hint { grid-column:1 / -1; }
+    .sliders { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+    .sliders .row { flex-direction:column; align-items:stretch; gap:0; margin:2px 0; } .sliders label { width:auto !important; } .sliders input[type=range] { width:100%; }
+    #basic, #complex { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); }
+    #basic button, #complex button { font-size:11.5px; line-height:1.15; padding:4px 3px; }
+    details[data-tab=emo] > .hint { display:none; } #complex { margin-top:8px; }
+    body.sheet .caption { bottom:auto; top:calc(42px + env(safe-area-inset-top, 0px)); font-size:13.5px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+    .sheet-head b { font-size:13px; color:#cfd5e4; } .sheet-head button { border:0; background:none; font-size:16px; padding:2px 8px; }
+    .row { margin:4px 0; gap:6px; }
+    button, select { padding:6px 9px; }
+    .chips { gap:5px; } .chips button { padding:4px 8px; font-size:12.5px; }
+    textarea { min-height:0; height:48px; }
+    #log { height:110px; }
+    .bars { font-size:9.5px; } .bar { grid-template-columns:96px 1fr; }
+  }
+  /* телефон боком: панель справа, док столбцом у правого края, голова слева */
+  @media (max-width: 900px) and (orientation: landscape) {
+    .dock { flex-direction:column; left:auto; top:calc(8px + env(safe-area-inset-top, 0px)); right:calc(8px + env(safe-area-inset-right, 0px)); width:var(--dockH); }
+    .dock button { height:auto; }
+    aside { left:auto; top:4px; bottom:4px; right:calc(var(--dockH) + 16px + env(safe-area-inset-right, 0px)); width:min(420px, 52vw); max-height:none; }
+    .fab { bottom:12px; right:calc(var(--dockH) + 20px); }
+    .caption, body.sheet .caption { top:auto; bottom:8px; font-size:13.5px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; left:calc((100% - var(--side)) / 2); width:min(92%, calc(100% - var(--side) - 24px)); }
+  }
+  :root { --dockH:52px; --sheetH:46dvh; --side:0px; }
 </style>
 </head>
 <body>
@@ -71,23 +127,34 @@
   <main id="stage">
     <div class="caption" id="caption" hidden></div>
     <button class="tap" id="tapVoice" hidden>🔊 Повторить со звуком</button>
+    <nav class="dock" id="dock" aria-label="Меню">
+      <button data-open="emo" title="Эмоции"><i>🙂</i>Эмоции</button>
+      <button data-open="gest" title="Микро-выражения и жесты"><i>👋</i>Жесты</button>
+      <button data-open="speech" title="Речь и нарратив"><i>💬</i>Речь</button>
+      <button data-open="face" title="Внешность"><i>🧑</i>Лицо</button>
+      <button data-open="acc" title="Аксессуары и зубы"><i>🎩</i>Вещи</button>
+      <button data-open="photo" title="Аватар по фото"><i>📷</i>Фото</button>
+      <button data-open="scene" title="Голова и сцена"><i>💡</i>Сцена</button>
+      <button data-open="log" title="Журнал и каналы"><i>📊</i>Журнал</button>
+    </nav>
+    <button class="fab" id="fabSpeak" title="Говорить / стоп">▶</button>
     <div class="hud">
       <span class="pill">эмоция: <b id="hudEmotion">neutral</b></span>
       <span class="pill" id="hudSpeak">тишина</span>
     </div>
   </main>
-  <aside>
+  <aside id="panel">
+    <div class="sheet-head"><b id="sheetTitle"></b><button id="advBtn" hidden>Ещё ▾</button><button id="sheetClose" aria-label="Закрыть">✕</button></div>
     <h1>Emotional Head</h1>
     <div class="sub">Three.js · 52 ARKit-канала · слои эмоций, микро-выражений, жестов и речи</div>
 
-    <details open>
+    <details open data-tab="scene">
       <summary>Голова и сцена</summary>
       <div class="row">
         <button data-gender="female" class="on">Женская</button><button data-gender="male">Мужская</button>
         <button id="bgBtn">Светлый фон</button>
       </div>
-      <div class="row"><label style="width:84px" for="toonR" title="look.toon: пропорции 3D-мультфильма — крупные глаза, маленькие нос и рот, круглые щёки">мультяшность</label><input type="range" id="toonR" min="0" max="1" step="0.05" value="0"></div>
-      <div class="row">
+      <div class="row pairs">
         <label>Свет</label>
         <select id="lighting"><option>studio</option><option>warm</option><option>cool</option><option>noir</option><option>soft</option></select>
         <label>Кадр</label>
@@ -102,49 +169,62 @@
         <select id="flatSel" title="Быстрая отрисовка: плоские грани, свет ступенями, без теней и отражений; кадр мельче с крупным пикселем"><option value="">выкл</option><option value="1">гладкий</option><option value="2">пиксель 2</option><option value="3">пиксель 3</option><option value="4">пиксель 4</option></select>
         <span class="hint" id="fpsInfo"></span>
       </div>
-      <div class="row"><label style="width:44px">кожа</label><span class="swatches" id="skinSw"></span></div>
-      <div class="row"><label style="width:44px">глаза</label><span class="swatches" id="eyeSw"></span></div>
-      <div class="row">
-        <label>разрез</label><select id="eyeShape"><option value="">авто</option></select>
-        <label>нос</label><select id="noseSel"><option value="">авто</option></select>
-        <label>губы</label><select id="lipSel" title="Профиль губ: выступ вперёд, глубина над и под губой"><option value="">авто</option></select>
-        <label>очки</label><select id="glassesSel"><option value="">авто</option><option value="none">нет</option><option>round</option><option>rect</option><option>cat</option><option>aviator</option><option>sun</option></select>
-      </div>
-      <div class="row">
-        <label>причёска</label><select id="hairSel"><option value="">авто</option></select>
-        <label>борода</label><select id="beardSel"><option value="">авто</option><option value="none">нет</option></select>
-      </div>
-      <div class="row">
-        <label>макияж</label><select id="makeupSel"><option value="">нет</option></select>
-        <label>убор</label><select id="hatSel"><option value="">нет</option></select>
-        <label>серьги</label><select id="earSel"><option value="">нет</option></select>
-      </div>
-      <div class="row">
-        <label>одежда</label><select id="outfitSel"><option value="">авто</option></select>
-        <label>цвет</label><input type="color" id="clothC" value="#5b1f33" title="Цвет одежды">
-      </div>
-      <div class="row">
-        <label>наушники</label><select id="hpSel"><option value="">нет</option></select>
-        <label>маска</label><select id="maskSel"><option value="">нет</option></select>
-      </div>
-      <div class="row">
-        <label>зубы</label><select id="teethSel"><option value="">авто</option></select>
-        <label>брекеты</label><select id="bracesSel"><option value="">нет</option><option value="metal">металл</option><option value="ceramic">керамика</option><option value="#3a7bd5">синие</option><option value="#e0457b">розовые</option></select>
-      </div>
-      <div class="row"><label style="width:84px" for="gapR">щель</label><input type="range" id="gapR" min="0" max="1" step="0.05" value="0"></div>
-      <div class="row"><label style="width:84px" for="crookR">кривизна</label><input type="range" id="crookR" min="0" max="1" step="0.05" value="0"></div>
-      <div class="row"><label style="width:84px" for="ageR">возраст</label><input type="range" id="ageR" min="0" max="1" step="0.05" value="0"></div>
-      <div class="row"><label style="width:84px" for="frecklesR">веснушки</label><input type="range" id="frecklesR" min="0" max="1" step="0.05" value="0"></div>
-      <div class="row"><label style="width:84px" for="grayR">седина</label><input type="range" id="grayR" min="0" max="1" step="0.05" value="0"></div>
-      <div class="row"><label style="width:84px" for="streakR">мелирование</label><input type="range" id="streakR" min="0" max="1" step="0.05" value="0"></div>
-      <div class="row"><button id="randomLook">Случайный персонаж</button><button id="resetLook">Сбросить внешность</button></div>
       <div class="row">
         <label><input type="checkbox" id="idle" checked> idle</label>
         <label><input type="checkbox" id="follow"> взгляд за курсором</label>
       </div>
     </details>
 
-    <details open>
+    <details open data-tab="face">
+      <summary>Внешность</summary>
+      <div class="row"><button id="randomLook">🎲 Случайный персонаж</button><button id="resetLook">Сбросить</button></div>
+      <div class="row"><label style="width:44px">кожа</label><span class="swatches" id="skinSw"></span></div>
+      <div class="row"><label style="width:44px">глаза</label><span class="swatches" id="eyeSw"></span></div>
+      <div class="row pairs">
+        <label>разрез</label><select id="eyeShape"><option value="">авто</option></select>
+        <label>нос</label><select id="noseSel"><option value="">авто</option></select>
+        <label>губы</label><select id="lipSel" title="Профиль губ: выступ вперёд, глубина над и под губой"><option value="">авто</option></select>
+      </div>
+      <div class="row pairs">
+        <label>причёска</label><select id="hairSel"><option value="">авто</option></select>
+        <label>борода</label><select id="beardSel"><option value="">авто</option><option value="none">нет</option></select>
+      </div>
+      <div class="sliders">
+        <div class="row"><label style="width:84px" for="toonR" title="look.toon: пропорции 3D-мультфильма — крупные глаза, маленькие нос и рот, круглые щёки">мультяшность</label><input type="range" id="toonR" min="0" max="1" step="0.05" value="0"></div>
+        <div class="row"><label style="width:84px" for="ageR">возраст</label><input type="range" id="ageR" min="0" max="1" step="0.05" value="0"></div>
+        <div class="row"><label style="width:84px" for="frecklesR">веснушки</label><input type="range" id="frecklesR" min="0" max="1" step="0.05" value="0"></div>
+        <div class="row"><label style="width:84px" for="grayR">седина</label><input type="range" id="grayR" min="0" max="1" step="0.05" value="0"></div>
+        <div class="row"><label style="width:84px" for="streakR">мелирование</label><input type="range" id="streakR" min="0" max="1" step="0.05" value="0"></div>
+      </div>
+    </details>
+
+    <details open data-tab="acc">
+      <summary>Аксессуары и зубы</summary>
+      <div class="row pairs">
+        <label>очки</label><select id="glassesSel"><option value="">авто</option><option value="none">нет</option><option>round</option><option>rect</option><option>cat</option><option>aviator</option><option>sun</option></select>
+        <label>макияж</label><select id="makeupSel"><option value="">нет</option></select>
+        <label>убор</label><select id="hatSel"><option value="">нет</option></select>
+        <label>серьги</label><select id="earSel"><option value="">нет</option></select>
+      </div>
+      <div class="row pairs">
+        <label>одежда</label><select id="outfitSel"><option value="">авто</option></select>
+        <label>цвет</label><input type="color" id="clothC" value="#5b1f33" title="Цвет одежды">
+      </div>
+      <div class="row pairs">
+        <label>наушники</label><select id="hpSel"><option value="">нет</option></select>
+        <label>маска</label><select id="maskSel"><option value="">нет</option></select>
+      </div>
+      <div class="row pairs">
+        <label>зубы</label><select id="teethSel"><option value="">авто</option></select>
+        <label>брекеты</label><select id="bracesSel"><option value="">нет</option><option value="metal">металл</option><option value="ceramic">керамика</option><option value="#3a7bd5">синие</option><option value="#e0457b">розовые</option></select>
+      </div>
+      <div class="sliders">
+        <div class="row"><label style="width:84px" for="gapR">щель</label><input type="range" id="gapR" min="0" max="1" step="0.05" value="0"></div>
+        <div class="row"><label style="width:84px" for="crookR">кривизна</label><input type="range" id="crookR" min="0" max="1" step="0.05" value="0"></div>
+      </div>
+    </details>
+
+    <details open data-tab="photo">
       <summary>Аватар по фото</summary>
       <div class="hint">Загрузите портрет анфас: голова станет шаржем на этого человека, с его чертами и кожей, и будет говорить с теми же эмоциями. Фото обрабатывается прямо в браузере и никуда не отправляется.</div>
       <div class="row">
@@ -152,62 +232,68 @@
         <button data-sample="docs/samples/monalisa.jpg">Мона Лиза</button><button data-sample="docs/samples/lincoln.jpg">Линкольн</button>
       </div>
       <div class="photo-box" id="photoBox" hidden><img id="photoThumb" alt="Загруженный портрет"><div id="photoInfo"></div></div>
-      <div class="row"><label style="width:84px" for="caric">шарж</label><input type="range" id="caric" min="0" max="3" step="0.1" value="1.5"><span class="val" id="caricV">1.5</span></div>
-      <div class="row"><label style="width:84px" for="photoTex">кожа с фото</label><input type="range" id="photoTex" min="0" max="1" step="0.05" value="0.9"><span class="val" id="photoTexV">0.9</span></div>
-      <div class="row"><label style="width:84px" for="realism">реализм</label><input type="range" id="realism" min="0" max="1" step="0.05" value="0.8"><span class="val" id="realismV">0.8</span></div>
-      <div class="row"><label><input type="checkbox" id="photoAcc"> искать очки и шапки (+16 МБ модель)</label></div>
-      <div class="row"><button id="photoClear" disabled>Стандартная голова</button><button id="photoRefine" disabled title="Рендер → те же точки лица → сдвинуть овал и нос под фото (~2–4 с)">Подогнать форму</button><span class="hint" id="photoStatus"></span></div>
-      <div class="row"><label class="filebtn" for="profileFile" title="Второй снимок того же человека строго сбоку: глубина носа, губ, подбородка">Добавить профиль</label><input type="file" id="profileFile" accept="image/*" hidden><span class="hint" id="profileInfo"></span></div>
-      <div class="row"><button id="avatarSave" disabled>Сохранить аватар</button><label class="filebtn" for="avatarFile">Открыть аватар</label><input type="file" id="avatarFile" accept=".json,application/json" hidden></div>
-      <div class="row"><button id="glbSave" title="Сетка, материалы и 52 ARKit-морфа — для Blender, Unity, Unreal">Скачать .glb</button><select id="glbDetail" title="Детализация файла"><option value="high">high</option><option value="medium" selected>medium</option><option value="low">low</option></select></div>
-      <div class="hint">Файл аватара весит около 10 КБ: точки лица, цвета и кожа, без исходного фото. Его можно переслать на другой телефон и открыть там, распознавание не нужно.</div>
+      <div class="adv">
+        <div class="row"><label style="width:84px" for="caric">шарж</label><input type="range" id="caric" min="0" max="3" step="0.1" value="1.5"><span class="val" id="caricV">1.5</span></div>
+        <div class="row"><label style="width:84px" for="photoTex">кожа с фото</label><input type="range" id="photoTex" min="0" max="1" step="0.05" value="0.9"><span class="val" id="photoTexV">0.9</span></div>
+        <div class="row"><label style="width:84px" for="realism">реализм</label><input type="range" id="realism" min="0" max="1" step="0.05" value="0.8"><span class="val" id="realismV">0.8</span></div>
+        <div class="row"><label><input type="checkbox" id="photoAcc"> искать очки и шапки (+16 МБ модель)</label></div>
+        <div class="row"><button id="photoClear" disabled>Стандартная голова</button><button id="photoRefine" disabled title="Рендер → те же точки лица → сдвинуть овал и нос под фото (~2–4 с)">Подогнать форму</button><span class="hint" id="photoStatus"></span></div>
+        <div class="row"><label class="filebtn" for="profileFile" title="Второй снимок того же человека строго сбоку: глубина носа, губ, подбородка">Добавить профиль</label><input type="file" id="profileFile" accept="image/*" hidden><span class="hint" id="profileInfo"></span></div>
+        <div class="row"><button id="avatarSave" disabled>Сохранить аватар</button><label class="filebtn" for="avatarFile">Открыть аватар</label><input type="file" id="avatarFile" accept=".json,application/json" hidden></div>
+        <div class="row"><button id="glbSave" title="Сетка, материалы и 52 ARKit-морфа — для Blender, Unity, Unreal">Скачать .glb</button><select id="glbDetail" title="Детализация файла"><option value="high">high</option><option value="medium" selected>medium</option><option value="low">low</option></select></div>
+      </div>
+      <div class="hint more">Файл аватара весит около 10 КБ: точки лица, цвета и кожа, без исходного фото. Его можно переслать на другой телефон и открыть там, распознавание не нужно.</div>
     </details>
 
-    <details open>
+    <details open data-tab="emo">
       <summary>Эмоции</summary>
       <div class="hint">Базовые</div>
       <div class="chips" id="basic"></div>
       <div class="hint" style="margin-top:8px">Сложные состояния</div>
       <div class="chips" id="complex"></div>
-      <div class="row" style="margin-top:10px"><input type="text" id="mix" value="contempt + slight_amusement + boredom*0.5"></div>
-      <div class="row"><label style="width:84px">интенсивность</label><input type="range" id="intensity" min="0" max="1.2" step="0.05" value="1"><span class="val" id="intensityV">1</span></div>
-      <div class="row"><label style="width:84px">сдержанность</label><input type="range" id="restraint" min="0" max="1" step="0.05" value="0"><span class="val" id="restraintV">0</span></div>
-      <div class="row"><label style="width:84px">переход, с</label><input type="range" id="duration" min="0" max="3" step="0.1" value="0.8"><span class="val" id="durationV">0.8</span></div>
-      <div class="row"><button class="primary" id="applyMix">Применить смесь</button><label><input type="checkbox" id="mirror"> зеркально</label></div>
+      <div class="adv">
+        <div class="row" style="margin-top:10px"><input type="text" id="mix" value="contempt + slight_amusement + boredom*0.5"></div>
+        <div class="row"><label style="width:84px">интенсивность</label><input type="range" id="intensity" min="0" max="1.2" step="0.05" value="1"><span class="val" id="intensityV">1</span></div>
+        <div class="row"><label style="width:84px">сдержанность</label><input type="range" id="restraint" min="0" max="1" step="0.05" value="0"><span class="val" id="restraintV">0</span></div>
+        <div class="row"><label style="width:84px">переход, с</label><input type="range" id="duration" min="0" max="3" step="0.1" value="0.8"><span class="val" id="durationV">0.8</span></div>
+        <div class="row"><button class="primary" id="applyMix">Применить смесь</button><label><input type="checkbox" id="mirror"> зеркально</label></div>
+      </div>
     </details>
 
-    <details open>
+    <details open data-tab="gest">
       <summary>Микро-выражения и жесты</summary>
       <div class="chips" id="micro"></div>
       <div class="chips" id="gestures" style="margin-top:8px"></div>
     </details>
 
-    <details open>
+    <details open data-tab="speech">
       <summary>Нарратив LLM-агента → эмоция</summary>
       <select id="examples" style="width:100%;margin-bottom:6px"></select>
       <textarea id="narrative"></textarea>
-      <div class="row"><button class="primary" id="express">Сыграть (express)</button><button id="speakNarr">Произнести с emotion:'auto'</button></div>
+      <div class="row"><button class="primary" id="express">Сыграть (express)</button><button id="speakNarr" title="head.speak(text, { emotion: 'auto' })">Произнести с эмоцией</button></div>
       <div class="hint" id="parsed"></div>
     </details>
 
-    <details open>
+    <details open data-tab="speech">
       <summary>Речь (TTS + lip-sync)</summary>
       <textarea id="speech">[e:jaded] Привет. Как дела? [pause:500] Это слишком банально... слишком *человечно* в своей простоте. [g:creakyLaugh] [e:coldIrony] Хорошо. Я принял это как **условие**, а не как извинение.</textarea>
       <div class="row">
         <select id="voice" style="flex:1;min-width:0"><option value="">голос: авто</option></select>
         <select id="ttsMode"><option value="webspeech">Web Speech</option><option value="none">без звука</option></select>
       </div>
-      <div class="row"><label style="width:84px">темп</label><input type="range" id="rate" min="0.6" max="1.6" step="0.05" value="1"><span class="val" id="rateV">1</span></div>
+      <div class="adv">
+        <div class="row"><label style="width:84px">темп</label><input type="range" id="rate" min="0.6" max="1.6" step="0.05" value="1"><span class="val" id="rateV">1</span></div>
+      </div>
       <div class="row"><button class="primary" id="speak">Говорить</button><button id="stop">Стоп</button></div>
-      <div class="hint">Разметка: <code>[e:эмоция]</code> <code>[g:жест]</code> <code>[m:микро]</code> <code>[pause:мс]</code> <code>*акцент*</code> <code>*ремарка из 3+ слов*</code></div>
+      <div class="hint more">Разметка: <code>[e:эмоция]</code> <code>[g:жест]</code> <code>[m:микро]</code> <code>[pause:мс]</code> <code>*акцент*</code> <code>*ремарка из 3+ слов*</code></div>
     </details>
 
-    <details>
+    <details data-tab="log">
       <summary>Каналы (live)</summary>
       <div class="bars" id="bars"></div>
     </details>
 
-    <details open>
+    <details open data-tab="log">
       <summary>Журнал API и событий</summary>
       <div id="log"></div>
     </details>
@@ -543,6 +629,40 @@ stage.addEventListener('drop', (e) => {
   const f = files.find((x) => x.type.startsWith('image/'));
   if (f) usePhoto(f, f.name);
 });
+
+// ---- телефон (12.2): док с плавающими кнопками и полупрозрачные панели поверх сцены
+const narrow = matchMedia('(max-width: 900px)'), side = matchMedia('(max-width: 900px) and (orientation: landscape)');
+const root = document.documentElement.style;
+// голова кадрируется в свободной части экрана — поля постоянные, панель открывается поверх и голову не сдвигает
+const layout = () => {
+  if (!narrow.matches) { head.setInsets(null); return; }
+  const w = innerWidth, h = innerHeight, dock = 52, hud = 40;
+  if (side.matches) { const r = Math.round(Math.min(420, w * 0.52) + dock + 24); root.setProperty('--side', r + 'px'); head.setInsets({ top: hud, bottom: Math.round(h * 0.16), right: r }); return; }
+  // панель — ~400 px (46–52 % высоты); кадр такой, чтобы лицо (до подбородка — ~70 % кадра) оставалось над ней, плечи уходят под панель
+  const sheet = Math.round(Math.min(h * 0.52, Math.max(h * 0.46, 400))), top = h - sheet - dock - 16, F = Math.min(h - hud - dock - 16, (top - hud) / 0.7);
+  root.setProperty('--sheetH', sheet + 'px');
+  head.setInsets({ top: hud, bottom: Math.max(0, Math.round(h - hud - F)) });
+};
+let tab = null;
+const openTab = (t) => {
+  tab = t === tab ? null : t;
+  document.body.classList.toggle('sheet', !!tab);
+  document.querySelectorAll('#dock [data-open]').forEach((b) => b.classList.toggle('on', b.dataset.open === tab));
+  if (!tab) return;
+  document.querySelectorAll('#panel details').forEach((d) => { const on = d.dataset.tab === tab; d.classList.toggle('cur', on); if (on) d.open = true; });
+  $('#sheetTitle').textContent = $(`#dock [data-open="${tab}"]`).title;
+  $('#advBtn').hidden = !document.querySelector('#panel details.cur .adv');
+  $('#panel').scrollTop = 0;
+};
+document.querySelectorAll('#dock [data-open]').forEach((b) => b.onclick = () => openTab(b.dataset.open));
+$('#sheetClose').onclick = () => openTab(null);
+$('#advBtn').onclick = () => { const on = document.body.classList.toggle('adv'); $('#advBtn').textContent = on ? 'Скрыть ▴' : 'Ещё ▾'; };
+head.renderer.domElement.addEventListener('pointerdown', () => tab && openTab(null));   // касание сцены — закрыть панель
+$('#fabSpeak').onclick = () => ($('#fabSpeak').classList.contains('speaking') ? $('#stop') : $('#speak')).click();
+head.on('speakStart', () => { $('#fabSpeak').textContent = '■'; $('#fabSpeak').classList.add('speaking'); });
+head.on('speakEnd', () => { $('#fabSpeak').textContent = '▶'; $('#fabSpeak').classList.remove('speaking'); });
+narrow.addEventListener('change', layout); side.addEventListener('change', layout); addEventListener('resize', layout);
+layout();
 
 log('Готово. Попробуйте "Сложные состояния" или нарратив.', 'ev');
 </script>

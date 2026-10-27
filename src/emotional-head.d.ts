@@ -124,6 +124,8 @@ export interface EmotionalHeadOptions {
   idle?: boolean;
   shadows?: boolean;
   followPointer?: boolean;
+  /** Поля поверх холста в CSS-пикселях: голова кадрируется в свободной части (см. setInsets). */
+  insets?: Insets | null;
   vignette?: boolean;
   maxPixelRatio?: number;
   /** auto — medium на телефонах; adaptive — по скорости кадров (событие detailChange). */
@@ -278,6 +280,7 @@ export interface EmotionalHeadEvents {
   qualityChange: { quality: Quality };
 }
 /** lite — упрощённая сетка, без теней и отражений окружения (кроме глаз, стёкол, металла), без отлива и лака, pixelRatio ≤ 1.5; high — прежнее полное качество, сетка по detail. */
+export interface Insets { top?: number; bottom?: number; left?: number; right?: number; }
 export type Quality = 'lite' | 'high';
 /** Плоский режим: свет в bands ступеней (2…6), кадр в pixel раз мельче с крупным пикселем (1 — полное разрешение со сглаживанием), не больше fps кадров в секунду (0 — без ограничения), геометрия уровня detail, кожа упрощена до tris треугольников (по умолчанию 2400; 0 — без упрощения), морфы сохраняются. */
 export interface FlatOptions {
@@ -333,6 +336,8 @@ export declare class EmotionalHead {
   setLighting(preset: LightingPreset | LightingDef): this;
   setBackground(bg: 'dark' | 'light' | 'transparent' | string): this;
   setFraming(name: Framing): this;
+  /** Поля поверх холста (CSS-пиксели): голова кадрируется в свободной части, фон — на весь холст. null — без полей. */
+  setInsets(insets?: Insets | null): this;
   setDetail(detail?: DetailOption): this;
   getDetail(): DetailLevel;
   /** Плоский быстрый режим: дешёвые материалы с плоскими гранями, без теней и отражений, крупный пиксель. false — выключить. */
