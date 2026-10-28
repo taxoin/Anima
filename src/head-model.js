@@ -1125,9 +1125,6 @@ export class ProceduralHead {
     this.L = DETAIL[this.detail];
     this.lp = this.tris ? (flat ? 0.45 : 0.6) : 1;                 // 11.2: множитель разрешения частей, которые не упрощаются (динамические, на костях)
     if (this.tris) this.L = { ...this.L, eye: flat ? [12, 6] : [16, 8], lid: flat ? 10 : 14, teeth: [5, 4], acc: flat ? 0.3 : 0.35 };
-    // 12.3: в лёгком качестве оболочка волос — по сетке medium: линия роста — пересечение оболочки с кожей, и на сетке low
-    // нырок оболочки под кожу рисуется ломаной — край волос надо лбом шёл крупными зубцами (+4–8 мс в SwiftShader)
-    if (this.lite) this.L = { ...this.L, hair: DETAIL.medium.hair };
     this.shadows = shadows;
     this.P = applyToon({ ...PRESETS[gender] || PRESETS.female, ...resolveLook(overrides) }, gender);
     if (flat && this.P.hairCards === undefined) this.P.hairCards = false;   // 11.1: без прядей-карточек — их прозрачность мерцает шумом
