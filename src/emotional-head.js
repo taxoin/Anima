@@ -109,6 +109,7 @@ export class EmotionalHead {
    * @param {object} [options.voice]  { lang, voice, rate, pitch } по умолчанию для speak()
    * @param {object} [options.look]  переопределения внешности: { skin, hair, iris:[c1,c2], cloth, lip }
    * @param {'lite'|'high'} [options.quality='lite']  качество отрисовки (12.1): lite — лёгкое, в разы дешевле; high — тени, отражения окружения, отлив и лак, детализация по options.detail (см. setQuality)
+   * @param {number}  [options.idleFps=30]  в покое (молчит, нет перехода эмоции, жеста, микро-выражения и ввода) — не больше стольких кадров в секунду; 0 — без ограничения (см. setIdleFps)
    * @param {boolean|object} [options.flat=false]  плоский быстрый режим (11.1): true или { bands: 3, pixel: 1, fps: 30, detail: 'low' } — см. setFlat
    */
   constructor(container, options = {}) {
@@ -116,7 +117,7 @@ export class EmotionalHead {
     if (!this.container) throw new Error('[emotional-head] container not found');
     this.options = {
       gender: 'female', background: 'dark', lighting: 'studio', framing: 'portrait', emotion: 'neutral',
-      idle: true, shadows: true, followPointer: false, vignette: true, maxPixelRatio: 2, detail: 'auto', quality: 'lite', flat: false, tts: 'webspeech', voice: {}, look: {},
+      idle: true, shadows: true, followPointer: false, vignette: true, maxPixelRatio: 2, detail: 'auto', quality: 'lite', idleFps: 30, flat: false, tts: 'webspeech', voice: {}, look: {},
       ...options,
     };
     this._listeners = {};
@@ -710,6 +711,7 @@ export class EmotionalHead {
    * lookAt(null) — вернуть взгляд к зрителю. o.head — насколько голова поворачивается вслед (0..1).
    */
   lookAt(x, y = 0, o = {}) {
+    this._tInput = performance.now();
     this._look = x === null || x === undefined ? null : { x: clamp(x, -1.5, 1.5), y: clamp(y, -1.5, 1.5), head: o.head ?? 0.35 };
     this._saccadeAt = 0;
     return this;
@@ -734,6 +736,7 @@ export class EmotionalHead {
 
   /** Прямое управление каналами (перекрывает всё). setChannels({ jawOpen: .3 }); значение null — снять. */
   setChannels(obj) {
+    this._tInput = performance.now();                              // ручное управление (трекинг лица и т. п.) — полная частота
     for (const k in obj) {
       if (k === 'pupil') { if (obj[k] === null) delete this._manual.pupil; else this._manual.pupil = obj[k]; continue; }   // зрачок: −1…1.5, мимо expandChannels
       for (const c of Object.keys(expandChannels({ [k]: 1 }))) {
@@ -1117,7 +1120,9 @@ export class EmotionalHead {
   _loop(now) {
     this._raf = requestAnimationFrame(this._loop);
     const FL = this._flatCfg;
-    if (FL && FL.fps && now - this._last < 1000 / FL.fps - 2) return;   // плоский режим: ограничение частоты кадров (анимация — по накопленному времени)
+    // ограничение частоты кадров (анимация — по накопленному времени): плоский режим — всегда, иначе — в покое (12.3)
+    const cap = FL ? FL.fps : this._calm(now) ? this.options.idleFps : 0;
+    if (cap && now - this._last < 1000 / cap - 2) return;
     const raw = Math.max(0, (now - this._last) / 1000);
     const dt = Math.min(0.05, raw);                  // анимация: защищаемся от рывков
     this._rawDt = Math.min(0.5, raw);                // речь: реальное время, чтобы не отставать от звука на медленных устройствах
@@ -1129,11 +1134,24 @@ export class EmotionalHead {
     this._update(dt);
     if (this._visible && !document.hidden) {
       if (this._skipFrame) { this._skipFrame = false; return; }      // плоский режим и лёгкое качество: ничего заметно не сдвинулось — кадр не перерисовываем
-      this._render(); if (this._ad && !this._liteOn) this._adaptTick(raw * 1000);
+      this._render(); if (this._ad && !this._liteOn && !cap) this._adaptTick(raw * 1000);   // кадры, урезанные нарочно, — не замер скорости
     }
   }
 
   _render() { this.renderer.render(this.scene, this.camera); }
+
+  /**
+   * Покой (12.3): молчит, переход эмоции закончен, нет жестов и микро-выражений, полсекунды без ввода (lookAt, setChannels).
+   * Дыхание, моргание и шум мимики медленные — им хватает idleFps; иначе голова в покое рисовала каждый кадр экрана.
+   */
+  _calm(now) {
+    if (!(this.options.idleFps > 0) || this.speech?.active || this._micros.length || this._gestures.length || now - (this._tInput || 0) < 500) return false;
+    const tw = this._tween;
+    return !(tw.dur > 0 && this._t - tw.t0 < tw.dur);
+  }
+
+  /** Частота кадров в покое (12.3): по умолчанию 30; 0 — без ограничения. */
+  setIdleFps(fps = 30) { this.options.idleFps = Math.max(0, +fps || 0); return this; }
 
   _update(dt) {
     const t = this._t, base = this._base, out = this._out, idle = this._idle;

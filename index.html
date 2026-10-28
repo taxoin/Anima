@@ -168,6 +168,8 @@
       </div>
       <div class="row"><label>Плоский режим</label>
         <select id="flatSel" title="Быстрая отрисовка: плоские грани, свет ступенями, без теней и отражений; кадр мельче с крупным пикселем"><option value="">выкл</option><option value="1">гладкий</option><option value="2">пиксель 2</option><option value="3">пиксель 3</option><option value="4">пиксель 4</option></select>
+        <label>в покое</label>
+        <select id="idleFpsSel" title="Пока голова молчит и ничего быстрого не происходит — не больше стольких кадров в секунду (head.setIdleFps): дыханию и морганию хватает, батарея живёт дольше"><option value="20">20 к/с</option><option value="30" selected>30 к/с</option><option value="0">без огранич.</option></select>
         <span class="hint" id="fpsInfo"></span>
       </div>
       <div class="row">
@@ -368,6 +370,7 @@ $('#qualitySel').onchange = (e) => { const q = e.target.value; api(`head.setQual
 $('#detailSel').onchange = (e) => { api(`head.setDetail('${e.target.value}')`, () => head.setDetail(e.target.value)); showDetail(); };
 head.on('lookChange', () => setTimeout(showDetail)); head.on('detailChange', (e) => { log(`⟵ detailChange ${e.detail} ×${e.pixelRatio} (${e.reason})`); setTimeout(showDetail); }); head.on('photoAvatar', () => setTimeout(showDetail));
 setTimeout(showDetail);
+$('#idleFpsSel').onchange = (e) => api(`head.setIdleFps(${e.target.value})`, () => head.setIdleFps(+e.target.value));
 $('#idle').onchange = (e) => api(`head.setIdle(${e.target.checked})`, () => head.setIdle(e.target.checked));
 $('#follow').onchange = (e) => api(`head.followPointer(${e.target.checked})`, () => head.followPointer(e.target.checked));
 

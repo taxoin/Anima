@@ -126,6 +126,8 @@ export interface EmotionalHeadOptions {
   followPointer?: boolean;
   /** Поля поверх холста в CSS-пикселях: голова кадрируется в свободной части (см. setInsets). */
   insets?: Insets | null;
+  /** Кадров в секунду в покое (по умолчанию 30; 0 — без ограничения). */
+  idleFps?: number;
   vignette?: boolean;
   maxPixelRatio?: number;
   /** auto — medium на телефонах; adaptive — по скорости кадров (событие detailChange). */
@@ -338,6 +340,8 @@ export declare class EmotionalHead {
   setFraming(name: Framing): this;
   /** Поля поверх холста (CSS-пиксели): голова кадрируется в свободной части, фон — на весь холст. null — без полей. */
   setInsets(insets?: Insets | null): this;
+  /** Частота кадров в покое (молчит, нет перехода эмоции, жеста, микро-выражения и ввода): по умолчанию 30; 0 — без ограничения. */
+  setIdleFps(fps?: number): this;
   setDetail(detail?: DetailOption): this;
   getDetail(): DetailLevel;
   /** Плоский быстрый режим: дешёвые материалы с плоскими гранями, без теней и отражений, крупный пиксель. false — выключить. */
