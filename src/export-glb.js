@@ -43,7 +43,7 @@ export async function exportHeadGLB(rig, o = {}) {
   const shown = (m) => { for (let p = m; p; p = p.parent) if (!p.visible) return false; return true; };
   const list = [];
   root.traverse((m) => {
-    if (!m.isMesh || m.isInstancedMesh) return;
+    if (!m.isMesh || m.isInstancedMesh || m.userData.backPass) return;   // изнанка волос (12.4) — та же сетка, она экспортируется двусторонней
     const mats = [].concat(m.material);
     if (mats.every((q) => q.visible === false) || !m.geometry.attributes.position) return;
     list.push(m);
@@ -302,6 +302,7 @@ function exportMaterial(q, vc) {
   const m = q.clone();
   m.onBeforeCompile = THREE.Material.prototype.onBeforeCompile;
   m.customProgramCacheKey = THREE.Material.prototype.customProgramCacheKey;
+  if (q.userData.twoPass) m.side = THREE.DoubleSide;
   m.userData = {};
   m.vertexColors = vc;
   m.name = q.name || q.type.replace('Mesh', '').replace('Material', '').toLowerCase();

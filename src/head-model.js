@@ -1230,8 +1230,9 @@ export class ProceduralHead {
     if (this.lite) this._liten();
     this._batchAll();
     if (this.tris) this._decimateAll(this.tris);
+    this._hairTwoPass();
     root.traverse((o) => {
-      if (o.isMesh && this.shadows && !o.userData.noShadow) { o.castShadow = true; o.receiveShadow = true; }
+      if (o.isMesh && this.shadows && !o.userData.noShadow) { o.castShadow = !o.userData.backPass; o.receiveShadow = true; }   // изнанку волос отбрасывает лицевая сетка (shadowSide)
     });
   }
 
@@ -2931,6 +2932,40 @@ export class ProceduralHead {
         m.sheen = 0; m.clearcoat = 0;                                // анизотропия волос остаётся: без неё и окружения волосы — чёрный пластик
       }
     });
+  }
+
+  /**
+   * Волосы без лишней изнанки (12.4): оболочка, пряди и хвост были двусторонними, и пиксельный шейдер волос
+   * (анизотропный блик, второй блик) считался и для обратных граней — они часто рисуются раньше ближних.
+   * Теперь сама сетка — только лицевые грани, а изнанку рисует дочерняя копия с той же геометрией после всего
+   * непрозрачного: тест глубины отбрасывает обратные грани за лицевыми, остаётся лишь видимая изнанка (пряди за шеей).
+   * Изнанки оболочки (шапки) не видно, кроме пикселей контура, — в лёгком и плоском режимах её нет совсем.
+   * Картинка та же, волосы заметно дешевле. Тени — с обеих сторон (shadowSide); экспорт берёт сетки двусторонними.
+   */
+  _hairTwoPass() {
+    const back = new Map();
+    for (const o of [...this.headRoot.children]) {
+      if (!o.isMesh || !['hair', 'hairLong', 'hairTail'].includes(o.name) || Array.isArray(o.material)) continue;
+      const m = o.material;
+      if (m.side === THREE.DoubleSide && !back.has(m)) {
+        const b = this._track(m.clone());
+        b.side = THREE.BackSide;
+        // раскачка и второй блик (clone их не переносит); касательная анизотропии и сдвиг выборки тени — как у обратной
+        // грани двустороннего материала (BackSide разворачивает нормаль уже в вершинном шейдере, а касательную — нет)
+        b.onBeforeCompile = (sh, r) => {
+          m.onBeforeCompile(sh, r);
+          sh.vertexShader = sh.vertexShader.replace('#include <shadowmap_vertex>', '\ttransformedNormal = - transformedNormal;   // сдвиг выборки тени — по исходной нормали, как у двустороннего\n#include <shadowmap_vertex>');
+          sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n#ifdef USE_ANISOTROPY\n\ttbn[0] = - tbn[0]; tbn[1] = - tbn[1];\n#endif');
+        };
+        b.customProgramCacheKey = () => m.customProgramCacheKey() + '-back';
+        m.side = THREE.FrontSide; m.shadowSide = THREE.DoubleSide; m.userData.twoPass = true;
+        back.set(m, b);
+      }
+      if (!back.has(m) || (o.name === 'hair' && (this.lite || this.flat))) continue;
+      const b = new THREE.Mesh(o.geometry, back.get(m));
+      b.renderOrder = 1; b.userData.backPass = true;
+      o.add(b);
+    }
   }
 
   /**
