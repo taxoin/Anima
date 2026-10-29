@@ -1259,7 +1259,7 @@ export class ProceduralHead {
     this.mat.lid = this._track(this.mat.skin.clone());
     this.mat.lid.vertexColors = true;
     this.mat.lid.side = THREE.DoubleSide;
-    this.mat.lid.color = new THREE.Color(P.skin).multiply(new THREE.Color(...P.lidTint));
+    this.mat.lid.color = new THREE.Color(P.skin).multiply(new THREE.Color(...(this.flat ? [1, 1, 1] : P.lidTint)));   // плоский режим: веко в тон кожи
     const mk = resolveMakeup(P.makeup);
     if (mk?.eyeshadow) {                                           // тени на подвижном веке
       const [c, a] = Array.isArray(mk.eyeshadow) ? mk.eyeshadow : ['#8a6a7a', mk.eyeshadow];
@@ -1335,6 +1335,8 @@ export class ProceduralHead {
     const pos = geo.attributes.position.array;
     this._eyeRing = new Float32Array(pos.length / 3);
     const ring = [];
+    // плоский режим (12.10): свет по нормали лица без глазницы — стенка глазницы давала резкий серп тени над веком и под глазом
+    const n0 = this.flat ? (geo.computeVertexNormals(), geo.attributes.normal.array.slice()) : null, socket = n0 && new Float32Array(pos.length / 3);
     for (let k = 0; k < pos.length; k += 3) {
       const x = pos[k], y = pos[k + 1], z = pos[k + 2];
       if (z < 0.35) continue;
@@ -1363,6 +1365,7 @@ export class ProceduralHead {
       }
       // затенение глазницы: мягкий градиент по всей стенке, а не светлое кольцо
       this._eyeRing[k / 3] = (rho < 1 ? smoothstep(0.85, 1.0, rho) : 1 - smoothstep(1.0, 1.5, rho)) * m * (dy > 0 ? 1 : 0.9);
+      if (socket) socket[k / 3] = 1 - smoothstep(1.8, 2.2, rho);
       if (rho > 0.9 && rho < 2.0) ring.push(k / 3);
     }
     // сглаживание стенки глазницы по соседям (z): крутой склон на грубой сетке иначе даёт «зубцы» в освещении
@@ -1396,6 +1399,30 @@ export class ProceduralHead {
       }
     }
     geo.computeVertexNormals();
+    if (socket) {
+      const N = geo.attributes.normal.array;
+      let best = Infinity;                                        // нормаль лица у глаза — для оболочек век (_buildEyes)
+      for (let i = 0; i < socket.length; i++) if (pos[i * 3 + 2] > 0.35) {
+        const d = Math.hypot(pos[i * 3] - E.x, pos[i * 3 + 1] - E.y);
+        if (d < best) { best = d; this._eyeFaceN = new THREE.Vector3(n0[i * 3], n0[i * 3 + 1], n0[i * 3 + 2]); }
+      }
+      // и сглаженной: мелкий рельеф исходной поверхности у глаза ложился на границу ступени островками
+      const idx = geo.index.array, nb = new Map();
+      for (let t = 0; t < idx.length; t += 3) for (let e = 0; e < 3; e++) {
+        const u = idx[t + e], w = idx[t + (e + 1) % 3];
+        if (socket[u] > 0) (nb.get(u) || nb.set(u, []).get(u)).push(w);
+        if (socket[w] > 0) (nb.get(w) || nb.set(w, []).get(w)).push(u);
+      }
+      const tmp = new Float32Array(n0.length);
+      for (let it = 0; it < 16; it++) {
+        for (const [v, L] of nb) for (let c = 0; c < 3; c++) { let sm = 0; for (const u of L) sm += n0[u * 3 + c]; tmp[v * 3 + c] = lerp(n0[v * 3 + c], sm / L.length, 0.8 * socket[v]); }
+        for (const v of nb.keys()) for (let c = 0; c < 3; c++) n0[v * 3 + c] = tmp[v * 3 + c];
+      }
+      for (let i = 0; i < socket.length; i++) if (socket[i] > 0) {
+        const w = socket[i], nx = lerp(N[i * 3], n0[i * 3], w), ny = lerp(N[i * 3 + 1], n0[i * 3 + 1], w), nz = lerp(N[i * 3 + 2], n0[i * 3 + 2], w), l = Math.hypot(nx, ny, nz) || 1;
+        N[i * 3] = nx / l; N[i * 3 + 1] = ny / l; N[i * 3 + 2] = nz / l;
+      }
+    }
     this.hm = new HeightMap(geo);
 
     // morph targets (относительные) + нормали морфов
@@ -1430,8 +1457,8 @@ export class ProceduralHead {
       if (z > 0) {
         let ao = 0;
         ao += 0.22 * G(ax, y, E.x - E.r * 0.95, 0.03, 0.03, 0.035);          // внутренний угол глаза
-        ao += 0.26 * (P.lidShade ?? 1) * this._eyeRing[k / 3];                                     // глазница / складка века
-        if (this._bagCrease) ao += 0.25 * clamp(P.eyeBags, 0, 1) * this._bagCrease[k / 3];          // слёзная борозда под мешком
+        ao += 0.26 * (this.flat ? 0 : P.lidShade ?? 1) * this._eyeRing[k / 3];   // плоский режим — без пятен: тон ровный, форму дают ступени                                     // глазница / складка века
+        if (this._bagCrease && !this.flat) ao += 0.25 * clamp(P.eyeBags, 0, 1) * this._bagCrease[k / 3];          // слёзная борозда под мешком
         ao += 0.65 * G(ax, yn, 0.05 * nw, -0.272, 0.017 * nw, 0.011);         // ноздри
         ao += 0.16 * G(x, yn, 0, -0.285, 0.07 * nw, 0.016);                    // под носом
         ao += 0.3 * G(ax, y, 0.205, -0.52, 0.022, 0.02);                       // уголки рта
@@ -1535,7 +1562,7 @@ export class ProceduralHead {
       for (let i = 0; i < p.count; i++) {
         const el = Math.asin(clamp(p.getY(i) / geo.parameters.radius, -1, 1));       // угол возвышения точки
         const fromEdge = upper ? el : -el;                                             // 0 у кромки → π/2 у полюса
-        const v = lerp(1.0, 1 - 0.3 * (P.lidShade ?? 1), smoothstep(0.35, 1.25, fromEdge)) * (fromEdge < 0.12 ? lerp(0.86, 1, fromEdge / 0.12) : 1);
+        const v = lerp(1.0, 1 - 0.3 * (this.flat ? 0 : P.lidShade ?? 1), smoothstep(0.35, 1.25, fromEdge)) * (fromEdge < 0.12 ? lerp(0.86, 1, fromEdge / 0.12) : 1);
         c.set([v, v * 0.97, v * 0.97], i * 3);
       }
       geo.setAttribute('color', new THREE.BufferAttribute(c, 3));
@@ -1630,6 +1657,16 @@ export class ProceduralHead {
       g.add(lids);
       const up = new THREE.Mesh(this._shapeLid(upGeo, sg, true), this.mat.lid);
       const lo = new THREE.Mesh(this._shapeLid(loGeo, sg, false), this.mat.lid);
+      // плоский режим (12.10): оболочка века светится почти по нормали лица — иначе на теневой стороне светлое пятно-сфера
+      // rx — поворот меша в обычном положении (веко открыто — повёрнуто, см. _update): нормаль лица переводим в его систему
+      const faceLit = (m, rx = m.rotation.x) => {
+        if (!this._eyeFaceN) return;
+        const gm = m.geometry = this._track(m.geometry.clone()), N = gm.attributes.normal, v = new THREE.Vector3();
+        const F = new THREE.Vector3(sg * this._eyeFaceN.x, this._eyeFaceN.y, this._eyeFaceN.z).applyAxisAngle(new THREE.Vector3(0, 0, 1), -sg * P.eyeTilt).applyAxisAngle(new THREE.Vector3(1, 0, 0), -rx);
+        for (let i = 0; i < N.count; i++) { v.fromBufferAttribute(N, i).lerp(F, 0.85).normalize(); N.setXYZ(i, v.x, v.y, v.z); }
+      };
+      const oS = (sg > 0 ? P.eyeOpenL : P.eyeOpenR) ?? 1, lift = (sg > 0 ? P.eyeLiftL : P.eyeLiftR) ?? 0;
+      faceLit(up, -(P.upperOpen * oS + lift) * DEG); faceLit(lo, -(P.lowerOpen * oS + lift) * DEG);
       // ресницы, тень и кромка повторяют форму кромки века
       const lash = new THREE.Mesh(this._shapeLid(lashGeo, sg, true, E.rs), this.mat.lash);
       const lashLo = new THREE.Mesh(this._shapeLid(lashLoGeo, sg, false, E.rl), lashLoMat);
@@ -1649,6 +1686,7 @@ export class ProceduralHead {
       if (creaseGeo) {
         const cr = new THREE.Mesh(this._shapeLid(creaseGeo, sg, true, E.rs), this.mat.lid);
         cr.rotation.x = -creaseEl;
+        faceLit(cr);
         cr.userData.noShadow = true;
         lids.add(cr);
       }
