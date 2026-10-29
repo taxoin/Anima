@@ -299,6 +299,8 @@ export interface FlatOptions {
   outlineColor?: string;
   /** резкий контровой свет по кромке справа сверху, 0…1; 0 — нет (по умолчанию) */
   rim?: number;
+  /** блик-кольцо на волосах поперёк прядей, как в комиксе, 0…1; по умолчанию 0.8 */
+  shine?: number;
 }
 export type EmotionalHeadEvent = keyof EmotionalHeadEvents;
 

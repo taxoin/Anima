@@ -1033,6 +1033,34 @@ function flatRim(strength, face = false) {
 }
 
 /**
+ * Блик волос плоского режима (12.9): «ангельское кольцо», как рисуют в комиксах, — резкая светлая полоса поперёк прядей.
+ * Касательная пряди — меридиан от макушки вниз (вверх головы, спроецированный на поверхность), блик — по Kajiya–Kay
+ * от ключевого света (первый направленный свет сцены), край сглажен fwidth и изрезан зубцами по азимуту, как пряди.
+ */
+function flatShine(strength) {
+  return (sh) => {
+    sh.uniforms.uShine = { value: strength };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vShineUp;\nvarying float vShineAz;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvShineUp = normalMatrix * vec3( 0.0, 1.0, 0.0 );\n\tvShineAz = atan( position.x, position.z );');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uShine;\nvarying vec3 vShineUp;\nvarying float vShineAz;')
+      .replace('#include <opaque_fragment>', `
+#if NUM_DIR_LIGHTS > 0
+	{
+		vec3 sL = directionalLights[ 0 ].direction, sU = normalize( vShineUp ), sH = normalize( sL + normalize( vViewPosition ) );
+		vec3 sT = sU - normal * dot( sU, normal );
+		sT *= inversesqrt( max( dot( sT, sT ), 1e-6 ) );
+		float th = dot( sT, sH ), s = 1.0 - th * th;   // sin² угла между прядью и полувектором
+		float jag = abs( fract( vShineAz * 7.0 ) - 0.5 ) + 0.35 * abs( fract( vShineAz * 17.0 + 0.3 ) - 0.5 );   // зубцы прядей
+		float e = s - 0.992 + 0.012 * jag, w = max( fwidth( s ) * 0.75, 1e-4 );
+		float m = smoothstep( -w, w, e ) * smoothstep( 0.05, 0.25, dot( normal, sL ) );
+		outgoingLight = mix( outgoingLight, min( diffuseColor.rgb * 1.7 + 0.1, vec3( 1.0 ) ), m * uShine );   // светлее волос, в их тон
+	}
+#endif
+#include <opaque_fragment>`);
+  };
+}
+
+/**
  * Ступени света плоского режима (12.8): вместо выборки из шкалы — пороги по косинусу, сглаженные на ширину пикселя
  * (fwidth): граница света и тени чёткая, но без лесенки при любом разрешении. Ступени те же, что у шкалы в _flatten.
  */
@@ -3115,7 +3143,7 @@ export class ProceduralHead {
    * тип материала даёт склейке (_batchAll) больше общих групп. Цвет, карты, прозрачность, трафарет, порядок отрисовки и
    * вставки в шейдер (раскачка волос, роговица, декали) переносятся; общие материалы остаются общими.
    */
-  _flatten({ bands = 3, rim = 0 } = {}) {
+  _flatten({ bands = 3, rim = 0, shine = 0.8 } = {}) {
     // шкала ступеней: three берёт её по (cos + 1) / 2 — ступени кладём на косинус освещённой стороны (обратная — нижняя ступень)
     const n = clamp(Math.round(bands), 2, 6), W = 64, px = new Uint8Array(W * 4);
     for (let i = 0; i < W; i++) {
@@ -3145,6 +3173,7 @@ export class ProceduralHead {
       // гладкие нормали со ступенями (12.8): плоские грани упрощённой сетки давали на лице случайную мозаику
       if (!t.userData.patches?.length && Object.prototype.hasOwnProperty.call(t, 'onBeforeCompile')) addShaderPatch(t, t.customProgramCacheKey(), t.onBeforeCompile);   // раскачка волос — первой вставкой
       addShaderPatch(t, 'flat-bands' + n, flatBands(n), true);
+      if (shine > 0 && (m === this.mat.hair || m === this.mat.hairCards)) addShaderPatch(t, 'flat-shine', flatShine(shine));
       if (rim > 0 && !noRim.has(m) && !t.transparent) { const face = m === this.mat.skin; addShaderPatch(t, face ? 'flat-rim-face' : 'flat-rim', flatRim(rim, face), true); }
       cache.set(m, t);
       return t;

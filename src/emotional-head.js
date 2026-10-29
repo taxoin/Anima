@@ -581,9 +581,10 @@ export class EmotionalHead {
    * сдвинулись, не пересчитывается и не перерисовывается. Борода — сплошная, без прядей-карточек и шумовой прозрачности.
    * Риг, мимика, речь и внешность — те же. Пересобирает голову.
    * Комиксный вид (12.5): outline — чернильный контур по силуэту толщиной в пикселях экрана (outlineColor — цвет),
-   * rim — резкий контровой свет по кромке справа сверху, 0…1. По умолчанию оба выключены.
+   * rim — резкий контровой свет по кромке справа сверху, 0…1. По умолчанию оба выключены. shine (12.9) — блик-кольцо
+   * на волосах поперёк прядей от ключевого света, 0…1, по умолчанию 0.8.
    *   head.setFlat(true); head.setFlat({ bands: 2, fps: 24 }); head.setFlat({ outline: 1.5, rim: 0.6 }); head.setFlat(false)
-   * @param {boolean|{bands?: number, pixel?: number, fps?: number, detail?: 'high'|'medium'|'low', tris?: number, outline?: number, outlineColor?: string, rim?: number}} cfg
+   * @param {boolean|{bands?: number, pixel?: number, fps?: number, detail?: 'high'|'medium'|'low', tris?: number, outline?: number, outlineColor?: string, rim?: number, shine?: number}} cfg
    */
   setFlat(cfg = true) {
     this.options.flat = cfg;
@@ -599,7 +600,7 @@ export class EmotionalHead {
     const f = this.options.flat;
     if (!f) return null;
     const o = f === true ? {} : f;
-    return { bands: o.bands ?? 3, pixel: Math.max(1, o.pixel ?? 1), fps: o.fps ?? 30, tris: o.tris ?? 6000, detail: resolveDetail(o.detail ?? 'low'), outline: Math.max(0, +o.outline || 0), outlineColor: o.outlineColor ?? '#1c1418', rim: clamp(+o.rim || 0, 0, 1) };
+    return { bands: o.bands ?? 3, pixel: Math.max(1, o.pixel ?? 1), fps: o.fps ?? 30, tris: o.tris ?? 6000, detail: resolveDetail(o.detail ?? 'low'), outline: Math.max(0, +o.outline || 0), outlineColor: o.outlineColor ?? '#1c1418', rim: clamp(+o.rim || 0, 0, 1), shine: clamp(o.shine ?? 0.8, 0, 1) };
   }
   /** Состояние адаптивного режима: { step, detail, pixelRatio, refreshHz, ceiling, changes } или null. */
   getAdaptive() {
@@ -981,7 +982,7 @@ export class EmotionalHead {
     const shadows = this._applyShadows();                         // уровень детализации мог смениться через options.detail
     const F = this._flat();
     const lite = this._lite();
-    return new ProceduralHead({ gender, shadows, overrides, detail: this._detailNow(), flat: F && { bands: F.bands, tris: F.tris, outline: F.outline, outlineColor: F.outlineColor, rim: F.rim }, lite, tris: lite ? LITE.tris : 0 });
+    return new ProceduralHead({ gender, shadows, overrides, detail: this._detailNow(), flat: F && { bands: F.bands, tris: F.tris, outline: F.outline, outlineColor: F.outlineColor, rim: F.rim, shine: F.shine }, lite, tris: lite ? LITE.tris : 0 });
   }
 
   /**

@@ -47,7 +47,7 @@ el?.setEmotion('happy');
 const el2: EmotionalHeadElement | null = el;
 console.log(el2?.head?.getDetail());
 head.setFlat({ pixel: 2, bands: 4 }).setFlat(false);
-head.setFlat({ tris: 3000 }).setFlat({ tris: 0 }).setFlat({ outline: 1.5, outlineColor: '#202020', rim: 0.6 });
+head.setFlat({ tris: 3000 }).setFlat({ tris: 0 }).setFlat({ outline: 1.5, outlineColor: '#202020', rim: 0.6, shine: 0.5 });
 head.on('flatChange', (f) => console.log(f?.pixel));
 const q: 'lite' | 'high' = head.setQuality('high').setQuality().getQuality();
 head.on('qualityChange', (e) => console.log(e.quality, q));
