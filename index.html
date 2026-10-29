@@ -168,6 +168,7 @@
       </div>
       <div class="row"><label>Плоский режим</label>
         <select id="flatSel" title="Быстрая отрисовка: плоские грани, свет ступенями, без теней и отражений; кадр мельче с крупным пикселем"><option value="">выкл</option><option value="1">гладкий</option><option value="2">пиксель 2</option><option value="3">пиксель 3</option><option value="4">пиксель 4</option></select>
+        <label title="Комиксный вид плоского режима: чернильный контур по силуэту и резкий контровой свет (setFlat({ outline, rim }))"><input type="checkbox" id="inkChk" checked> контур и контровой свет</label>
         <label>в покое</label>
         <select id="idleFpsSel" title="Пока голова молчит и ничего быстрого не происходит — не больше стольких кадров в секунду (head.setIdleFps): дыханию и морганию хватает, батарея живёт дольше"><option value="20">20 к/с</option><option value="30" selected>30 к/с</option><option value="0">без огранич.</option></select>
         <span class="hint" id="fpsInfo"></span>
@@ -364,7 +365,13 @@ const showDetail = () => {
   const ad = head.getAdaptive(), pr = head.renderer.getPixelRatio();
   $('#detailInfo').textContent = `${head.getQuality() === 'lite' && !head.getFlat() ? 'лёгкое' : head.getDetail()}${ad ? ` · ×${pr}` : ''}, ${Math.round(t / 1000)} тыс. треуг.`;
 };
-$('#flatSel').onchange = (e) => { const v = +e.target.value; api(v ? `head.setFlat({ pixel: ${v} })` : 'head.setFlat(false)', () => head.setFlat(v ? { pixel: v } : false)); setTimeout(showDetail); };
+const applyFlat = () => {
+  const v = +$('#flatSel').value, ink = $('#inkChk').checked;
+  const cfg = v ? { pixel: v, ...(ink ? { outline: 1.5, rim: 0.6 } : {}) } : false;
+  api(v ? `head.setFlat({ pixel: ${v}${ink ? ', outline: 1.5, rim: 0.6' : ''} })` : 'head.setFlat(false)', () => head.setFlat(cfg)); setTimeout(showDetail);
+};
+$('#flatSel').onchange = applyFlat;
+$('#inkChk').onchange = () => { if (+$('#flatSel').value) applyFlat(); };
 { let f0 = 0, t0 = performance.now(); setInterval(() => { const f = head.renderer.info.render.frame, t = performance.now(); $('#fpsInfo').textContent = `${Math.round((f - f0) * 1000 / (t - t0))} кадр/с`; f0 = f; t0 = t; }, 1000); }   // реально отрисованные кадры
 $('#qualitySel').onchange = (e) => { const q = e.target.value; api(`head.setQuality('${q}')`, () => head.setQuality(q)); $('#detailSel').disabled = q !== 'high'; setTimeout(showDetail); };
 $('#detailSel').onchange = (e) => { api(`head.setDetail('${e.target.value}')`, () => head.setDetail(e.target.value)); showDetail(); };

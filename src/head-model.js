@@ -999,6 +999,30 @@ function addShaderPatch(mat, key, fn, safe = false) {
 }
 
 /**
+ * Контровой свет плоского режима (12.5): резкая светлая кромка по силуэту со стороны контрового света (справа сверху
+ * в кадре, как rim у схем света). Порог по углу между нормалью и взглядом, без плавного перехода — как в комиксе.
+ * strength — доля смешивания с осветлённым цветом поверхности.
+ */
+function flatRim(strength) {
+  return (sh) => {
+    sh.uniforms.uRim = { value: strength };
+    // нормаль — гладкая, своя (у плоских граней кромка ложилась бы целыми гранями)
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vRimN;')
+      .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\n\tvRimN = transformedNormal;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uRim;\nvarying vec3 vRimN;')
+      .replace('#include <opaque_fragment>', `{
+		vec3 rn = normalize( vRimN );
+		if ( dot( rn, normal ) < 0.0 ) rn = - rn;   // нормали вершин против обхода (вывернутые части, обратная сторона) — по грани
+		float f = 1.0 - max( dot( rn, normalize( vViewPosition ) ), 0.0 );
+		float side = dot( normalize( rn.xy + vec2( 1e-4 ) ), vec2( 0.6, 0.8 ) );
+		float r = step( 0.74, f ) * step( 0.5, side ) * step( 0.4, 1.0 - max( dot( normal, normalize( vViewPosition ) ), 0.0 ) );   // и грань у силуэта
+		outgoingLight = mix( outgoingLight, mix( diffuseColor.rgb, vec3( 1.0 ), 0.45 ) * 1.15, r * uRim );
+	}
+#include <opaque_fragment>`);
+  };
+}
+
+/**
  * Подповерхностное рассеяние кожи (8.2), приближённо: к обычному освещению добавляется «завёрнутый» за терминатор
  * свет (wrap), у красного канала шире — граница света и тени тёплая и мягкая, как у кожи, а не пластика. В тени
  * добавки нет: тень уже учтена в directLight.color. strength 0 — выкл.
@@ -1118,7 +1142,7 @@ export class ProceduralHead {
    */
   constructor({ gender = 'female', shadows = true, overrides = {}, detail = 'high', flat = null, lite = false, tris = 0 } = {}) {
     this.gender = gender;
-    this.flat = flat;                                             // 11.1: плоский режим { bands } — дешёвые материалы с плоскими гранями
+    this.flat = flat;                                             // 11.1: плоский режим { bands, outline, outlineColor, rim } — дешёвые материалы с плоскими гранями
     this.lite = !flat && lite;
     this.tris = flat ? flat.tris || 0 : tris;
     this.detail = resolveDetail(detail);
@@ -1231,6 +1255,7 @@ export class ProceduralHead {
     this._batchAll();
     if (this.tris) this._decimateAll(this.tris);
     this._hairTwoPass();
+    if (this.flat?.outline > 0) this._inkOutline(this.flat);
     root.traverse((o) => {
       if (o.isMesh && this.shadows && !o.userData.noShadow) { o.castShadow = !o.userData.backPass; o.receiveShadow = true; }   // изнанку волос отбрасывает лицевая сетка (shadowSide)
     });
@@ -2969,12 +2994,84 @@ export class ProceduralHead {
   }
 
   /**
+   * Чернильный контур (12.5) для плоского режима: вывернутая оболочка. Каждой крупной непрозрачной сетке (кожа, уши,
+   * волосы, тело, шляпа, оправа) — дочерняя копия с той же геометрией, у которой рисуются только обратные грани,
+   * сдвинутые в экране по нормали на width пикселей и залитые тёмным. За лицевыми гранями копию не видно; она
+   * выглядывает по силуэту и там, где одна часть заходит за другую (челюсть на фоне шеи, ухо, нос в профиль).
+   * Толщина — в пикселях экрана (не меньше одного пикселя кадра при крупном пикселе). Морфы — общие с сеткой
+   * (ссылка на тот же массив весов), раскачка волос — та же. Мимо: сетки на костях (веки), пересчитываемые на CPU
+   * брови и губы, рот с трафаретом, всё без теста глубины, прозрачное и мелкое.
+   */
+  _inkOutline({ outline: width, outlineColor = '#1c1418' }) {
+    const U = { uOutline: { value: width }, uRes: { value: new THREE.Vector2(1, 1) } }, size = new THREE.Vector2();
+    const make = (sway) => {
+      const m = this._track(new THREE.MeshBasicMaterial({ color: outlineColor, side: THREE.BackSide }));
+      m.onBeforeCompile = (sh) => {
+        Object.assign(sh.uniforms, U, sway ? { uHairSwing: this._hairU.uHairSwing } : {});
+        sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uOutline;\nuniform vec2 uRes;' + (sway ? '\nattribute float hairSw;\nuniform vec3 uHairSwing;' : ''))
+          .replace('#include <begin_vertex>', '#include <begin_vertex>' + (sway ? '\n\ttransformed += uHairSwing * hairSw;' : ''))
+          .replace('#include <project_vertex>', `#include <project_vertex>
+	{
+		vec2 nC = ( projectionMatrix * vec4( normalize( normalMatrix * normal ), 0.0 ) ).xy;
+		float l = length( nC );
+		if ( l > 1e-5 ) gl_Position.xy += nC / l * uOutline * 2.0 / uRes * gl_Position.w;
+	}`);
+      };
+      m.customProgramCacheKey = () => 'flat-outline' + (sway ? '-sway' : '');
+      return m;
+    };
+    const mats = {};
+    const skip = new Set(), mark = (o) => o?.traverse((q) => skip.add(q));
+    for (const e of this.eyes || []) mark(e.group);
+    for (const k of ['cav', 'tongue', 'gumsL', 'teethL', 'bracesL', 'gumsU', 'teethU', 'bracesU', 'lipU', 'lipL']) mark(this.mouth?.[k]);
+    const list = [];
+    this.object3D.traverse((o) => {
+      if (!o.isMesh || o.isSkinnedMesh || skip.has(o) || o.userData.backPass || o.name === 'batchDyn' || !o.geometry.attributes.normal) return;
+      const ms = [].concat(o.material), g = o.geometry;
+      if ((g.index ? g.index.count : g.attributes.position.count) / 3 < 100) return;
+      // двусторонние части (у шеи, воротника, бороды лицевая сторона может смотреть внутрь) — без контура: копия их бы закрасила
+      const ok = (m) => m !== HIDDEN_MAT && m.visible && !m.transparent && m.depthTest !== false && !m.stencilWrite && !(m.alphaTest > 0) && m.side === THREE.FrontSide;
+      if (Array.isArray(o.material) ? !o.material.some(ok) : !ok(o.material)) return;
+      list.push(o);
+    });
+    const body = new Set(); this.body?.traverse((q) => body.add(q));
+    // тело: шея вывернута внутрь (профиль LatheGeometry сверху вниз — видна дальняя стенка изнутри), её копия закрасила бы
+    // шею ближней стенкой. Контур тела — только из граней, смотрящих наружу от оси туловища (x = 0, z = −0,15)
+    const outward = (g) => {
+      const P = g.attributes.position, I = g.index, keep = [], a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
+      const og = this._track(new THREE.BufferGeometry());
+      for (const gr of g.groups.length ? g.groups : [{ start: 0, count: I.count, materialIndex: 0 }]) {
+        const start = keep.length;
+        for (let t = gr.start; t < Math.min(I.count, gr.start + gr.count); t += 3) {
+          a.fromBufferAttribute(P, I.getX(t)); b.fromBufferAttribute(P, I.getX(t + 1)); c.fromBufferAttribute(P, I.getX(t + 2));
+          n.subVectors(b, a).cross(c.sub(a));
+          const cx = (a.x * 2 + b.x + c.x) / 3, cz = (a.z * 2 + b.z + c.z) / 3 + 0.15;   // c уже c − a: центр = a + (b − a + c − a) / 3
+          if (n.x * cx + n.z * cz >= 0) keep.push(I.getX(t), I.getX(t + 1), I.getX(t + 2));
+        }
+        if (g.groups.length) og.addGroup(start, keep.length - start, gr.materialIndex);
+      }
+      for (const k in g.attributes) og.setAttribute(k, g.attributes[k]);
+      og.setIndex(keep);
+      return og;
+    };
+    for (const o of list) {
+      const sway = !!o.geometry.attributes.hairSw, om = mats[sway] ||= make(sway);
+      const c = new THREE.Mesh(body.has(o) && o.geometry.index ? outward(o.geometry) : o.geometry, Array.isArray(o.material) ? o.material.map((m) => (m.visible && !m.transparent && m.depthTest !== false && !m.stencilWrite && !(m.alphaTest > 0) && m.side === THREE.FrontSide ? om : HIDDEN_MAT)) : om);
+      if (o.morphTargetInfluences) { c.morphTargetInfluences = o.morphTargetInfluences; c.morphTargetDictionary = o.morphTargetDictionary; }
+      c.userData.outline = c.userData.noShadow = true;
+      c.frustumCulled = o.frustumCulled;
+      c.onBeforeRender = (r) => { r.getDrawingBufferSize(size); U.uRes.value.copy(size); U.uOutline.value = Math.max(1, width * r.getPixelRatio()); };
+      o.add(c);
+    }
+  }
+
+  /**
    * Плоский режим (11.1): все материалы → MeshToonMaterial с плоскими гранями и светом в несколько ступеней (bands).
    * Без PBR, отражений окружения, лака, отлива, рассеяния и анизотропии — пиксельный шейдер в разы дешевле, а одинаковый
    * тип материала даёт склейке (_batchAll) больше общих групп. Цвет, карты, прозрачность, трафарет, порядок отрисовки и
    * вставки в шейдер (раскачка волос, роговица, декали) переносятся; общие материалы остаются общими.
    */
-  _flatten({ bands = 3 } = {}) {
+  _flatten({ bands = 3, rim = 0 } = {}) {
     // шкала ступеней: three берёт её по (cos + 1) / 2 — ступени кладём на косинус освещённой стороны (обратная — нижняя ступень)
     const n = clamp(Math.round(bands), 2, 6), W = 64, px = new Uint8Array(W * 4);
     for (let i = 0; i < W; i++) {
@@ -2986,6 +3083,11 @@ export class ProceduralHead {
     const KEYS = ['color', 'map', 'alphaMap', 'vertexColors', 'side', 'transparent', 'opacity', 'alphaTest', 'alphaHash', 'alphaToCoverage', 'depthTest', 'depthWrite', 'depthFunc', 'colorWrite',
       'stencilWrite', 'stencilFunc', 'stencilRef', 'stencilFuncMask', 'stencilWriteMask', 'stencilFail', 'stencilZFail', 'stencilZPass', 'polygonOffset', 'polygonOffsetFactor', 'polygonOffsetUnits', 'blending', 'visible', 'name'];
     const cache = new Map([[HIDDEN_MAT, HIDDEN_MAT]]);
+    // контровой свет (12.5) — силуэт головы, волос и одежды; глазам, рту, ресницам, бровям и губам кромка не нужна
+    const noRim = new Set([this.mat.eye, this.mat.eyeR, this.mat.lash, this.mat.brow, this.mat.lip]), skip = (o) => o?.traverse((q) => { if (q.isMesh) for (const m of [].concat(q.material)) noRim.add(m); });
+    for (const e of this.eyes || []) skip(e.group);
+    const M = this.mouth || {};
+    for (const k of ['cav', 'tongue', 'gumsL', 'teethL', 'bracesL', 'gumsU', 'teethU', 'bracesU', 'lipU', 'lipL']) skip(M[k]);
     const conv = (m) => {
       if (!m || cache.has(m)) return cache.get(m) ?? m;
       if (m.isMeshDepthMaterial || m.isShaderMaterial) { cache.set(m, m); return m; }
@@ -2997,6 +3099,10 @@ export class ProceduralHead {
       if (m.emissive && m.emissive.getHex()) { t.emissive = m.emissive.clone(); t.emissiveIntensity = m.emissiveIntensity ?? 1; }
       if (m.userData.patches?.length) for (const pt of m.userData.patches) { if (pt.fn) addShaderPatch(t, pt.key, pt.fn, pt.safe); }
       else if (Object.prototype.hasOwnProperty.call(m, 'onBeforeCompile')) { t.onBeforeCompile = m.onBeforeCompile; t.customProgramCacheKey = m.customProgramCacheKey; }
+      if (rim > 0 && !noRim.has(m) && !t.transparent) {
+        if (!t.userData.patches?.length && Object.prototype.hasOwnProperty.call(t, 'onBeforeCompile')) addShaderPatch(t, t.customProgramCacheKey(), t.onBeforeCompile);   // раскачка волос — первой вставкой
+        addShaderPatch(t, 'flat-rim', flatRim(rim), true);
+      }
       cache.set(m, t);
       return t;
     };

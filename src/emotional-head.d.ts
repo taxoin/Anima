@@ -291,6 +291,12 @@ export interface FlatOptions {
   fps?: number;
   detail?: DetailLevel;
   tris?: number;
+  /** чернильный контур по силуэту, толщина в пикселях экрана; 0 — нет (по умолчанию) */
+  outline?: number;
+  /** цвет контура, по умолчанию '#1c1418' */
+  outlineColor?: string;
+  /** резкий контровой свет по кромке справа сверху, 0…1; 0 — нет (по умолчанию) */
+  rim?: number;
 }
 export type EmotionalHeadEvent = keyof EmotionalHeadEvents;
 
