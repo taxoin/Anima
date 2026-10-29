@@ -37,7 +37,7 @@ async function main() {
 }
 main();
 
-const look: Look = { hairStyle: 'bob', hairGray: 0.4, beard: null, mask: 'n95', contactShadows: false, skinScatter: 0.5 };
+const look: Look = { hairStyle: 'bob', hairGray: 0.4, beard: null, mask: 'n95', contactShadows: false, skinScatter: 0.5, eyeBags: 0.6 };
 head.setLook(look, { replace: true });
 console.log(resolveEmotion('jaded').mix, parseNarrative('Я хмурюсь').gestures, buildTimeline('привет').duration, parseMarkup('[g:nod] да').cues[0]?.type);
 

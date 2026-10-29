@@ -490,6 +490,7 @@ export class Portrait {
     this._hair();
     this._facialHair();
     this._glasses();
+    this._bags();
     this._hat();
     this._texture();
     this._explain();
@@ -1019,6 +1020,45 @@ export class Portrait {
   }
 
   /**
+   * Мешки под глазами (12.7): профиль яркости от нижнего века к щеке в трёх вертикалях под каждым глазом.
+   * Мешок — впадина в профиле (тень под валиком, ниже светлая щека): глубина = min(максимум выше, максимум ниже) − точка,
+   * в долях яркости щеки. Просто «темнее щеки» путает мешки с пигментацией. По 147 портретам: молодые 0–0.15,
+   * Линкольн 0.54, Эйнштейн 0.45, Байден 0.41. Оправа очков даёт ту же впадину — при найденных очках 0.
+   */
+  _bags() {
+    this.bags = 0;
+    if (this.glasses?.detected) return;
+    const P = this.px, r = 0.022 / this.frame.s, at = (i) => P[i];
+    const mix = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+    const L = (q, rad) => {                                          // медиана яркости по маленькому диску
+      const a = [], st = Math.max(1, rad / 6);
+      for (let y = -rad; y <= rad; y += st) for (let x = -rad; x <= rad; x += st) {
+        if (x * x + y * y > rad * rad) continue;
+        const c = this._rgb(q.x + x, q.y + y); if (c) a.push(lum(...c));
+      }
+      return a.length ? a.sort((u, v) => u - v)[a.length >> 1] : null;
+    };
+    let deep = 0, n = 0, cheek = 0;
+    for (const [lid, ch, inn, out] of [[145, 50, 133, 33], [374, 280, 362, 263]]) {
+      const c0 = mix(at(inn), at(out), 0.5), dl = { x: at(lid).x - c0.x, y: at(lid).y - c0.y };
+      const down = { x: at(ch).x - at(lid).x, y: at(ch).y - at(lid).y };
+      for (const t of [0.3, 0.5, 0.7]) {
+        const l = mix(at(inn), at(out), t), top = { x: l.x + dl.x, y: l.y + dl.y }, bot = { x: top.x + down.x, y: top.y + down.y };
+        const v = [];
+        for (let j = 0; j <= 16; j++) v.push(L(mix(top, bot, 0.06 + 0.94 * j / 16), r * 0.18));
+        if (v.some((x) => x === null)) continue;
+        let best = 0;
+        for (let j = 2; j < v.length - 2; j++) best = Math.max(best, Math.min(Math.max(...v.slice(0, j)), Math.max(...v.slice(j + 1))) - v[j]);
+        deep += best; n++; cheek += v[v.length - 1];
+      }
+    }
+    if (n < 3) return;
+    this.bagsRaw = deep / n / Math.max(0.05, cheek / n);
+    // порог: до 0.22 — обычная светотень у молодых (Обама 0.22), к 0.5 — выраженные мешки; при повороте профиль искажён
+    this.bags = smoothstep(0.22, 0.5, this.bagsRaw) * (1 - smoothstep(0.2, 0.4, Math.abs(this.yaw || 0)));
+  }
+
+  /**
    * Очки по маске «прочее» многоклассового сегментатора (только при accessories: true): доля пикселей класса
    * вокруг глаз (на калибровочных фото без очков — ровно 0, в очках — 0.014–0.06), размер и форма оправы по
    * их разбросу, цвет — по пикселям снимка. this.glasses = null, если сегментатор не запускали.
@@ -1377,6 +1417,7 @@ export class Portrait {
     if (this.irisColor && !this.grayscale) ov.iris = [hex(this.irisColor.map((v) => v * 1.25)), hex(this.irisColor.map((v) => v * 0.55))];
     if (this.lidTex && tex > 0) ov.lidTint = this.lidTex.map((v) => lerp(1, v, tex));
     if (this.beard > 0.05) ov.stubble = this.beard * 2.2;      // борода/щетина: затемнение челюсти и усов поверх текстуры
+    if (this.bags > 0.02) ov.eyeBags = +clamp(this.bags * k / 1.5, 0, 1).toFixed(3);   // мешки под глазами (12.7)
     if (this.hairColor) ov.hair = hex(this.hairColor.map((v) => v * 1.05));
     Object.assign(ov, this._eyeAsymOv(k, eyeR));
     Object.assign(ov, this._lipAsymOv(k, ov.mouthHW));
@@ -1530,7 +1571,7 @@ export class Portrait {
       colors: { skinPhoto: rc(this.skinPhoto), skin: rc(this.skinTex), skinLow: rc(this.skinLow), lip: rc(this.lipColor), brow: rc(this.browColor), iris: rc(this.irisColor), hair: rc(this.hairColor), cloth: rc(this.clothColor) },
       teeth: this.teethTone ? { d: r4(this.teethTone.d) } : null,
       outfit: this.outfitRaw ? { ...this.outfitRaw, spread: undefined, Cs: rc(this.outfitRaw.Cs), Csh: rc(this.outfitRaw.Csh), Ct: rc(this.outfitRaw.Ct) } : null,
-      lidTex: rc(this.lidTex), beard: r4(this.beard), grayscale: !!this.grayscale, glasses: this.glasses || null, beardStyle: this.beardStyle || null, hat: this.hat || null,
+      lidTex: rc(this.lidTex), beard: r4(this.beard), bags: r4(this.bags || 0), grayscale: !!this.grayscale, glasses: this.glasses || null, beardStyle: this.beardStyle || null, hat: this.hat || null,
       bs: this.bs ? Object.fromEntries(Object.entries(this.bs).filter(([, v]) => v > 0.03).map(([k, v]) => [k, Math.round(v * 100) / 100])) : null,
       hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY), r: this.hairR ? this.hairR.map(r4) : null, bang: this.bang ? { side: this.bang.side, depth: r4(this.bang.depth) } : null, gray: r4(this.hairGray || 0), grayColor: rc(this.hairGrayColor), vari: r4(this.hairVar) },
       profile: this.profile ? { params: this.profile.params, rms: this.profile.rms, side: this.profile.side, warnings: this.profile.warnings } : null,
@@ -1575,7 +1616,7 @@ export class Portrait {
     const C = d.colors || {};
     p.skinPhoto = C.skinPhoto || C.skin || [0.85, 0.68, 0.58]; p.skinTex = C.skin || p.skinPhoto; p.skinLow = C.skinLow || null;
     p.lipColor = C.lip; p.browColor = C.brow; p.irisColor = C.iris; p.hairColor = C.hair; p.clothColor = C.cloth;
-    p.lidTex = d.lidTex; p.beard = d.beard || 0; p.grayscale = !!d.grayscale; p.bs = d.bs || null; p.glasses = d.glasses || null; p.beardStyle = d.beardStyle || null; p.hat = d.hat || null;
+    p.lidTex = d.lidTex; p.beard = d.beard || 0; p.bags = d.bags || 0; p.grayscale = !!d.grayscale; p.bs = d.bs || null; p.glasses = d.glasses || null; p.beardStyle = d.beardStyle || null; p.hat = d.hat || null;
     p.hairStyle = d.hair?.style ?? null; p.hairBottom = d.hair?.bottom ?? null; p.hairlineY = d.hair?.line ?? null;
     p.hairR = d.hair?.r ?? null; p.bang = d.hair?.bang ?? null;
     p.teethTone = d.teeth ? { d: d.teeth.d } : null;
@@ -1602,7 +1643,7 @@ export class Portrait {
   get report() {
     const hx = (c) => (c ? hex(c) : null);
     return {
-      warnings: this.warnings, issues: this.issues || [], yaw: +this.yaw.toFixed(3), expression: this.expression, glasses: this.glasses, beard: this.beardStyle, hat: this.hat || null, teeth: this.teethTone ? +this.teethTone.d.toFixed(3) : null, outfit: this._outfitOv(this._gender || 'male').outfit || null,
+      warnings: this.warnings, issues: this.issues || [], yaw: +this.yaw.toFixed(3), expression: this.expression, glasses: this.glasses, beard: this.beardStyle, bags: +(this.bags || 0).toFixed(2), hat: this.hat || null, teeth: this.teethTone ? +this.teethTone.d.toFixed(3) : null, outfit: this._outfitOv(this._gender || 'male').outfit || null,
       hairStyle: this.hairStyle, colors: { skin: hx(this.skinTex), lip: hx(this.lipColor), brow: hx(this.browColor), iris: hx(this.irisColor), hair: hx(this.hairColor), hairGray: hx(this.hairGrayColor), cloth: hx(this.clothColor) },
       hairGray: +(this.hairGray || 0).toFixed(2), hairVar: this.hairVar === null || this.hairVar === undefined ? null : +this.hairVar.toFixed(2),
       measures: Object.fromEntries(Object.entries(this.meas).filter(([, v]) => typeof v === 'number').map(([k, v]) => [k, +(v / MEAN_M[k]).toFixed(3)])),

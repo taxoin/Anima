@@ -88,6 +88,8 @@ export interface Look {
   // кожа: декали
   makeup?: MakeupPreset | { blush?: [Color, number]; contour?: number; eyeshadow?: [Color, number]; eyeliner?: number; wing?: number; lipstick?: Color | null; gloss?: number };
   freckles?: number; moles?: number; age?: number;
+  /** мешки под глазами 0..1: валик под нижним веком и слёзная борозда (у фото-аватара — по снимку) */
+  eyeBags?: number;
   // одежда и аксессуары
   outfit?: Outfit;
   cloth?: Color; cloth2?: Color; tie?: Color | false; clothFolds?: number;

@@ -1333,6 +1333,22 @@ export class ProceduralHead {
         ring.forEach((v, j) => { pos[v * 3 + 2] = tmpZ[j]; });
       }
     }
+    // мешки под глазами (eyeBags 0..1, с фото — 12.7): мягкий валик сразу под оболочкой нижнего века и слёзная борозда под ним.
+    // Отдельная форма, а не открытая оболочка века (lidCover: 0): та даёт ровную блестящую полусферу — «жабий» глаз
+    this._bagCrease = null;
+    if (P.eyeBags > 0) {
+      const A = 0.02 * clamp(P.eyeBags, 0, 1), bell = (u, c, w) => Math.exp(-(((u - c) / w) ** 2));
+      this._bagCrease = new Float32Array(pos.length / 3);
+      for (let k = 0; k < pos.length; k += 3) {
+        if (pos[k + 2] < 0.35) continue;
+        const dx = Math.abs(pos[k]) - E.x, dy = pos[k + 1] - E.y, dist = Math.hypot(dx, dy);
+        if (dy >= 0 || dist < 1e-6) continue;
+        const rho = dist / E.rl, down = smoothstep(0.2, 0.65, -dy / dist) * (1 - 0.3 * smoothstep(0, -1, dx / dist));   // к носу слабее
+        if (rho > 2.2) continue;
+        pos[k + 2] += A * down * (bell(rho, 1.24, 0.2) - 0.45 * bell(rho, 1.62, 0.12));
+        this._bagCrease[k / 3] = down * bell(rho, 1.6, 0.14);
+      }
+    }
     geo.computeVertexNormals();
     this.hm = new HeightMap(geo);
 
@@ -1369,6 +1385,7 @@ export class ProceduralHead {
         let ao = 0;
         ao += 0.22 * G(ax, y, E.x - E.r * 0.95, 0.03, 0.03, 0.035);          // внутренний угол глаза
         ao += 0.26 * (P.lidShade ?? 1) * this._eyeRing[k / 3];                                     // глазница / складка века
+        if (this._bagCrease) ao += 0.25 * clamp(P.eyeBags, 0, 1) * this._bagCrease[k / 3];          // слёзная борозда под мешком
         ao += 0.65 * G(ax, yn, 0.05 * nw, -0.272, 0.017 * nw, 0.011);         // ноздри
         ao += 0.16 * G(x, yn, 0, -0.285, 0.07 * nw, 0.016);                    // под носом
         ao += 0.3 * G(ax, y, 0.205, -0.52, 0.022, 0.02);                       // уголки рта
