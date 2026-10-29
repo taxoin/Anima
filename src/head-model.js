@@ -36,13 +36,20 @@ export function prof(arr, y) {
 }
 
 // ------------------------------------------------------------------ параметры полов
+/**
+ * Отделка глаза (12.6), пропорций не меняет: раньше она была только в мультяшности, а без неё глаза выглядели
+ * выпуклыми, «жабьими». Под глазом выпирала полусфера нижнего века с канавкой (lidCover — кожа обтягивает её низ),
+ * вокруг лежало тёмное кольцо (lidShade), яблоко сидело мелко (eyeDepth — глубже: без этого в лёгком качестве под
+ * глазом оставалась светлая ступенька), веко отличалось по тону (lidTint ближе к коже), не было блика (catchlight).
+ */
+const EYE_FINISH = { eyeDepth: 0.03, lidCover: 1, lidShade: 0.25, catchlight: 0.8 };
 export const PRESETS = {
   female: {
     gx: [0.70, 0.75, 0.77, 0.77, 0.755, 0.725, 0.68, 0.6, 0.5],
     gzF: [0.80, 0.84, 0.88, 0.90, 0.89, 0.91, 0.98, 1.08, 1.12],
     gzB: [0.80, 0.92, 1.00, 1.03, 1.00, 0.90, 0.72, 0.58, 0.50],
     nose: 0.14, browRidge: 0.025, chin: 0.05, chinSX: 0.1, cheek: 0.05, hollow: 0.0,
-    eyeR: 0.116, eyeTilt: 0.09, upperOpen: 25, lowerOpen: -23, lidTint: [0.97, 0.93, 0.93],
+    eyeR: 0.116, eyeTilt: 0.09, upperOpen: 25, lowerOpen: -23, lidTint: [0.99, 0.97, 0.97], ...EYE_FINISH,
     lipU: 0.048, lipL: 0.062, mouthHW: 0.185,
     brow: { y: 0.205, arch: 0.05, thick: 0.02, color: '#3a2318' },
     skin: '#eab9a0', lip: '#b9535b', hair: '#4a2616', iris: ['#5b7a3e', '#2f4a22'], lash: 0.0075,
@@ -53,7 +60,7 @@ export const PRESETS = {
     gzF: [0.80, 0.84, 0.89, 0.91, 0.90, 0.92, 0.99, 1.10, 1.16],
     gzB: [0.80, 0.92, 1.00, 1.03, 1.00, 0.90, 0.72, 0.58, 0.50],
     nose: 0.165, browRidge: 0.05, chin: 0.065, chinSX: 0.15, cheek: 0.04, hollow: 0.02,
-    eyeR: 0.11, eyeTilt: 0.04, upperOpen: 22, lowerOpen: -22, lidTint: [0.97, 0.96, 0.96],
+    eyeR: 0.11, eyeTilt: 0.04, upperOpen: 22, lowerOpen: -22, lidTint: [0.99, 0.98, 0.98], ...EYE_FINISH,
     lipU: 0.04, lipL: 0.056, mouthHW: 0.19,
     brow: { y: 0.19, arch: 0.022, thick: 0.028, color: '#231812' },
     skin: '#d9a487', lip: '#a8645c', hair: '#1f1712', iris: ['#5a4632', '#2a1f14'], lash: 0.005,
@@ -209,7 +216,7 @@ export function applyToon(P, gender = 'female') {
   const o = { ...P }, r0 = P.eyeR;
   o.eyeR = r0 * (1 + 0.42 * t);
   o.eyeX = (P.eyeX ?? LAYOUT.eyeX) + 0.6 * (o.eyeR - r0);                // внутренние углы почти на месте
-  o.eyeDepth = (P.eyeDepth || 0) + 1.35 * (o.eyeR - r0);                // крупное яблоко глубже: видна плоская «шапка», без мешков
+  o.eyeDepth = (P.eyeDepth || 0) + Math.max(0, 1.35 * (o.eyeR - r0) - EYE_FINISH.eyeDepth * t);   // крупное яблоко глубже: видна плоская «шапка», без мешков (часть глубины уже в отделке, 12.6)
   o.irisScale = (P.irisScale ?? 1) * (1 + 0.32 * t);
   o.lidShade = (P.lidShade ?? 1) * (1 - 0.75 * t);                      // без тёмного кольца вокруг глаза («мешков»)
   o.lidCover = (P.lidCover || 0) + Math.min(1, 3 * t);                                    // кожа под глазом обтягивает оболочку века, без канавки
@@ -240,7 +247,7 @@ export function applyToon(P, gender = 'female') {
   o.hairBottom = (P.hairBottom ?? -1.55) + 0.2 * t;                      // длинные волосы кончаются над узкими кукольными плечами
   if (t > 0.4 && P.hairCards === undefined && !P.hairCurl) o.hairCards = false;
   if (P.skinScatter !== false) o.skinScatter = (P.skinScatter ?? 0.7) * (1 + 0.5 * t);
-  o.catchlight = (P.catchlight || 0) + t;
+  o.catchlight = Math.min(1, (P.catchlight || 0) + t);
   return o;
 }
 
@@ -1449,8 +1456,9 @@ export class ProceduralHead {
     this._corneaU = { value: 1 };
     this._pupilU = { value: 1 };
     const cu = P.cornea === false ? { value: 0 } : this._corneaU;    // без роговицы шейдер нужен только для зрачка
-    corneaShader(this.mat.eye, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1, P.catchlight || 0);
-    if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1, P.catchlight || 0);
+    const catchK = this.flat ? 0 : P.catchlight || 0;                // плоский режим: по нормали граней блик выходил гранёным клином
+    corneaShader(this.mat.eye, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1, catchK);
+    if (this.mat.eyeR !== this.mat.eye) corneaShader(this.mat.eyeR, E.r, cu, this._pupilU, (P.pupil ?? 0.155) * (P.irisScale ?? 1), P.irisScale ?? 1, catchK);
     const phiS = Math.PI / 2 - 1.75, phiL = 3.5;
     const lv = this.tris ? (this.flat ? 0.36 : 0.5) : 1, ru = Math.round(14 * lv), rlo = Math.round(10 * lv);
     // грубая оболочка века: хорды проходят внутри сферы — раздуваем её на прогиб хорды (описанный многогранник), иначе веко срезает роговицу
