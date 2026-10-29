@@ -1010,22 +1010,40 @@ function addShaderPatch(mat, key, fn, safe = false) {
  * в кадре, как rim у схем света). Порог по углу между нормалью и взглядом, без плавного перехода — как в комиксе.
  * strength — доля смешивания с осветлённым цветом поверхности.
  */
-function flatRim(strength) {
+function flatRim(strength, face = false) {
   return (sh) => {
     sh.uniforms.uRim = { value: strength };
     // нормаль — гладкая, своя (у плоских граней кромка ложилась бы целыми гранями)
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vRimN;')
-      .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\n\tvRimN = transformedNormal;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uRim;\nvarying vec3 vRimN;')
+    // face (кожа, 12.8): середина лица без кромки — бок носа и внутренние углы глаз по нормали тоже «силуэт», но не контур головы
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vRimN;\nvarying float vRimFace;')
+      .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\n\tvRimN = transformedNormal;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+	vRimFace = ${face ? 'smoothstep( 0.55, 0.75, transformed.z ) * ( 1.0 - smoothstep( 0.28, 0.42, abs( transformed.x ) ) )' : '0.0'};`);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uRim;\nvarying vec3 vRimN;\nvarying float vRimFace;')
       .replace('#include <opaque_fragment>', `{
 		vec3 rn = normalize( vRimN );
 		if ( dot( rn, normal ) < 0.0 ) rn = - rn;   // нормали вершин против обхода (вывернутые части, обратная сторона) — по грани
 		float f = 1.0 - max( dot( rn, normalize( vViewPosition ) ), 0.0 );
 		float side = dot( normalize( rn.xy + vec2( 1e-4 ) ), vec2( 0.6, 0.8 ) );
 		float r = step( 0.74, f ) * step( 0.5, side ) * step( 0.4, 1.0 - max( dot( normal, normalize( vViewPosition ) ), 0.0 ) );   // и грань у силуэта
-		outgoingLight = mix( outgoingLight, mix( diffuseColor.rgb, vec3( 1.0 ), 0.45 ) * 1.15, r * uRim );
+		outgoingLight = mix( outgoingLight, mix( diffuseColor.rgb, vec3( 1.0 ), 0.45 ) * 1.15, r * uRim * ( 1.0 - vRimFace ) );
 	}
 #include <opaque_fragment>`);
+  };
+}
+
+/**
+ * Ступени света плоского режима (12.8): вместо выборки из шкалы — пороги по косинусу, сглаженные на ширину пикселя
+ * (fwidth): граница света и тени чёткая, но без лесенки при любом разрешении. Ступени те же, что у шкалы в _flatten.
+ */
+function flatBands(n) {
+  return (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <gradientmap_pars_fragment>', `
+vec3 getGradientIrradiance( vec3 normal, vec3 lightDirection ) {
+	float c = dot( normal, lightDirection ), w = max( fwidth( c ) * 0.75, 1e-4 ), lv = 0.0;
+	for ( int k = 0; k < ${n - 1}; k ++ ) { float t = float( k ) / ${(n - 1).toFixed(1)}; lv += smoothstep( t - w, t + w, c ); }
+	return vec3( mix( 0.12, 1.0, lv / ${(n - 1).toFixed(1)} ) );
+}`);
   };
 }
 
@@ -1939,7 +1957,8 @@ export class ProceduralHead {
       }
       if (P.hat) { const hl = P.hat.y0 ?? HAT_LINE[P.hat.style] ?? 0.45; H = lerp(H, Math.min(H, 0.03), smoothstep(hl - 0.08, hl, tmp[1])); }   // под шапкой волосы примяты
       // у линии роста волосы сходят на нет, ниже неё поверхность уходит глубоко под кожу
-      let off = H * (0.3 + 0.7 * smoothstep(yh, yh + 0.16 + 0.3 * clamp(P.hairClump || 0, 0, 1), tmp[1])) - (0.25 + 0.3 * H) * (1 - smoothstep(yh - 0.1, yh, tmp[1]));
+      // плоский режим (12.8): погружение круче у самой линии — кожу пересекает не по касательной, кромка без рванины
+      let off = H * (0.3 + 0.7 * smoothstep(yh, yh + 0.16 + 0.3 * clamp(P.hairClump || 0, 0, 1), tmp[1])) - (0.25 + 0.3 * H) * (1 - smoothstep(yh - 0.1, yh + (this.flat ? 0.04 : 0), tmp[1]));
       if (P.hairClump && !P.hat) off += hairClumpH(a, py, P.hairClump) * (long ? 1.2 : 1) * smoothstep(yh - 0.03, yh + 0.03, tmp[1]);   // жгуты — ровной толщины до самой кромки
       const nx = px / prof(P.gx, py), ny = py, nz = pz;
       const nl = Math.hypot(nx, ny, nz) || 1;
@@ -3118,22 +3137,23 @@ export class ProceduralHead {
       if (m.isMeshDepthMaterial || m.isShaderMaterial) { cache.set(m, m); return m; }
       const t = this._track(new THREE.MeshToonMaterial({ gradientMap: grad }));
       for (const k of KEYS) if (m[k] !== undefined) t[k] = m[k]?.isColor ? m[k].clone() : m[k];
-      t.flatShading = true;
       if (t.alphaHash || t.alphaToCoverage) { t.alphaHash = t.alphaToCoverage = false; t.alphaTest = Math.max(t.alphaTest, 0.5); }   // шумовая прозрачность мерцает — резкая кромка
       if ((m.sheen ?? 0) > 0.4) t.color.multiplyScalar(1 + 0.9 * m.sheen);   // волосы и борода: отлив (sheen) давал заметную долю их яркости
       if (m.emissive && m.emissive.getHex()) { t.emissive = m.emissive.clone(); t.emissiveIntensity = m.emissiveIntensity ?? 1; }
       if (m.userData.patches?.length) for (const pt of m.userData.patches) { if (pt.fn) addShaderPatch(t, pt.key, pt.fn, pt.safe); }
       else if (Object.prototype.hasOwnProperty.call(m, 'onBeforeCompile')) { t.onBeforeCompile = m.onBeforeCompile; t.customProgramCacheKey = m.customProgramCacheKey; }
-      if (rim > 0 && !noRim.has(m) && !t.transparent) {
-        if (!t.userData.patches?.length && Object.prototype.hasOwnProperty.call(t, 'onBeforeCompile')) addShaderPatch(t, t.customProgramCacheKey(), t.onBeforeCompile);   // раскачка волос — первой вставкой
-        addShaderPatch(t, 'flat-rim', flatRim(rim), true);
-      }
+      // гладкие нормали со ступенями (12.8): плоские грани упрощённой сетки давали на лице случайную мозаику
+      if (!t.userData.patches?.length && Object.prototype.hasOwnProperty.call(t, 'onBeforeCompile')) addShaderPatch(t, t.customProgramCacheKey(), t.onBeforeCompile);   // раскачка волос — первой вставкой
+      addShaderPatch(t, 'flat-bands' + n, flatBands(n), true);
+      if (rim > 0 && !noRim.has(m) && !t.transparent) { const face = m === this.mat.skin; addShaderPatch(t, face ? 'flat-rim-face' : 'flat-rim', flatRim(rim, face), true); }
       cache.set(m, t);
       return t;
     };
     this.object3D.traverse((o) => {
       if (!o.isMesh) return;
       o.material = Array.isArray(o.material) ? o.material.map(conv) : conv(o.material);
+      // без нормалей в вершинах (полость рта — MeshBasic) — нормаль граней, иначе пустая нормаль даёт чёрный цвет
+      if (!o.geometry.attributes.normal) for (const t of [].concat(o.material)) if (t.isMeshToonMaterial && !t.flatShading) { t.flatShading = true; t.needsUpdate = true; }
       if (o.customDepthMaterial) o.customDepthMaterial = conv(o.customDepthMaterial);
     });
     for (const k in this.mat) if (this.mat[k]) this.mat[k] = conv(this.mat[k]);   // ссылки для update и материалов-клонов

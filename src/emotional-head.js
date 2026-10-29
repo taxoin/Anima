@@ -574,14 +574,15 @@ export class EmotionalHead {
   }
 
   /**
-   * Плоский быстрый режим (11.1): дешёвые материалы с плоскими гранями и светом в bands ступеней, без теней и отражений,
-   * геометрия уровня detail; по умолчанию полное разрешение со сглаженными краями, pixel > 1 — кадр в pixel раз мельче
-   * с крупным пикселем. Не больше fps кадров в секунду (0 — без ограничения); кадр, в котором каналы и поза почти не
+   * Плоский режим — комикс (11.1, 12.8): дешёвые материалы, гладкие формы и свет одного ключевого источника в bands ступеней
+   * с чёткой границей, без теней и отражений; кожа упрощена до tris треугольников. Полное разрешение экрана (до 2×) со
+   * сглаживанием. pixel > 1 — кадр в pixel раз мельче с крупным пикселем (устарело: на видеокарте выигрыша нет, ускоряет
+   * только программную отрисовку). Не больше fps кадров в секунду (0 — без ограничения); кадр, в котором каналы и поза почти не
    * сдвинулись, не пересчитывается и не перерисовывается. Борода — сплошная, без прядей-карточек и шумовой прозрачности.
    * Риг, мимика, речь и внешность — те же. Пересобирает голову.
    * Комиксный вид (12.5): outline — чернильный контур по силуэту толщиной в пикселях экрана (outlineColor — цвет),
    * rim — резкий контровой свет по кромке справа сверху, 0…1. По умолчанию оба выключены.
-   *   head.setFlat(true); head.setFlat({ bands: 4, pixel: 3, fps: 24 }); head.setFlat({ outline: 1.5, rim: 0.6 }); head.setFlat(false)
+   *   head.setFlat(true); head.setFlat({ bands: 2, fps: 24 }); head.setFlat({ outline: 1.5, rim: 0.6 }); head.setFlat(false)
    * @param {boolean|{bands?: number, pixel?: number, fps?: number, detail?: 'high'|'medium'|'low', tris?: number, outline?: number, outlineColor?: string, rim?: number}} cfg
    */
   setFlat(cfg = true) {
@@ -598,7 +599,7 @@ export class EmotionalHead {
     const f = this.options.flat;
     if (!f) return null;
     const o = f === true ? {} : f;
-    return { bands: o.bands ?? 3, pixel: Math.max(1, o.pixel ?? 1), fps: o.fps ?? 30, tris: o.tris ?? 2400, detail: resolveDetail(o.detail ?? 'low'), outline: Math.max(0, +o.outline || 0), outlineColor: o.outlineColor ?? '#1c1418', rim: clamp(+o.rim || 0, 0, 1) };
+    return { bands: o.bands ?? 3, pixel: Math.max(1, o.pixel ?? 1), fps: o.fps ?? 30, tris: o.tris ?? 6000, detail: resolveDetail(o.detail ?? 'low'), outline: Math.max(0, +o.outline || 0), outlineColor: o.outlineColor ?? '#1c1418', rim: clamp(+o.rim || 0, 0, 1) };
   }
   /** Состояние адаптивного режима: { step, detail, pixelRatio, refreshHz, ceiling, changes } или null. */
   getAdaptive() {
@@ -760,7 +761,7 @@ export class EmotionalHead {
       this.lights.hemi.intensity += LITE.hemiK * L.env;
       this.lights.hemi.groundColor.lerp(new THREE.Color(LITE.ground), Math.min(1, L.env));
     }
-    this.lights.flatAmb.intensity = this._flat() ? 0.25 : lite ? LITE.ambK * L.env : 0;
+    this._L = L; this._flatLights();
     this.scene.environmentIntensity = L.env;   // three r163+; для старых версий используется envMapIntensity материалов
     this._envK = L.env; this._applyEnv();
     this.renderer.toneMappingExposure = L.exposure;
@@ -940,14 +941,26 @@ export class EmotionalHead {
     document.addEventListener('visibilitychange', this._onVis);
   }
 
+  /**
+   * Плоский режим (12.8) светит одним ключевым светом: ступени заполняющего и контрового света ложились поверх ступеней
+   * ключевого и дробили лицо на пятна. Заполняющий свет уходит в общий, кромку рисует шейдер (flat rim).
+   */
+  _flatLights() {
+    const L = this._L; if (!L) return;
+    const FL = this._flat(), lite = this._lite();
+    this.lights.fill.intensity = FL ? 0 : L.fill[1];
+    this.lights.rim.intensity = FL ? 0 : L.rim[1];
+    this.lights.flatAmb.intensity = FL ? 0.25 + 0.5 * L.fill[1] : lite ? LITE.ambK * L.env : 0;
+  }
+
   _resize() {
     const w = this.container.clientWidth || 400, h = this.container.clientHeight || 480;
     const FL = this._flatCfg = this._flat();
     this._needRender = true;
     const lite = this._liteOn = this._lite();
-    this.renderer.setPixelRatio(FL ? 1 / FL.pixel : Math.min(window.devicePixelRatio || 1, this.options.maxPixelRatio, lite ? LITE.pr : this._ad ? ADAPT_STEPS[this._ad.i].pr : Infinity));
+    this.renderer.setPixelRatio(FL ? (FL.pixel > 1 ? 1 / FL.pixel : Math.min(window.devicePixelRatio || 1, this.options.maxPixelRatio, 2)) : Math.min(window.devicePixelRatio || 1, this.options.maxPixelRatio, lite ? LITE.pr : this._ad ? ADAPT_STEPS[this._ad.i].pr : Infinity));
     this.renderer.domElement.style.imageRendering = FL && FL.pixel > 1 ? 'pixelated' : '';   // крупный пиксель без размытия
-    if (this.lights) this.lights.flatAmb.intensity = FL ? 0.25 : lite ? LITE.ambK * (this._envK ?? 1) : 0;
+    if (this.lights) this._flatLights();
     this.renderer.setSize(w, h, false);
     const F = this._framing || FRAMING.portrait;
     const V = this._view(w, h), aspect = V.w / V.h;

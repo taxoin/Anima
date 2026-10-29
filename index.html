@@ -167,7 +167,7 @@
         <span class="hint" id="detailInfo"></span>
       </div>
       <div class="row"><label>Плоский режим</label>
-        <select id="flatSel" title="Быстрая отрисовка: плоские грани, свет ступенями, без теней и отражений; кадр мельче с крупным пикселем"><option value="">выкл</option><option value="1">гладкий</option><option value="2">пиксель 2</option><option value="3">пиксель 3</option><option value="4">пиксель 4</option></select>
+        <select id="flatSel" title="Комикс: гладкие формы, свет ступенями от одного источника, без теней и отражений (head.setFlat)"><option value="">выкл</option><option value="3">3 ступени</option><option value="2">2 ступени</option></select>
         <label title="Комиксный вид плоского режима: чернильный контур по силуэту и резкий контровой свет (setFlat({ outline, rim }))"><input type="checkbox" id="inkChk" checked> контур и контровой свет</label>
         <label>в покое</label>
         <select id="idleFpsSel" title="Пока голова молчит и ничего быстрого не происходит — не больше стольких кадров в секунду (head.setIdleFps): дыханию и морганию хватает, батарея живёт дольше"><option value="20">20 к/с</option><option value="30" selected>30 к/с</option><option value="0">без огранич.</option></select>
@@ -367,8 +367,8 @@ const showDetail = () => {
 };
 const applyFlat = () => {
   const v = +$('#flatSel').value, ink = $('#inkChk').checked;
-  const cfg = v ? { pixel: v, ...(ink ? { outline: 1.5, rim: 0.6 } : {}) } : false;
-  api(v ? `head.setFlat({ pixel: ${v}${ink ? ', outline: 1.5, rim: 0.6' : ''} })` : 'head.setFlat(false)', () => head.setFlat(cfg)); setTimeout(showDetail);
+  const cfg = v ? { bands: v, ...(ink ? { outline: 1.5, rim: 0.6 } : {}) } : false;
+  api(v ? `head.setFlat({ bands: ${v}${ink ? ', outline: 1.5, rim: 0.6' : ''} })` : 'head.setFlat(false)', () => head.setFlat(cfg)); setTimeout(showDetail);
 };
 $('#flatSel').onchange = applyFlat;
 $('#inkChk').onchange = () => { if (+$('#flatSel').value) applyFlat(); };
