@@ -3,7 +3,7 @@
 import EmotionalHead, { CHANNELS, EMOTIONS, SKIN_TONES, OUTFITS, VISEMES, parseNarrative, type Channels, type Look, type PhotoReport, ElevenLabsVoice, type VoiceProfile } from 'emotional-head';
 import { EmotionalHeadElement } from 'emotional-head/element';
 import { resolveEmotion, type ARKitChannel } from 'emotional-head/emotions';
-import { buildTimeline, parseMarkup, type Viseme } from 'emotional-head/lipsync';
+import { buildTimeline, parseMarkup, spellNumber, type Viseme } from 'emotional-head/lipsync';
 
 const head = new EmotionalHead('#stage', { gender: 'female', detail: 'adaptive', look: { skin: 'olive', iris: ['#335', '#112'], outfit: 'blazer', glasses: { style: 'round', metal: true } } });
 head.setEmotion('contempt + slight_amusement*0.5', 0.9, 0.6, { restraint: 0.3 }).gesture('nod').micro('browFlick', { side: 'left' });
@@ -82,3 +82,5 @@ async function packDemo(file: File) {
   return head.exportAvatar({ format: 'json', voiceSample: true });
 }
 void packDemo;
+
+const ten: string = spellNumber('10', 'ru-RU'); void ten;

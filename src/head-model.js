@@ -723,8 +723,8 @@ function buildDentition(P, zFront, upper, seg = [12, 10], plate = false) {
           const tf = i < 2 ? lerp(1, 0.32, e ** 1.4) : i === 2 ? lerp(1, 0.55, e) : lerp(1, 0.85, e);
           const lx = ex * (w / 2) * 0.94 * lerp(0.86, 1, smoothstep(0, 0.4, e));
           let ly = upper ? yEdge + vv * h : yEdge - (1 - vv) * h;
-          if (ex && e > 0.99) ly += (upper ? 1 : -1) * 0.14 * h;    // скруглённые уголки
-          if (i === 2 && !ex && e > 0.99) ly += (upper ? -1 : 1) * 0.006 * sc;   // клык чуть заострён
+          if (ex && e > 0.99) ly += (upper ? 1 : -1) * (i < 2 ? 0.03 : 0.06) * h;   // уголки чуть скруглены: край прямой (13.5: при 0,14 — треугольник, «собачьи» зубы)
+          if (i === 2 && !ex && e > 0.99) ly += (upper ? -1 : 1) * 0.003 * sc;   // клык чуть заострён
           const lz = (t / 2) * tf - t / 2 + (ex ? -0.3 * t * tf : 0.004 * sc);
           pos.push(...place(lx, ly, lz));
           const ao = AO[i] * lerp(0.72, 1, smoothstep(0, 0.6, e)) * (upper ? 1 : 0.9) * (ex ? 0.78 : 1);
@@ -736,14 +736,19 @@ function buildDentition(P, zFront, upper, seg = [12, 10], plate = false) {
         }
       } else for (let v = 0; v < un; v++) {
         const nx = up.getX(v), ny = up.getY(v), nz = up.getZ(v);
-        const ex = Math.sign(nx) * Math.abs(nx) ** 0.45, ey = Math.sign(ny) * Math.abs(ny) ** 0.6, ez = Math.sign(nz) * Math.abs(nz) ** 0.5;
+        const ey = Math.sign(ny) * Math.abs(ny) ** 0.6;
         const vv = (ey + 1) / 2;                                   // 0 — низ, 1 — верх
         const e = upper ? 1 - vv : vv;                             // 1 — режущий край, 0 — шейка у десны
+        // к режущему краю сечение не сужается к полюсу сферы (иначе край закруглённо-острый — зубы «пилой», 13.5),
+        // а остаётся во всю ширину: кольца у полюса растянуты по направлению — край прямой, торец плоский
+        const r = Math.hypot(nx, nz), b = r > 1e-4 ? smoothstep(0.5, 0.92, e) : 0, kx = lerp(1, 1 / Math.max(r, 1e-4), b);
+        const ex = Math.sign(nx) * Math.min(1, Math.abs(nx) * kx) ** 0.45, ez = Math.sign(nz) * Math.min(1, Math.abs(nz) * kx) ** 0.5;
         const wf = lerp(0.86, 1, smoothstep(0, 0.4, e));
         const tf = i < 2 ? lerp(1, 0.32, e ** 1.4) : i === 2 ? lerp(1, 0.55, e) : lerp(1, 0.85, e);
         let lx = ex * (w / 2) * wf;
         let ly = (upper ? yEdge + vv * h : yEdge - (1 - vv) * h);
-        if (i === 2) ly += (upper ? -1 : 1) * 0.006 * sc * Math.max(0, 1 - Math.abs(ex)) ** 1.6 * e ** 3;   // клык чуть заострён
+        if (i === 2) ly += (upper ? -1 : 1) * 0.003 * sc * Math.max(0, 1 - Math.abs(ex)) ** 1.6 * e ** 3;   // клык чуть заострён
+        if (b > 0) ly += (upper ? 1 : -1) * 0.05 * h * smoothstep(0.75, 1, Math.abs(ex)) * smoothstep(0.85, 1, e);   // уголки чуть скруглены
         let lz = ez * (t / 2) * tf - t / 2;
         if (ez > 0) lz += 0.004 * sc * (1 - ex * ex);              // выпуклая губная поверхность
         pos.push(...place(lx, ly, lz));

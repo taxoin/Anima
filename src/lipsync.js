@@ -57,6 +57,66 @@ const EN = {
 };
 const EN_DIGRAPHS = { th: 'TH', sh: 'CH', ch: 'CH', ph: 'FF', oo: 'U', ee: 'I', ou: 'aa', ow: 'O', ck: 'kk', ng: 'nn', wh: 'U' };
 const VOWELS = new Set(['aa', 'E', 'I', 'O', 'U']);
+// ---------------------------------------------------------------- числа и знаки → слова (13.5)
+// TTS читает «10» как «десять», а по самой цифре формы рта нет: рот стоял закрытым всё слово. Для таймлайна губ
+// цифры и знаки разворачиваются в слова; индексы символов остаются исходными (реплики, границы слов TTS).
+
+const RU_1 = ['ноль', 'один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять'];
+const RU_1F = ['', 'одна', 'две'];
+const RU_10 = ['десять', 'одиннадцать', 'двенадцать', 'тринадцать', 'четырнадцать', 'пятнадцать', 'шестнадцать', 'семнадцать', 'восемнадцать', 'девятнадцать'];
+const RU_TENS = ['', '', 'двадцать', 'тридцать', 'сорок', 'пятьдесят', 'шестьдесят', 'семьдесят', 'восемьдесят', 'девяносто'];
+const RU_100 = ['', 'сто', 'двести', 'триста', 'четыреста', 'пятьсот', 'шестьсот', 'семьсот', 'восемьсот', 'девятьсот'];
+const RU_BIG = [null, ['тысяча', 'тысячи', 'тысяч'], ['миллион', 'миллиона', 'миллионов'], ['миллиард', 'миллиарда', 'миллиардов']];
+const EN_1 = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+const EN_TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+const EN_BIG = ['', 'thousand', 'million', 'billion'];
+const SIGNS = { '%': ['процент', 'percent'], '+': ['плюс', 'plus'], '=': ['равно', 'equals'], '&': ['и', 'and'], '№': ['номер', 'number'], '$': ['доллар', 'dollar'], '€': ['евро', 'euro'], '°': ['градус', 'degree'], '@': ['собака', 'at'] };
+
+/** Число (строка цифр) словами: 'ru' | 'en'. Длинные ряды (телефоны, коды) — по цифре. */
+export function spellNumber(digits, lang = 'ru') {
+  const ru = lang.startsWith('ru');
+  if (digits.length > 12 || (digits.length > 1 && digits[0] === '0')) return [...digits].map((d) => (ru ? RU_1 : EN_1)[+d]).join(' ');
+  let n = +digits;
+  if (n === 0) return ru ? RU_1[0] : EN_1[0];
+  const out = [];
+  for (let g = 3; g >= 0; g--) {
+    const k = Math.floor(n / 1000 ** g) % 1000;
+    if (!k) continue;
+    const h = Math.floor(k / 100), t = Math.floor(k / 10) % 10, u = k % 10, w = [];
+    if (ru) {
+      if (g === 1 && k === 1) { out.push('тысяча'); continue; }    // «тысяча», не «одна тысяча»
+      if (h) w.push(RU_100[h]);
+      if (t === 1) w.push(RU_10[u]);
+      else { if (t) w.push(RU_TENS[t]); if (u) w.push(g === 1 && u < 3 ? RU_1F[u] : RU_1[u]); }
+      if (g) { const f = RU_BIG[g], last = t === 1 ? 5 : u; w.push(last === 1 ? f[0] : last >= 2 && last <= 4 ? f[1] : f[2]); }
+    } else {
+      if (h) w.push(EN_1[h], 'hundred');
+      if (k % 100 < 20) { if (k % 100) w.push(EN_1[k % 100]); } else { w.push(EN_TENS[t]); if (u) w.push(EN_1[u]); }
+      if (g) w.push(EN_BIG[g]);
+    }
+    out.push(...w);
+  }
+  return out.join(' ');
+}
+
+/** Текст → [[символ, индекс в исходном тексте]] с развёрнутыми числами и знаками. */
+function expandForVisemes(text, lang = detectLang(text)) {
+  const out = [], ru = lang.startsWith('ru');
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (/\d/.test(ch)) {
+      let j = i; while (j < text.length && /\d/.test(text[j])) j++;
+      const w = spellNumber(text.slice(i, j), lang);
+      for (let k = 0; k < w.length; k++) out.push([w[k], i + Math.floor((k / w.length) * (j - i))]);
+      i = j - 1;
+    } else if (SIGNS[ch]) {
+      const w = ` ${SIGNS[ch][ru ? 0 : 1]} `;
+      for (const c of w) out.push([c, i]);
+    } else out.push([ch, i]);
+  }
+  return out;
+}
+
 const PAUSES = { ',': 0.22, ';': 0.26, ':': 0.26, '.': 0.42, '!': 0.42, '?': 0.42, '…': 0.55, '—': 0.24, '–': 0.2, '\n': 0.35 };
 
 // ---------------------------------------------------------------- разметка
@@ -119,12 +179,12 @@ export function buildTimeline(text, { rate = 1 } = {}) {
   const items = [], words = [];
   const k = 1 / Math.max(0.3, rate);
   let t = 0, inWord = false;
-  const low = text.toLowerCase();
-  for (let i = 0; i < low.length; i++) {
-    const ch = low[i];
-    if (PAUSES[ch] !== undefined || (ch === '.' && low.slice(i, i + 3) === '...')) {
+  const ex = expandForVisemes(text), low = ex.map((x) => x[0]).join('').toLowerCase();
+  for (let n = 0; n < low.length; n++) {
+    const ch = low[n], i = ex[n][1], at = (k) => low.slice(n, n + k);
+    if (PAUSES[ch] !== undefined || (ch === '.' && at(3) === '...')) {
       let d = PAUSES[ch];
-      if (low.slice(i, i + 3) === '...') { d = PAUSES['…']; i += 2; }
+      if (at(3) === '...') { d = PAUSES['…']; n += 2; }
       items.push({ t, dur: d * k, v: 'sil', i });
       t += d * k; inWord = false;
       continue;
@@ -132,10 +192,9 @@ export function buildTimeline(text, { rate = 1 } = {}) {
     if (/\s/.test(ch)) { items.push({ t, dur: 0.03 * k, v: 'sil', i }); t += 0.03 * k; inWord = false; continue; }
     let v = RU[ch], len = 1;
     if (!v) {
-      const dg = EN_DIGRAPHS[low.slice(i, i + 2)];
+      const dg = EN_DIGRAPHS[at(2)];
       if (dg) { v = dg; len = 2; } else v = EN[ch];
     }
-    if (!v && /\d/.test(ch)) v = 'aa';
     if (!v) continue; // ь, ъ, апострофы и прочее
     if (!inWord) { words.push({ i, t }); inWord = true; }
     const d = (VOWELS.has(v) ? 0.095 : v === 'PP' ? 0.07 : 0.058) * k * (len === 2 ? 1.2 : 1);
@@ -143,7 +202,7 @@ export function buildTimeline(text, { rate = 1 } = {}) {
     const prev = items[items.length - 1];
     if (prev && prev.v === v && !VOWELS.has(v)) { prev.dur += d * 0.5; t += d * 0.5; }
     else { items.push({ t, dur: d, v, i }); t += d; }
-    i += len - 1;
+    n += len - 1;
   }
   items.push({ t, dur: 0.15, v: 'sil', i: text.length });
   return { items, words, duration: t };
@@ -151,16 +210,30 @@ export function buildTimeline(text, { rate = 1 } = {}) {
 
 /** Таймлайн из выравнивания по символам (ElevenLabs alignment, OpenAI/Whisper timestamps и т.п.). */
 export function timelineFromAlignment(chars, times) {
-  const items = [], words = [];
+  chars = Array.from(chars);
+  const items = [], words = [], lang = detectLang(chars.join(''));
   let inWord = false;
-  for (let i = 0; i < chars.length; i++) {
-    const ch = String(chars[i]).toLowerCase();
-    const t = times[i], dur = (times[i + 1] ?? t + 0.08) - t;
-    let v = RU[ch] || EN[ch] || (PAUSES[ch] !== undefined || /\s/.test(ch) ? 'sil' : null);
-    if (!v) continue;
+  const push = (v, t, dur, i) => {
     if (v !== 'sil' && !inWord) { words.push({ i, t }); inWord = true; }
     if (v === 'sil') inWord = false;
     items.push({ t, dur, v, i });
+  };
+  for (let i = 0; i < chars.length; i++) {
+    const ch = String(chars[i]).toLowerCase();
+    const t = times[i], dur = (times[i + 1] ?? t + 0.08) - t;
+    if (/\d/.test(ch) || SIGNS[ch]) {                              // число или знак: слова на отрезке его символов
+      let j = i + 1; if (/\d/.test(ch)) while (j < chars.length && /\d/.test(chars[j])) j++;
+      const w = /\d/.test(ch) ? spellNumber(chars.slice(i, j).join(''), lang) : SIGNS[ch][lang.startsWith('ru') ? 0 : 1];
+      let e = j; while (e < chars.length && /\s/.test(chars[e])) e++;   // TTS тянет слово и на пробелы за цифрами
+      const t1 = times[e] ?? times[j - 1] + 0.3 * (j - i), span = (t1 - t) * 0.9;   // последние 10 % — пауза до следующего слова
+      const vs = [...w].map((c) => RU[c] || EN[c] || (c === ' ' ? 'sil' : null)).filter(Boolean);
+      vs.forEach((v, k) => push(v, t + (span * k) / vs.length, span / vs.length, i));
+      push('sil', t + span, t1 - t - span, j);
+      i = e - 1;
+      continue;
+    }
+    const v = RU[ch] || EN[ch] || (PAUSES[ch] !== undefined || /\s/.test(ch) ? 'sil' : null);
+    if (v) push(v, t, dur, i);
   }
   const end = items.length ? items[items.length - 1].t + items[items.length - 1].dur : 0;
   items.push({ t: end, dur: 0.15, v: 'sil', i: chars.length });

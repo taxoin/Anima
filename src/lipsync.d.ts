@@ -27,6 +27,8 @@ export declare function parseMarkup(text: string): { plain: string; cues: Cue[] 
 export interface TimelineItem { t: number; dur: number; v: Viseme; i: number }
 export interface Timeline { items: TimelineItem[]; words: Array<{ i: number; t: number }>; duration: number }
 
+/** Число словами для таймлайна губ (цифры у TTS звучат словами): '10' → 'десять' / 'ten'; длинные ряды — по цифре. */
+export declare function spellNumber(digits: string, lang?: string): string;
 export declare function buildTimeline(text: string, opts?: { rate?: number }): Timeline;
 /** Таймлайн из выравнивания по символам (ElevenLabs alignment, Whisper timestamps…). */
 export declare function timelineFromAlignment(chars: ArrayLike<string>, times: ArrayLike<number>): Timeline;
