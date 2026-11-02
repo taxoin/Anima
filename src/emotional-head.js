@@ -22,6 +22,7 @@ import {
   resolveEmotion, applyRestraint, parseNarrative, parseEmotionString, expandChannels,
 } from './emotions.js';
 import { SpeechController, SPEECH_CHANNELS, WebSpeech, VISEMES, parseMarkup, AudioAnalyser } from './lipsync.js';
+import { VOICE_PROVIDERS, ElevenLabsVoice, VoiceError } from './voice.js';
 
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const smooth01 = (x) => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
@@ -250,7 +251,8 @@ export class EmotionalHead {
    * @param {number} [o.intensity=1]
    * @param {number} [o.restraint]
    * @param {Function} [o.onEnd]
-   * @param {'webspeech'|'none'|Function} [o.tts]  Function: async (text, {lang, gender, rate, pitchVoice}) => ({ audio, alignment?, visemes? })
+   * @param {'webspeech'|'none'|Function} [o.tts]  Function: async (text, {lang, gender, rate, pitchVoice}) => ({ audio, alignment?, visemes? });
+   *   по умолчанию — свой голос (setVoice), если задан, иначе options.tts
    * @param {string} [o.lang]   'ru-RU' / 'en-US' (по умолчанию — автоопределение)
    * @param {string|SpeechSynthesisVoice} [o.voice]
    * @param {number} [o.rate] [o.pitch] [o.volume]
@@ -260,7 +262,7 @@ export class EmotionalHead {
     const prev = this._emotion;
     if (o.emotion === 'auto') this.express(text, { intensity: o.intensity });
     else if (o.emotion) this.setEmotion(o.emotion, o.intensity ?? 1, o.duration ?? 0.45, { restraint: o.restraint, mirror: o.mirror });
-    const opts = { tts: this.options.tts, ...this.options.voice, ...o };
+    const opts = { ...this.options.voice, ...o, tts: o.tts ?? this._voiceTts ?? this.options.tts };
     const p = this.speech.speak(String(text), opts).then(() => {
       if (o.revert && prev) this.setEmotion(prev.emotion, prev.intensity, 0.8, { restraint: prev.restraint, mirror: prev.mirror });
       o.onEnd?.();
@@ -274,6 +276,54 @@ export class EmotionalHead {
    * @param {object} [o] { text, alignment: {chars, times}, visemes: [{t, v}], emotion, onEnd }
    */
   speakAudio(audio, o = {}) { return this.speak(o.text || '', { ...o, audio }); }
+
+  /**
+   * Свой голос (13.1): speak() говорит голосом voice — { provider: 'elevenlabs', id, name } из cloneVoice() или
+   * готовый голос аккаунта по id. Губы — по таймингам букв от провайдера, темп и живость — от эмоции.
+   * Ключ API (o.apiKey) хранится только в памяти и не попадает в exportAvatar(); один раз на провайдера.
+   * Если провайдер не ответил (нет ключа, прав, кредитов, сети) — фраза звучит через Web Speech, событие voiceError.
+   * setVoice(null) — вернуть обычный голос. Явный speak({ tts }) важнее своего голоса.
+   * @param {{provider: 'elevenlabs', id: string, name?: string, model?: string, settings?: object}|null} voice
+   * @param {object} [o] { apiKey, model, base — адрес своего прокси }
+   */
+  setVoice(voice, o = {}) {
+    this._voiceKeys ||= {};
+    if (!voice) { this._voice = this._voiceTts = null; this._emit('voiceChange', null); return this; }
+    const Prov = VOICE_PROVIDERS[voice.provider];
+    if (!Prov || !voice.id) throw new Error(`setVoice(): нужен { provider: ${Object.keys(VOICE_PROVIDERS).map((k) => `'${k}'`).join('|')}, id }`);
+    if (o.apiKey !== undefined) this._voiceKeys[voice.provider] = o.apiKey;
+    const model = o.model ?? voice.model, prov = new Prov({ apiKey: this._voiceKeys[voice.provider], model, base: o.base ?? this._voiceBase });
+    if (o.base !== undefined) this._voiceBase = o.base;
+    this._voice = { provider: voice.provider, id: voice.id, name: voice.name || voice.id, ...(model && { model }), ...(voice.settings && { settings: { ...voice.settings } }) };
+    const tts = prov.tts(voice.id, voice.settings);
+    this._voiceTts = async (text, info) => {
+      try { return await tts(text, info); } catch (e) {
+        console.warn('[emotional-head] свой голос недоступен, говорю через Web Speech:', e.message || e);
+        this._emit('voiceError', e);
+        return null;
+      }
+    };
+    this._emit('voiceChange', { ...this._voice });
+    return this;
+  }
+  /** Свой голос ({ provider, id, name }) или null. */
+  getVoice() { return this._voice ? { ...this._voice } : null; }
+  /**
+   * Клонировать голос по записи и сразу говорить им. samples — Blob/File (или массив): 30 с – 2 мин чистой речи.
+   * Нужен ключ ElevenLabs с правом Voices: write и тариф с Instant Voice Cloning. Говорить чужим голосом — только с согласия.
+   * @param {Blob|Blob[]} samples
+   * @param {object} [o] { provider='elevenlabs', apiKey, name, description, removeNoise=true, model, base }
+   * @returns {Promise<{provider: string, id: string, name: string}>}
+   */
+  async cloneVoice(samples, o = {}) {
+    const provider = o.provider || 'elevenlabs', Prov = VOICE_PROVIDERS[provider];
+    if (!Prov) throw new Error(`cloneVoice(): неизвестный провайдер ${provider}`);
+    this._voiceKeys ||= {};
+    const apiKey = o.apiKey ?? this._voiceKeys[provider];
+    const voice = await new Prov({ apiKey, base: o.base ?? this._voiceBase }).clone(samples, o);
+    this.setVoice(voice, { apiKey, model: o.model, base: o.base });
+    return { ...this._voice };
+  }
 
   /** Lip-sync по живому потоку (микрофон / WebRTC). Возвращает функцию остановки. */
   listenStream(stream) {
@@ -676,6 +726,7 @@ export class EmotionalHead {
     const look = this.options.look || {};
     const d = { format: 'anima-avatar', v: AVATAR_FORMAT, gender: this.gender, look: Object.keys(look).length ? JSON.parse(JSON.stringify(look)) : null,
       photo: this._portrait ? { ...this._photoOpts } : null, portrait: null };
+    if (this._voice) d.voice = { ...this._voice };                  // 13.1: свой голос — только id, без ключа и записи
     if (this._portrait) d.portrait = await this._portrait.toData(o);
     return o.format === 'json' ? JSON.stringify(d) : d;
   }
@@ -698,6 +749,7 @@ export class EmotionalHead {
     if (d.v > AVATAR_FORMAT) throw new Error(`Файл аватара новой версии (v${d.v}), обновите библиотеку`);
     const gender = o.gender || d.gender;
     if (o.look || d.look !== undefined) this.options.look = { ...(o.look || d.look || {}) };
+    if (d.voice) { try { this.setVoice(d.voice); } catch (e) { console.warn('[emotional-head] голос из файла не подключён:', e.message); } }   // нет в файле — текущий голос остаётся
     if (!d.portrait) {
       this._portrait = null;
       this._customModel = true;
@@ -1318,5 +1370,6 @@ function mirrorName(k) {
 function mirrorChannels(ch) { const o = {}; for (const k in ch) o[mirrorName(k)] = ch[k]; return o; }
 
 // реэкспорт, чтобы хватало одного импорта
+export { ElevenLabsVoice, VoiceError, VOICE_PROVIDERS };
 export { SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, TEETH_COLORS, LIP_PROFILES, OUTFITS, HEADPHONES, MASKS, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS, MAKEUP, CHANNELS, EMOTIONS, MICRO, GESTURES, ALIASES, VISEMES, WebSpeech, parseNarrative, parseEmotionString, parseMarkup, resolveEmotion };
 export default EmotionalHead;

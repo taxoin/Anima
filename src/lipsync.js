@@ -313,14 +313,16 @@ export class SpeechController {
       this._resolve = resolve;
       const run = async () => {
         try {
+          let res = null;
           if (typeof opts.tts === 'function') {
-            const res = await opts.tts(plain, { lang: opts.lang || detectLang(plain), gender: this.host.gender, ...this.host.emotionVoice?.() });
+            res = await opts.tts(plain, { lang: opts.lang || detectLang(plain), gender: this.host.gender, ...this.host.emotionVoice?.() });
             if (token !== this._token) return;
-            await this._playAudio(res.audio, plain, cues, res, token);
-          } else if (opts.audio) {
+          }
+          if (res?.audio) await this._playAudio(res.audio, plain, cues, res, token);
+          else if (opts.audio) {
             await this._playAudio(opts.audio, plain, cues, opts, token);
           } else {
-            const useTTS = opts.tts !== 'none' && WebSpeech.available();
+            const useTTS = opts.tts !== 'none' && WebSpeech.available();   // функция tts без аудио (свой голос недоступен) — Web Speech
             for (const chunk of splitChunks(plain, cues)) {
               if (token !== this._token) return;
               await this._playChunk(chunk, useTTS, token);

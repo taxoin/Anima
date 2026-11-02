@@ -282,6 +282,8 @@ export interface EmotionalHeadEvents {
   detailChange: { detail: DetailLevel; pixelRatio: number; step: number; reason: string };
   flatChange: Required<FlatOptions> | null;
   qualityChange: { quality: Quality };
+  voiceChange: VoiceProfile | null;
+  voiceError: Error;
 }
 /** lite — упрощённая сетка, без теней и отражений окружения (кроме глаз, стёкол, металла), без отлива и лака, pixelRatio ≤ 1.5; high — прежнее полное качество, сетка по detail. */
 export interface Insets { top?: number; bottom?: number; left?: number; right?: number; }
@@ -340,6 +342,11 @@ export declare class EmotionalHead {
   /** Lip-sync по живому потоку (микрофон, WebRTC); возвращает функцию остановки. */
   listenStream(stream: MediaStream): () => void;
   stopSpeaking(): this;
+  /** Свой голос: speak() говорит им (губы — по таймингам букв); null — обычный голос. Ключ — только в памяти. */
+  setVoice(voice: VoiceProfile | null, o?: { apiKey?: string; model?: string; base?: string }): this;
+  getVoice(): VoiceProfile | null;
+  /** Клонировать голос по записи (30 с – 2 мин чистой речи) и сразу говорить им. Только свой голос или с согласия. */
+  cloneVoice(samples: Blob | Blob[], o?: CloneVoiceOptions): Promise<VoiceProfile>;
 
   // внешность и сцена
   setGender(gender: Gender): this;
@@ -415,4 +422,20 @@ export declare const GLASSES: Record<string, { style: GlassesStyle; color?: Colo
 export declare const BEARDS: Record<string, { style: BeardStyle; moustache?: string | false; length?: number }>;
 export declare const HATS: Record<string, { style: HatStyle; color?: Color; y0?: number }>;
 export declare const EARRINGS: Record<string, { style: string; color?: Color; size?: number }>;
+/** Профиль своего голоса — сохраняется в exportAvatar() (без ключа и записи). */
+export interface VoiceProfile { provider: 'elevenlabs'; id: string; name: string; model?: string; settings?: VoiceSettings }
+export interface VoiceSettings { stability?: number; style?: number; similarity?: number }
+export interface CloneVoiceOptions { provider?: 'elevenlabs'; apiKey?: string; name?: string; description?: string; removeNoise?: boolean; model?: string; base?: string }
+export interface TTSResult { audio: Blob; alignment: { characters: string[]; character_start_times_seconds: number[]; character_end_times_seconds?: number[] } | null }
+export declare class VoiceError extends Error { status?: number; code?: string; provider?: string }
+/** ElevenLabs: клонирование (Instant Voice Cloning) и синтез с таймингами букв. Запросы идут прямо из браузера (CORS). */
+export declare class ElevenLabsVoice {
+  constructor(o?: { apiKey?: string; model?: string; base?: string; cache?: number });
+  clone(samples: Blob | Blob[], o?: { name?: string; description?: string; removeNoise?: boolean }): Promise<VoiceProfile>;
+  voices(): Promise<{ id: string; name: string; category: string }[]>;
+  remove(id: string): Promise<void>;
+  synth(text: string, id: string, o?: { rate?: number } & VoiceSettings): Promise<TTSResult>;
+  tts(id: string, o?: VoiceSettings): (text: string, info?: { rate?: number; pitchVoice?: number }) => Promise<TTSResult>;
+}
+export declare const VOICE_PROVIDERS: { elevenlabs: typeof ElevenLabsVoice };
 export declare const MAKEUP: Record<MakeupPreset, Record<string, unknown>>;

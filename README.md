@@ -389,6 +389,27 @@ head.speakAudio('/voice.mp3');                                 // амплиту
 const stop = head.listenStream(await navigator.mediaDevices.getUserMedia({ audio: true }));
 ```
 
+### 5. Свой голос (клонирование по записи)
+
+Как с фото: запишите или загрузите голос — голова говорит именно им, с губами по таймингам букв. Клонирует ElevenLabs (Instant Voice Cloning) по ключу пользователя; запросы идут прямо из браузера, сервер не нужен.
+
+```js
+// запись 30–60 с чистой речи (MediaRecorder) или File из <input type=file>
+const voice = await head.cloneVoice(blob, { apiKey: 'sk_…', name: 'Мой голос' });   // → { provider: 'elevenlabs', id, name }
+head.speak('[e:smirk] Узнаёшь?');                     // говорит клоном; эмоция меняет темп и живость голоса
+
+head.setVoice({ provider: 'elevenlabs', id: 'JBFqnCBsd6RMkjVDRZzb' }, { apiKey });   // готовый голос аккаунта
+head.setVoice(null);                                  // обычный голос (Web Speech)
+head.on('voiceError', (e) => console.warn(e.message)); // нет ключа, прав, кредитов — фраза звучит через Web Speech
+```
+
+- Ключу нужны права Text to Speech и Voices (write); клонирование есть только на платных тарифах ElevenLabs.
+- Ключ хранится только в памяти и не попадает в `exportAvatar()`. Туда попадает профиль голоса (`id`), и `importAvatar()` его восстанавливает. Ключ передаётся через `setVoice(voice, { apiKey })` один раз.
+- Повтор той же фразы берётся из кэша, без запроса.
+- Для своего сайта ключ лучше спрятать за прокси: `setVoice(voice, { base: 'https://my-proxy…' })`.
+- Говорить чужим голосом — только с согласия владельца (в демо без отметки кнопка неактивна).
+- В демо — раздел «Свой голос».
+
 ---
 
 ## Аватар по фото

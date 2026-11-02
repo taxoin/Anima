@@ -283,13 +283,33 @@
       <textarea id="speech">[e:jaded] Привет. Как дела? [pause:500] Это слишком банально... слишком *человечно* в своей простоте. [g:creakyLaugh] [e:coldIrony] Хорошо. Я принял это как **условие**, а не как извинение.</textarea>
       <div class="row">
         <select id="voice" style="flex:1;min-width:0"><option value="">голос: авто</option></select>
-        <select id="ttsMode"><option value="webspeech">Web Speech</option><option value="none">без звука</option></select>
+        <select id="ttsMode"><option value="webspeech">Web Speech</option><option value="clone" disabled>свой голос</option><option value="none">без звука</option></select>
       </div>
       <div class="adv">
         <div class="row"><label style="width:84px">темп</label><input type="range" id="rate" min="0.6" max="1.6" step="0.05" value="1"><span class="val" id="rateV">1</span></div>
       </div>
       <div class="row"><button class="primary" id="speak">Говорить</button><button id="stop">Стоп</button></div>
       <div class="hint more">Разметка: <code>[e:эмоция]</code> <code>[g:жест]</code> <code>[m:микро]</code> <code>[pause:мс]</code> <code>*акцент*</code> <code>*ремарка из 3+ слов*</code></div>
+    </details>
+
+    <details data-tab="speech" id="myVoice">
+      <summary>Свой голос</summary>
+      <div class="hint">Запишите 30–60 секунд своей речи или загрузите запись — голова заговорит этим голосом. Клонирует ElevenLabs по вашему ключу: ключ хранится только в этом браузере, запись и текст уходят только на api.elevenlabs.io. Ключу нужны права Text to Speech и Voices (write), клонирование — на платном тарифе.</div>
+      <div class="row"><input type="password" id="elKey" placeholder="ключ ElevenLabs (sk_…)" autocomplete="off" spellcheck="false" style="flex:1;min-width:0;padding:6px 8px"><button id="elKeyForget" title="Удалить ключ из браузера">×</button></div>
+      <div class="hint" id="readText">Прочитайте вслух, спокойно и разборчиво: «Мне нравится гулять по вечернему городу, когда фонари уже горят, а улицы почти пустые. Я иду не спеша, слушаю шаги и думаю о том, что сделал за день. Иногда захожу в маленькое кафе, беру чай с лимоном и смотрю в окно. Удивительно, как много можно заметить, если никуда не торопиться».</div>
+      <div class="row">
+        <button class="primary" id="recBtn">● Записать</button>
+        <label class="filebtn" for="voiceFile">Файл</label><input type="file" id="voiceFile" accept="audio/*,video/*" hidden>
+        <span class="hint" id="recInfo"></span>
+      </div>
+      <audio id="recPlay" controls hidden style="width:100%;height:32px"></audio>
+      <div class="row"><input type="text" id="voiceName" placeholder="название голоса" value="Мой голос" style="flex:1;min-width:0"></div>
+      <div class="row"><label><input type="checkbox" id="voiceConsent"> это мой голос или у меня есть согласие его владельца</label></div>
+      <div class="row"><button class="primary" id="cloneBtn" disabled>Клонировать голос</button><span class="hint" id="voiceStatus"></span></div>
+      <div class="adv">
+        <div class="row"><input type="text" id="voiceId" placeholder="или id готового голоса ElevenLabs" spellcheck="false" style="flex:1;min-width:0"><button id="voiceUse">Подключить</button></div>
+        <div class="row"><button id="voiceOff" disabled>Обычный голос</button><button id="voiceDelete" disabled title="Удалить клон из аккаунта ElevenLabs">Удалить клон</button></div>
+      </div>
     </details>
 
     <details data-tab="log">
@@ -305,7 +325,7 @@
 </div>
 
 <script type="module">
-import { EmotionalHead, EMOTIONS, MICRO, GESTURES, CHANNELS, WebSpeech, parseNarrative, SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS, MAKEUP, TEETH_COLORS, LIP_PROFILES, OUTFITS, HEADPHONES, MASKS } from './src/emotional-head.js';
+import { EmotionalHead, EMOTIONS, MICRO, GESTURES, CHANNELS, WebSpeech, parseNarrative, SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS, MAKEUP, TEETH_COLORS, LIP_PROFILES, OUTFITS, HEADPHONES, MASKS, ElevenLabsVoice } from './src/emotional-head.js';
 
 const head = new EmotionalHead('#stage', { gender: 'female', background: 'dark', emotion: 'neutral', framing: 'portrait' });
 window.head = head; // для экспериментов в консоли
@@ -420,7 +440,7 @@ $('#examples').onchange = (e) => { $('#narrative').value = EXAMPLES[e.target.val
 $('#narrative').value = EXAMPLES[0]; showParse();
 $('#narrative').oninput = showParse;
 $('#express').onclick = () => api(`head.express(text)`, () => head.express($('#narrative').value));
-$('#speakNarr').onclick = () => api(`head.speak(text, { emotion: 'auto' })`, () => head.speak($('#narrative').value, { emotion: 'auto', tts: $('#ttsMode').value, voice: $('#voice').value || undefined, rate: +$('#rate').value }));
+$('#speakNarr').onclick = () => api(`head.speak(text, { emotion: 'auto' })`, () => head.speak($('#narrative').value, { emotion: 'auto', tts: ttsSel(), voice: $('#voice').value || undefined, rate: +$('#rate').value }));
 
 // ---- речь
 const fillVoices = () => {
@@ -431,11 +451,87 @@ const fillVoices = () => {
 };
 if (WebSpeech.available()) { fillVoices(); speechSynthesis.onvoiceschanged = fillVoices; } else { $('#ttsMode').value = 'none'; }
 $('#speak').onclick = () => {
-  const o = { tts: $('#ttsMode').value, rate: +$('#rate').value };
+  const o = { rate: +$('#rate').value };
+  if (ttsSel()) o.tts = ttsSel();
   if ($('#voice').value) o.voice = $('#voice').value;
   api(`head.speak(text, ${fmt(o)})`, () => head.speak($('#speech').value, o));
 };
 $('#stop').onclick = () => api('head.stopSpeaking()', () => head.stopSpeaking());
+
+// ---- свой голос (13.1): запись → ElevenLabs Instant Voice Cloning → head.setVoice; губы — по таймингам букв
+// tts для speak: при своём голосе — undefined (голова берёт его сама), без голосов браузера — беззвучно
+function ttsSel() {
+  const m = $('#ttsMode').value;
+  if (m === 'clone') return head.getVoice() ? undefined : (WebSpeech.available() ? 'webspeech' : 'none');
+  return m === 'webspeech' && !WebSpeech.available() ? 'none' : m;
+}
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* приватный режим */ } } };
+const vStatus = (t) => { $('#voiceStatus').textContent = t; };
+let voiceSample = null, rec = null, recT = 0;
+const elKey = () => $('#elKey').value.trim();
+$('#elKey').value = store.get('anima.elevenlabs.key') || '';
+$('#elKey').addEventListener('change', () => { store.set('anima.elevenlabs.key', elKey() || null); const v = head.getVoice(); if (v) head.setVoice(v, { apiKey: elKey() }); });
+$('#elKeyForget').onclick = () => { $('#elKey').value = ''; store.set('anima.elevenlabs.key', null); };
+const canClone = () => { $('#cloneBtn').disabled = !(voiceSample && $('#voiceConsent').checked && elKey()); };
+$('#voiceConsent').onchange = canClone; $('#elKey').addEventListener('input', canClone);
+const setSample = (blob, label) => {
+  voiceSample = blob;
+  const a = $('#recPlay'); if (a.src) URL.revokeObjectURL(a.src);
+  a.src = URL.createObjectURL(blob); a.hidden = false;
+  $('#recInfo').textContent = label; canClone();
+};
+$('#voiceFile').onchange = (e) => { const f = e.target.files[0]; if (f) setSample(f, `${f.name}, ${(f.size / 1048576).toFixed(1)} МБ`); e.target.value = ''; };
+$('#recBtn').onclick = async () => {
+  if (rec) { rec.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: true, autoGainControl: true } });
+    const chunks = [], t0 = performance.now();
+    rec = new MediaRecorder(stream);
+    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    rec.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop()); clearInterval(recT);
+      const sec = (performance.now() - t0) / 1000;
+      setSample(new Blob(chunks, { type: rec.mimeType || 'audio/webm' }), `запись ${sec.toFixed(0)} с${sec < 20 ? ' — коротко, лучше 30–60 с' : ''}`);
+      rec = null; $('#recBtn').textContent = '● Записать'; $('#recBtn').classList.add('primary');
+    };
+    rec.start(1000);
+    $('#recBtn').textContent = '■ Стоп'; $('#recBtn').classList.remove('primary');
+    recT = setInterval(() => { const sec = (performance.now() - t0) / 1000; $('#recInfo').textContent = `идёт запись: ${sec.toFixed(0)} с`; if (sec >= 120) rec?.stop(); }, 250);
+  } catch (e) { $('#recInfo').textContent = 'Микрофон недоступен: ' + (e.message || e.name); rec = null; }
+};
+function voiceUI() {
+  const v = head.getVoice(), o = $('#ttsMode').querySelector('[value=clone]');
+  o.disabled = !v; o.textContent = v ? `свой голос: ${v.name}` : 'свой голос';
+  if (v && !voiceUI.seen) $('#ttsMode').value = 'clone';
+  if (!v && $('#ttsMode').value === 'clone') $('#ttsMode').value = WebSpeech.available() ? 'webspeech' : 'none';
+  voiceUI.seen = !!v;
+  $('#voiceOff').disabled = !v; $('#voiceDelete').disabled = !v || v.id !== store.get('anima.voice.cloned');   // удалить можно только свой клон
+  store.set('anima.voice', v ? JSON.stringify(v) : null);
+}
+head.on('voiceChange', voiceUI);
+head.on('voiceError', (e) => { vStatus('✕ ' + e.message); log('✕ свой голос: ' + e.message, 'err'); });
+$('#cloneBtn').onclick = async () => {
+  $('#cloneBtn').disabled = true; vStatus('клонирую…');
+  try {
+    const v = await api(`await head.cloneVoice(sample, { apiKey, name: ${fmt($('#voiceName').value)} })`, () => head.cloneVoice(voiceSample, { apiKey: elKey(), name: $('#voiceName').value || 'Мой голос' }));
+    store.set('anima.voice.cloned', v.id); voiceUI();
+    vStatus(`готово: «${v.name}»`);
+    head.speak('[e:curious] Ну как? [e:smirk*0.8] Теперь я говорю твоим голосом.', { revert: true });
+  } catch (e) { vStatus('✕ ' + (e.message || e)); } finally { canClone(); }
+};
+$('#voiceUse').onclick = () => {
+  const id = $('#voiceId').value.trim(); if (!id) return;
+  try { api(`head.setVoice({ provider: 'elevenlabs', id: ${fmt(id)} }, { apiKey })`, () => head.setVoice({ provider: 'elevenlabs', id, name: id.slice(0, 8) }, { apiKey: elKey() })); vStatus('голос подключён'); head.speak('[e:curious] Привет. Так я звучу?', { revert: true }); }
+  catch (e) { vStatus('✕ ' + e.message); }
+};
+$('#voiceOff').onclick = () => { api('head.setVoice(null)', () => head.setVoice(null)); vStatus(''); };
+$('#voiceDelete').onclick = async () => {
+  const v = head.getVoice(); if (!v) return;
+  try { await new ElevenLabsVoice({ apiKey: elKey() }).remove(v.id); store.set('anima.voice.cloned', null); head.setVoice(null); vStatus('клон удалён из аккаунта'); }
+  catch (e) { vStatus('✕ ' + e.message); }
+};
+try { const v = JSON.parse(store.get('anima.voice') || 'null'); if (v) head.setVoice(v, { apiKey: elKey() }); } catch { /* испорченная запись */ }
+voiceUI();
 
 // ---- монитор каналов (~12 fps)
 const bars = $('#bars'), cells = {};
@@ -460,7 +556,7 @@ async function greet(tts) {
     if (tts === 'none' && WebSpeech.available()) tap.hidden = false;
   }
 }
-tap.onclick = () => greet($('#ttsMode').value === 'none' ? 'webspeech' : $('#ttsMode').value);
+tap.onclick = () => greet($('#ttsMode').value === 'none' ? 'webspeech' : ttsSel());
 if (new URLSearchParams(location.search).get('autoplay') !== '0') setTimeout(() => greet('none'), 900);
 
 // ---- аватар по фото
@@ -485,7 +581,7 @@ async function usePhoto(src, label) {
     $('#photoClear').disabled = $('#avatarSave').disabled = $('#photoRefine').disabled = false;
     log(`⟵ photoAvatar ${fmt(rep.measures)}`);
     head.stopSpeaking();
-    head.speak('[e:curious] Ну, здравствуй. [e:smirk*0.8] Узнаёшь? [g:tilt] Теперь я говорю твоим лицом.', { tts: WebSpeech.available() ? $('#ttsMode').value : 'none', revert: true });
+    head.speak('[e:curious] Ну, здравствуй. [e:smirk*0.8] Узнаёшь? [g:tilt] Теперь я говорю твоим лицом.', { tts: ttsSel() ?? undefined, revert: true });
   } catch (e) {
     status(''); $('#photoInfo').innerHTML = `<span class="warn">${e.message || e}</span>`;
     log('✕ ' + (e.message || e), 'err');
@@ -617,7 +713,7 @@ async function openAvatar(f) {
     $('#photoRefine').disabled = !rep;
     status(`Аватар открыт: ${f.name}`);
     head.stopSpeaking();
-    head.speak('[e:curious] Я снова здесь. [e:smirk*0.8] Скучали?', { tts: WebSpeech.available() ? $('#ttsMode').value : 'none', revert: true });
+    head.speak('[e:curious] Я снова здесь. [e:smirk*0.8] Скучали?', { tts: ttsSel() ?? undefined, revert: true });
   } catch (e) { status(''); log('✕ ' + (e.message || e), 'err'); }
 }
 $('#avatarFile').onchange = (e) => { const f = e.target.files[0]; if (f) openAvatar(f); e.target.value = ''; };

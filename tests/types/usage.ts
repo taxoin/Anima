@@ -1,6 +1,6 @@
 // Проверка типов (npm run test:types): типичное использование пакета должно компилироваться в strict-режиме,
 // а ошибки (@ts-expect-error) — ловиться.
-import EmotionalHead, { CHANNELS, EMOTIONS, SKIN_TONES, OUTFITS, VISEMES, parseNarrative, type Channels, type Look, type PhotoReport } from 'emotional-head';
+import EmotionalHead, { CHANNELS, EMOTIONS, SKIN_TONES, OUTFITS, VISEMES, parseNarrative, type Channels, type Look, type PhotoReport, ElevenLabsVoice, type VoiceProfile } from 'emotional-head';
 import { EmotionalHeadElement } from 'emotional-head/element';
 import { resolveEmotion, type ARKitChannel } from 'emotional-head/emotions';
 import { buildTimeline, parseMarkup, type Viseme } from 'emotional-head/lipsync';
@@ -67,3 +67,10 @@ const bad: Channels = { jawOpn: 1 };
 // @ts-expect-error неверный стиль причёски
 const badLook: Look = { hairStyle: 'mohawk' };
 console.log(bad, badLook);
+
+// свой голос (13.1)
+head.setVoice({ provider: 'elevenlabs', id: 'JBFqnCBsd6RMkjVDRZzb', name: 'George' }, { apiKey: 'sk_…' });
+const myVoice: VoiceProfile | null = head.getVoice();
+head.on('voiceError', (e: Error) => console.warn(e.message, myVoice));
+async function cloneDemo(blob: Blob) { const p = await head.cloneVoice(blob, { name: 'Мой голос' }); head.setVoice(null); return new ElevenLabsVoice({ apiKey: 'k' }).synth('Привет', p.id, { rate: 1.1 }); }
+void cloneDemo;
