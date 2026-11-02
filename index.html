@@ -306,6 +306,9 @@
       <div class="row"><input type="text" id="voiceName" placeholder="название голоса" value="Мой голос" style="flex:1;min-width:0"></div>
       <div class="row"><label><input type="checkbox" id="voiceConsent"> это мой голос или у меня есть согласие его владельца</label></div>
       <div class="row"><button class="primary" id="cloneBtn" disabled>Клонировать голос</button><span class="hint" id="voiceStatus"></span></div>
+      <div class="row" id="recloneRow" hidden><button id="voiceReclone">Пересоздать из записи</button></div>
+      <div class="row"><button id="voiceSave" disabled title="Файл голоса: id клона, а с записью — переносится в любой аккаунт">Сохранить голос</button><label class="filebtn" for="voicePackFile">Открыть голос</label><input type="file" id="voicePackFile" accept=".json,application/json" hidden></div>
+      <div class="row"><label><input type="checkbox" id="voiceWithSample"> вкладывать запись в файл голоса и аватара — тогда клон пересоздаётся в любом аккаунте (запись голоса — биометрия, передавайте с осторожностью)</label></div>
       <div class="adv">
         <div class="row"><input type="text" id="voiceId" placeholder="или id готового голоса ElevenLabs" spellcheck="false" style="flex:1;min-width:0"><button id="voiceUse">Подключить</button></div>
         <div class="row"><button id="voiceOff" disabled>Обычный голос</button><button id="voiceDelete" disabled title="Удалить клон из аккаунта ElevenLabs">Удалить клон</button></div>
@@ -467,7 +470,7 @@ function ttsSel() {
 }
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* приватный режим */ } } };
 const vStatus = (t) => { $('#voiceStatus').textContent = t; };
-let voiceSample = null, rec = null, recT = 0;
+let voiceSample = null, voiceTranscript = '', rec = null, recT = 0;
 const elKey = () => $('#elKey').value.trim();
 $('#elKey').value = store.get('anima.elevenlabs.key') || '';
 $('#elKey').addEventListener('change', () => { store.set('anima.elevenlabs.key', elKey() || null); const v = head.getVoice(); if (v) head.setVoice(v, { apiKey: elKey() }); });
@@ -480,7 +483,7 @@ const setSample = (blob, label) => {
   a.src = URL.createObjectURL(blob); a.hidden = false;
   $('#recInfo').textContent = label; canClone();
 };
-$('#voiceFile').onchange = (e) => { const f = e.target.files[0]; if (f) setSample(f, `${f.name}, ${(f.size / 1048576).toFixed(1)} МБ`); e.target.value = ''; };
+$('#voiceFile').onchange = (e) => { const f = e.target.files[0]; if (f) { voiceTranscript = ''; setSample(f, `${f.name}, ${(f.size / 1048576).toFixed(1)} МБ`); } e.target.value = ''; };
 $('#recBtn').onclick = async () => {
   if (rec) { rec.stop(); return; }
   try {
@@ -491,6 +494,7 @@ $('#recBtn').onclick = async () => {
     rec.onstop = () => {
       stream.getTracks().forEach((t) => t.stop()); clearInterval(recT);
       const sec = (performance.now() - t0) / 1000;
+      voiceTranscript = $('#readText').textContent.replace(/^[^«]*«|»\s*$/g, '');   // читали этот текст — расшифровка для моделей, которым она нужна
       setSample(new Blob(chunks, { type: rec.mimeType || 'audio/webm' }), `запись ${sec.toFixed(0)} с${sec < 20 ? ' — коротко, лучше 30–60 с' : ''}`);
       rec = null; $('#recBtn').textContent = '● Записать'; $('#recBtn').classList.add('primary');
     };
@@ -505,15 +509,40 @@ function voiceUI() {
   if (v && !voiceUI.seen) $('#ttsMode').value = 'clone';
   if (!v && $('#ttsMode').value === 'clone') $('#ttsMode').value = WebSpeech.available() ? 'webspeech' : 'none';
   voiceUI.seen = !!v;
-  $('#voiceOff').disabled = !v; $('#voiceDelete').disabled = !v || v.id !== store.get('anima.voice.cloned');   // удалить можно только свой клон
+  $('#voiceOff').disabled = $('#voiceSave').disabled = !v; $('#recloneRow').hidden = true; $('#voiceDelete').disabled = !v || v.id !== store.get('anima.voice.cloned');   // удалить можно только свой клон
   store.set('anima.voice', v ? JSON.stringify(v) : null);
 }
 head.on('voiceChange', voiceUI);
-head.on('voiceError', (e) => { vStatus('✕ ' + e.message); log('✕ свой голос: ' + e.message, 'err'); });
+head.on('voiceError', (e) => { if (e.code !== 'voice_not_found') vStatus('✕ ' + e.message); log('✕ свой голос: ' + e.message, 'err'); });   // «нет клона» — своим сообщением (voiceMissing)
+head.on('voiceMissing', (e) => { vStatus(e.canReclone ? 'клона нет в этом аккаунте — можно пересоздать из записи' : 'клона нет в этом аккаунте, а записи в файле нет — запишите голос заново'); $('#recloneRow').hidden = !e.canReclone; });
+head.on('voiceRecloned', (v) => { store.set('anima.voice.cloned', v.id); vStatus(`клон пересоздан из записи: «${v.name}»`); voiceUI(); });
+$('#voiceReclone').onclick = async () => {
+  $('#voiceReclone').disabled = true; vStatus('пересоздаю…');
+  try { await api('await head.recloneVoice()', () => head.recloneVoice({ apiKey: elKey() })); } catch (e) { vStatus('✕ ' + (e.message || e)); } finally { $('#voiceReclone').disabled = false; }
+};
+$('#voiceSave').onclick = async () => {
+  try {
+    const sample = $('#voiceWithSample').checked;
+    const json = await api(`await head.exportVoice({ sample: ${sample}, format: 'json' })`, () => head.exportVoice({ sample, format: 'json' }));
+    const name = (head.getVoice()?.name || 'voice').replace(/[^\p{L}\p{N}_-]+/gu, '-');
+    const file = new File([json], `${name}.anima-voice.json`, { type: 'application/json' });
+    vStatus(`файл голоса: ${(file.size / 1024).toFixed(file.size > 10240 ? 0 : 1)} КБ${sample ? ', с записью' : ''}`);
+    saveFile(file, 'Голос Anima');
+  } catch (e) { vStatus('✕ ' + (e.message || e)); }
+};
+async function openVoice(f) {
+  vStatus('подключаю…');
+  try {
+    const v = await api('await head.importVoice(file, { apiKey })', () => head.importVoice(f, { apiKey: elKey() }));
+    if (!/пересоздан|нет в этом/.test($('#voiceStatus').textContent)) vStatus(`голос подключён: «${v.name}»`);
+    if (!elKey()) vStatus('голос подключён, но нужен ключ ElevenLabs — введите его выше');
+  } catch (e) { vStatus('✕ ' + (e.message || e)); }
+}
+$('#voicePackFile').onchange = (e) => { const f = e.target.files[0]; if (f) openVoice(f); e.target.value = ''; };
 $('#cloneBtn').onclick = async () => {
   $('#cloneBtn').disabled = true; vStatus('клонирую…');
   try {
-    const v = await api(`await head.cloneVoice(sample, { apiKey, name: ${fmt($('#voiceName').value)} })`, () => head.cloneVoice(voiceSample, { apiKey: elKey(), name: $('#voiceName').value || 'Мой голос' }));
+    const v = await api(`await head.cloneVoice(sample, { apiKey, name: ${fmt($('#voiceName').value)}, consent: true })`, () => head.cloneVoice(voiceSample, { apiKey: elKey(), name: $('#voiceName').value || 'Мой голос', consent: true, transcript: voiceTranscript }));
     store.set('anima.voice.cloned', v.id); voiceUI();
     vStatus(`готово: «${v.name}»`);
     head.speak('[e:curious] Ну как? [e:smirk*0.8] Теперь я говорю твоим голосом.', { revert: true });
@@ -677,17 +706,21 @@ $('#randomLook').onclick = () => {
 $('#resetLook').onclick = () => { api('head.setLook({}, { replace: true })', () => head.setLook({}, { replace: true })); syncLook(); };
 lookSel('#eyeShape', 'eyeShape');
 lookSel('#glassesSel', 'glasses', (v) => (v === 'none' ? false : v));
-$('#avatarSave').onclick = async () => {
-  const json = await api("await head.exportAvatar({ format: 'json' })", () => head.exportAvatar({ format: 'json' }));
-  const file = new File([json], 'avatar.anima.json', { type: 'application/json' });
-  status(`Аватар: ${(file.size / 1024).toFixed(1)} КБ`);
-  log(`⟵ ${file.size} байт`, 'ev');
+async function saveFile(file, title) {
   if (navigator.canShare?.({ files: [file] }) && matchMedia('(pointer: coarse)').matches) {   // телефон: «Поделиться» → мессенджер, Bluetooth, AirDrop
-    try { await navigator.share({ files: [file], title: 'Аватар Anima' }); return; } catch (e) { if (e.name === 'AbortError') return; }
+    try { await navigator.share({ files: [file], title }); return; } catch (e) { if (e.name === 'AbortError') return; }
   }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(file); a.download = file.name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$('#avatarSave').onclick = async () => {
+  const o = { format: 'json', ...(head.getVoice() && $('#voiceWithSample').checked && { voiceSample: true }) };
+  const json = await api(`await head.exportAvatar(${fmt(o)})`, () => head.exportAvatar(o));
+  const file = new File([json], 'avatar.anima.json', { type: 'application/json' });
+  status(`Аватар: ${(file.size / 1024).toFixed(1)} КБ${head.getVoice() ? ', с голосом' : ''}`);
+  log(`⟵ ${file.size} байт`, 'ev');
+  saveFile(file, 'Аватар Anima');
 };
 $('#glbSave').onclick = async () => {
   const detail = $('#glbDetail').value;
@@ -732,7 +765,7 @@ stage.addEventListener('drop', (e) => {
   e.preventDefault(); stage.classList.remove('drop');
   const files = [...(e.dataTransfer?.files || [])];
   const j = files.find((x) => /\.json$/i.test(x.name) || x.type === 'application/json');
-  if (j) return openAvatar(j);
+  if (j) return j.text().then((t) => (/"format"\s*:\s*"anima-voice"/.test(t.slice(0, 200)) ? openVoice(j) : openAvatar(j)));
   const f = files.find((x) => x.type.startsWith('image/'));
   if (f) usePhoto(f, f.name);
 });

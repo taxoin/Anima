@@ -74,3 +74,11 @@ const myVoice: VoiceProfile | null = head.getVoice();
 head.on('voiceError', (e: Error) => console.warn(e.message, myVoice));
 async function cloneDemo(blob: Blob) { const p = await head.cloneVoice(blob, { name: 'Мой голос' }); head.setVoice(null); return new ElevenLabsVoice({ apiKey: 'k' }).synth('Привет', p.id, { rate: 1.1 }); }
 void cloneDemo;
+async function packDemo(file: File) {
+  const pack = await head.exportVoice({ sample: true });
+  if (pack) console.log(pack.providers.elevenlabs?.id, pack.samples?.length);
+  await head.importVoice(file, { apiKey: 'k', reclone: false });
+  head.on('voiceMissing', (e) => e.canReclone && head.recloneVoice());
+  return head.exportAvatar({ format: 'json', voiceSample: true });
+}
+void packDemo;

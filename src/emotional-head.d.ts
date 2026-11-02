@@ -238,6 +238,8 @@ export interface ExportAvatarOptions {
   size?: number;
   quality?: number;
   format?: 'object' | 'json';
+  /** Вложить запись своего голоса в пакет голоса (биометрия — только с согласия). */
+  voiceSample?: boolean;
 }
 
 export interface ExportGLBOptions {
@@ -284,6 +286,9 @@ export interface EmotionalHeadEvents {
   qualityChange: { quality: Quality };
   voiceChange: VoiceProfile | null;
   voiceError: Error;
+  /** клона нет в аккаунте текущего ключа (другой аккаунт, удалён); canReclone — в пакете есть запись и согласие */
+  voiceMissing: { voice: VoiceProfile | null; canReclone: boolean };
+  voiceRecloned: VoiceProfile;
 }
 /** lite — упрощённая сетка, без теней и отражений окружения (кроме глаз, стёкол, металла), без отлива и лака, pixelRatio ≤ 1.5; high — прежнее полное качество, сетка по detail. */
 export interface Insets { top?: number; bottom?: number; left?: number; right?: number; }
@@ -347,6 +352,12 @@ export declare class EmotionalHead {
   getVoice(): VoiceProfile | null;
   /** Клонировать голос по записи (30 с – 2 мин чистой речи) и сразу говорить им. Только свой голос или с согласия. */
   cloneVoice(samples: Blob | Blob[], o?: CloneVoiceOptions): Promise<VoiceProfile>;
+  /** Голосовой пакет: id у провайдера (ссылка на свой аккаунт) и по желанию запись — по ней клон пересоздаётся где угодно. */
+  exportVoice(o: { sample?: boolean; format: 'json' }): Promise<string | null>;
+  exportVoice(o?: { sample?: boolean; format?: 'object' }): Promise<VoicePack | null>;
+  /** Подключить голос из пакета; клона нет в аккаунте — пересоздать из записи (reclone, по умолчанию да). */
+  importVoice(src: VoicePack | string | Blob, o?: { apiKey?: string; reclone?: boolean; verify?: boolean; base?: string }): Promise<VoiceProfile | null>;
+  recloneVoice(o?: { apiKey?: string; base?: string }): Promise<VoiceProfile | null>;
 
   // внешность и сцена
   setGender(gender: Gender): this;
@@ -381,7 +392,7 @@ export declare class EmotionalHead {
   refineShape(o?: { iterations?: number; alpha?: number; realism?: number; onProgress?: (text: string) => void }): Promise<number[]>;
   exportAvatar(o: ExportAvatarOptions & { format: 'json' }): Promise<string>;
   exportAvatar(o?: ExportAvatarOptions): Promise<Record<string, unknown>>;
-  importAvatar(src: string | File | Blob | Record<string, unknown>, o?: { caricature?: number; texture?: number; realism?: number; gender?: Gender; look?: LookOption }): Promise<PhotoReport | null>;
+  importAvatar(src: string | File | Blob | Record<string, unknown>, o?: { caricature?: number; texture?: number; realism?: number; gender?: Gender; look?: LookOption; reclone?: boolean }): Promise<PhotoReport | null>;
 
   // модели и экспорт
   loadModel(url: string, o?: LoadModelOptions): Promise<unknown>;
@@ -425,7 +436,15 @@ export declare const EARRINGS: Record<string, { style: string; color?: Color; si
 /** Профиль своего голоса — сохраняется в exportAvatar() (без ключа и записи). */
 export interface VoiceProfile { provider: 'elevenlabs'; id: string; name: string; model?: string; settings?: VoiceSettings }
 export interface VoiceSettings { stability?: number; style?: number; similarity?: number }
-export interface CloneVoiceOptions { provider?: 'elevenlabs'; apiKey?: string; name?: string; description?: string; removeNoise?: boolean; model?: string; base?: string }
+export interface CloneVoiceOptions { provider?: 'elevenlabs'; apiKey?: string; name?: string; description?: string; removeNoise?: boolean; model?: string; base?: string; consent?: boolean; transcript?: string }
+/** Файл голоса (.anima-voice.json). samples — запись (base64), только с согласия владельца. */
+export interface VoicePack {
+  format: 'anima-voice'; v: 1; name: string; created: string; consent: boolean; transcript?: string;
+  samples?: { type: string; data: string }[];
+  providers: { elevenlabs?: { id: string; model?: string } };
+  settings?: VoiceSettings;
+}
+export declare const VOICE_PACK_FORMAT: 'anima-voice';
 export interface TTSResult { audio: Blob; alignment: { characters: string[]; character_start_times_seconds: number[]; character_end_times_seconds?: number[] } | null }
 export declare class VoiceError extends Error { status?: number; code?: string; provider?: string }
 /** ElevenLabs: клонирование (Instant Voice Cloning) и синтез с таймингами букв. Запросы идут прямо из браузера (CORS). */
@@ -433,6 +452,7 @@ export declare class ElevenLabsVoice {
   constructor(o?: { apiKey?: string; model?: string; base?: string; cache?: number });
   clone(samples: Blob | Blob[], o?: { name?: string; description?: string; removeNoise?: boolean }): Promise<VoiceProfile>;
   voices(): Promise<{ id: string; name: string; category: string }[]>;
+  get(id: string): Promise<{ id: string; name: string; category: string }>;
   remove(id: string): Promise<void>;
   synth(text: string, id: string, o?: { rate?: number } & VoiceSettings): Promise<TTSResult>;
   tts(id: string, o?: VoiceSettings): (text: string, info?: { rate?: number; pitchVoice?: number }) => Promise<TTSResult>;

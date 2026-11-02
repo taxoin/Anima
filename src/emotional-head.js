@@ -22,7 +22,7 @@ import {
   resolveEmotion, applyRestraint, parseNarrative, parseEmotionString, expandChannels,
 } from './emotions.js';
 import { SpeechController, SPEECH_CHANNELS, WebSpeech, VISEMES, parseMarkup, AudioAnalyser } from './lipsync.js';
-import { VOICE_PROVIDERS, ElevenLabsVoice, VoiceError } from './voice.js';
+import { VOICE_PROVIDERS, ElevenLabsVoice, VoiceError, VOICE_PACK_FORMAT, blobToB64, b64ToBlob, compactSample } from './voice.js';
 
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const smooth01 = (x) => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
@@ -89,6 +89,18 @@ function makeEnvironment(renderer) {
 
 // ------------------------------------------------------------------ основной класс
 const AVATAR_FORMAT = 2;          // версия файла exportAvatar()
+
+/** JSON из объекта, строки, File/Blob или URL. */
+async function readJson(src) {
+  let d = src;
+  if (src instanceof Blob) d = await src.text();
+  else if (typeof src === 'string' && !/^\s*\{/.test(src)) {
+    const r = await fetch(src);
+    if (!r.ok) throw new Error(`Файл не загрузился: ${r.status} ${src}`);
+    d = await r.text();
+  }
+  return typeof d === 'string' ? JSON.parse(d) : d;
+}
 
 export class EmotionalHead {
   /**
@@ -298,6 +310,10 @@ export class EmotionalHead {
     const tts = prov.tts(voice.id, voice.settings);
     this._voiceTts = async (text, info) => {
       try { return await tts(text, info); } catch (e) {
+        // клона нет в этом аккаунте (другой ключ, удалён): есть запись и согласие — пересоздать и повторить фразу
+        if (e.code === 'voice_not_found' && this._voiceAuto && this._canReclone()) {
+          try { await this.recloneVoice(); return await this._voiceTts(text, info); } catch (e2) { e = e2; }
+        } else if (e.code === 'voice_not_found') this._emit('voiceMissing', { voice: this.getVoice(), canReclone: this._canReclone() });
         console.warn('[emotional-head] свой голос недоступен, говорю через Web Speech:', e.message || e);
         this._emit('voiceError', e);
         return null;
@@ -312,7 +328,8 @@ export class EmotionalHead {
    * Клонировать голос по записи и сразу говорить им. samples — Blob/File (или массив): 30 с – 2 мин чистой речи.
    * Нужен ключ ElevenLabs с правом Voices: write и тариф с Instant Voice Cloning. Говорить чужим голосом — только с согласия.
    * @param {Blob|Blob[]} samples
-   * @param {object} [o] { provider='elevenlabs', apiKey, name, description, removeNoise=true, model, base }
+   * @param {object} [o] { provider='elevenlabs', apiKey, name, description, removeNoise=true, model, base,
+   *   consent — владелец согласен (пакет с записью сможет пересоздать клон), transcript — текст записи }
    * @returns {Promise<{provider: string, id: string, name: string}>}
    */
   async cloneVoice(samples, o = {}) {
@@ -321,9 +338,77 @@ export class EmotionalHead {
     this._voiceKeys ||= {};
     const apiKey = o.apiKey ?? this._voiceKeys[provider];
     const voice = await new Prov({ apiKey, base: o.base ?? this._voiceBase }).clone(samples, o);
+    this._voicePack = { id: voice.id, samples: [].concat(samples), transcript: o.transcript || '', consent: !!o.consent, created: new Date().toISOString() };
     this.setVoice(voice, { apiKey, model: o.model, base: o.base });
     return { ...this._voice };
   }
+
+  /**
+   * Голосовой пакет (13.4): переносимый файл голоса. id у провайдера — только ссылка (работает в своём аккаунте),
+   * переносится сама запись: по ней клон пересоздаётся в любом аккаунте (recloneVoice).
+   * @param {object} [o] { sample=false — вложить запись (биометрия: только с согласия владельца), format='object'|'json' }
+   * @returns {Promise<object|string|null>} { format: 'anima-voice', v: 1, name, created, consent, transcript?, samples?, providers }
+   */
+  async exportVoice(o = {}) {
+    const v = this._voice;
+    if (!v) return null;
+    const P = this._voicePack?.id === v.id ? this._voicePack : null;
+    const d = { format: VOICE_PACK_FORMAT, v: 1, name: v.name, created: P?.created || new Date().toISOString(), consent: !!P?.consent,
+      providers: { [v.provider]: { id: v.id, ...(v.model && { model: v.model }) } } };
+    if (v.settings) d.settings = { ...v.settings };
+    if (P?.transcript) d.transcript = P.transcript;
+    if (o.sample) {
+      if (!P?.samples?.length) throw new Error('exportVoice({ sample }): записи нет — голос подключён по id, не клонирован здесь');
+      d.samples = await Promise.all(P.samples.map(async (b) => { const c = await compactSample(b); return { type: c.type || 'audio/webm', data: await blobToB64(c) }; }));
+    }
+    return o.format === 'json' ? JSON.stringify(d) : d;
+  }
+  /**
+   * Подключить голос из пакета (объект, JSON, File/Blob, URL). Сохранённый id проверяется на текущем ключе;
+   * если клона в аккаунте нет, а в пакете есть запись и согласие — клон пересоздаётся (новый id — в exportVoice()).
+   * Без права ключа Voices: read проверка откладывается до первой фразы — там то же самое.
+   * @param {object} [o] { apiKey, reclone=true, verify=true, base }
+   * @returns {Promise<object>} профиль голоса
+   */
+  async importVoice(src, o = {}) {
+    const d = await readJson(src);
+    if (!d || d.format !== VOICE_PACK_FORMAT) throw new Error('Не похоже на файл голоса (format anima-voice)');
+    if (d.v > 1) throw new Error(`Файл голоса новой версии (v${d.v}), обновите библиотеку`);
+    const el = d.providers?.elevenlabs;
+    this._voicePack = { id: el?.id, samples: (d.samples || []).map((x) => b64ToBlob(x.data, x.type)), transcript: d.transcript || '', consent: !!d.consent, created: d.created, name: d.name };
+    this._voiceAuto = o.reclone !== false;
+    if (o.apiKey !== undefined) (this._voiceKeys ||= {}).elevenlabs = o.apiKey;
+    if (!el?.id) {
+      if (!this._canReclone()) throw new Error('В файле голоса нет ни id, ни записи с согласием');
+      return this.recloneVoice(o);
+    }
+    this.setVoice({ provider: 'elevenlabs', id: el.id, name: d.name, model: el.model, settings: d.settings }, o);
+    if (o.verify !== false) {
+      let missing = false;
+      try { await new ElevenLabsVoice({ apiKey: this._voiceKeys?.elevenlabs, base: o.base ?? this._voiceBase }).get(el.id); } catch (e) { missing = e.code === 'voice_not_found'; }   // нет права на чтение — проверим на первой фразе
+      if (missing) {
+        if (this._voiceAuto && this._canReclone()) return this.recloneVoice(o);
+        this._emit('voiceMissing', { voice: this.getVoice(), canReclone: this._canReclone() });
+      }
+    }
+    return this.getVoice();
+  }
+  /** Пересоздать клон из записи пакета (другой аккаунт, клон удалён). Нужны запись и согласие в пакете. */
+  async recloneVoice(o = {}) {
+    const P = this._voicePack;
+    if (!this._canReclone()) throw new Error('recloneVoice(): в пакете нет записи или согласия владельца голоса');
+    if (this._recloning) return this._recloning;
+    const name = this._voice?.name || P.name || 'Anima';
+    this._recloning = (async () => {
+      const v = await new ElevenLabsVoice({ apiKey: o.apiKey ?? this._voiceKeys?.elevenlabs, base: o.base ?? this._voiceBase }).clone(P.samples, { name, description: 'Голос из пакета Anima' });
+      P.id = v.id;
+      this.setVoice({ ...(this._voice || {}), provider: 'elevenlabs', id: v.id, name }, o);
+      this._emit('voiceRecloned', this.getVoice());
+      return this.getVoice();
+    })();
+    try { return await this._recloning; } finally { this._recloning = null; }
+  }
+  _canReclone() { const P = this._voicePack; return !!(P?.consent && P.samples?.length); }
 
   /** Lip-sync по живому потоку (микрофон / WebRTC). Возвращает функцию остановки. */
   listenStream(stream) {
@@ -718,7 +803,8 @@ export class EmotionalHead {
   /**
    * Экспорт аватара: пол, настройки шаржа и слепок лица (точки, меры, цвета, текстура кожи).
    * Исходного фото внутри нет. Обычно 5–15 КБ JSON — помещается в сообщение, QR-цепочку, localStorage.
-   * @param {object} [o] { size=320 — макс. сторона текстуры (0 — без неё, ~5 КБ), quality=0.8, format='object'|'json' }
+   * @param {object} [o] { size=320 — макс. сторона текстуры (0 — без неё, ~5 КБ), quality=0.8, format='object'|'json',
+   *   voiceSample=false — вложить запись своего голоса (exportVoice) }
    * @returns {Promise<object|string>}
    */
   async exportAvatar(o = {}) {
@@ -726,7 +812,7 @@ export class EmotionalHead {
     const look = this.options.look || {};
     const d = { format: 'anima-avatar', v: AVATAR_FORMAT, gender: this.gender, look: Object.keys(look).length ? JSON.parse(JSON.stringify(look)) : null,
       photo: this._portrait ? { ...this._photoOpts } : null, portrait: null };
-    if (this._voice) d.voice = { ...this._voice };                  // 13.1: свой голос — только id, без ключа и записи
+    if (this._voice) d.voice = await this.exportVoice({ sample: !!o.voiceSample });   // голосовой пакет (13.4): id, запись — только по voiceSample
     if (this._portrait) d.portrait = await this._portrait.toData(o);
     return o.format === 'json' ? JSON.stringify(d) : d;
   }
@@ -737,19 +823,15 @@ export class EmotionalHead {
    * Внешность (look) из файла заменяет текущую; в файле v1 её нет — текущая сохраняется.
    */
   async importAvatar(src, o = {}) {
-    let d = src;
-    if (src instanceof Blob) d = await src.text();
-    else if (typeof src === 'string' && !/^\s*\{/.test(src)) {
-      const r = await fetch(src);
-      if (!r.ok) throw new Error(`Аватар не загрузился: ${r.status} ${src}`);
-      d = await r.text();
-    }
-    if (typeof d === 'string') d = JSON.parse(d);
+    const d = await readJson(src);
     if (!d || d.format !== 'anima-avatar') throw new Error('Не похоже на файл аватара (format anima-avatar)');
     if (d.v > AVATAR_FORMAT) throw new Error(`Файл аватара новой версии (v${d.v}), обновите библиотеку`);
     const gender = o.gender || d.gender;
     if (o.look || d.look !== undefined) this.options.look = { ...(o.look || d.look || {}) };
-    if (d.voice) { try { this.setVoice(d.voice); } catch (e) { console.warn('[emotional-head] голос из файла не подключён:', e.message); } }   // нет в файле — текущий голос остаётся
+    if (d.voice) {                                                 // нет в файле — текущий голос остаётся
+      try { if (d.voice.format === VOICE_PACK_FORMAT) await this.importVoice(d.voice, { reclone: o.reclone }); else this.setVoice(d.voice); }   // 13.1 — просто профиль
+      catch (e) { console.warn('[emotional-head] голос из файла не подключён:', e.message); }
+    }
     if (!d.portrait) {
       this._portrait = null;
       this._customModel = true;
@@ -1370,6 +1452,6 @@ function mirrorName(k) {
 function mirrorChannels(ch) { const o = {}; for (const k in ch) o[mirrorName(k)] = ch[k]; return o; }
 
 // реэкспорт, чтобы хватало одного импорта
-export { ElevenLabsVoice, VoiceError, VOICE_PROVIDERS };
+export { ElevenLabsVoice, VoiceError, VOICE_PROVIDERS, VOICE_PACK_FORMAT };
 export { SKIN_TONES, EYE_COLORS, EYE_SHAPES, NOSE_SHAPES, TEETH_COLORS, LIP_PROFILES, OUTFITS, HEADPHONES, MASKS, GLASSES, BEARDS, HAIR_STYLES, HATS, EARRINGS, MAKEUP, CHANNELS, EMOTIONS, MICRO, GESTURES, ALIASES, VISEMES, WebSpeech, parseNarrative, parseEmotionString, parseMarkup, resolveEmotion };
 export default EmotionalHead;

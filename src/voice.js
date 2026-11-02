@@ -72,6 +72,14 @@ export class ElevenLabsVoice {
     return (await r.json()).voices.map((v) => ({ id: v.voice_id, name: v.name, category: v.category }));
   }
 
+  /** Голос по id: { id, name, category }. Ошибка с code 'voice_not_found' — в этом аккаунте его нет. Нужно право Voices: read. */
+  async get(id) {
+    const r = await fetch(`${this.base}/v1/voices/${encodeURIComponent(id)}`, { headers: this._h() });
+    if (!r.ok) throw await elError(r);
+    const v = await r.json();
+    return { id: v.voice_id, name: v.name, category: v.category };
+  }
+
   /** Удалить голос из аккаунта ElevenLabs. */
   async remove(id) {
     const r = await fetch(`${this.base}/v1/voices/${encodeURIComponent(id)}`, { method: 'DELETE', headers: this._h() });
@@ -110,6 +118,41 @@ export class ElevenLabsVoice {
       return this.synth(text, id, { rate: info.rate ?? 1, stability: (o.stability ?? 0.5) - 0.2 * arousal, style: (o.style ?? 0) + 0.3 * arousal, similarity: o.similarity });
     };
   }
+}
+
+// ---------------------------------------------------------------- голосовой пакет (13.4)
+
+/** Формат файла голоса: имя, согласие, по желанию запись с текстом и id голоса у провайдеров. */
+export const VOICE_PACK_FORMAT = 'anima-voice';
+
+export async function blobToB64(blob) {
+  const u = new Uint8Array(await blob.arrayBuffer());
+  let s = '';
+  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+export function b64ToBlob(b64, type = 'application/octet-stream') {
+  const bin = atob(b64), u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return new Blob([u], { type });
+}
+
+/**
+ * Запись для пакета: короткая (запись из браузера — Opus, ~10 КБ/с) — как есть; большая (WAV, длинный mp3) —
+ * 16 кГц моно WAV не длиннее maxSec: клонированию хватает, файл ≤ ~3 МБ.
+ */
+export async function compactSample(blob, { maxBytes = 3e6, maxSec = 90, rate = 16000 } = {}) {
+  if (blob.size <= maxBytes) return blob;
+  const src = await new OfflineAudioContext(1, 1, rate).decodeAudioData(await blob.arrayBuffer());
+  const len = Math.min(Math.ceil(src.duration * rate), maxSec * rate);
+  const ctx = new OfflineAudioContext(1, len, rate), node = ctx.createBufferSource();
+  node.buffer = src; node.connect(ctx.destination); node.start();
+  const pcm = (await ctx.startRendering()).getChannelData(0), dv = new DataView(new ArrayBuffer(44 + pcm.length * 2));
+  const str = (o, t) => { for (let i = 0; i < t.length; i++) dv.setUint8(o + i, t.charCodeAt(i)); };
+  str(0, 'RIFF'); dv.setUint32(4, 36 + pcm.length * 2, true); str(8, 'WAVEfmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, rate, true); dv.setUint32(28, rate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); str(36, 'data'); dv.setUint32(40, pcm.length * 2, true);
+  for (let i = 0; i < pcm.length; i++) dv.setInt16(44 + i * 2, clamp(pcm[i], -1, 1) * 32767, true);
+  return new Blob([dv.buffer], { type: 'audio/wav' });
 }
 
 /** Провайдеры по имени из профиля голоса ({ provider, id, name }). */
