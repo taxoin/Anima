@@ -466,7 +466,7 @@ export class EmotionalHead {
     const { analyzePortrait, FOCUS } = await import('./photo-avatar.js');
     const portrait = src?.isPortrait ? src : await analyzePortrait(src, o);
     this._portrait = portrait;
-    this._photoOpts = { caricature: o.caricature ?? 1.5, texture: o.texture ?? 0.9, realism: o.realism ?? 0.8, focus: o.focus ?? FOCUS, expression: o.expression ?? 1 };
+    this._photoOpts = { caricature: o.caricature ?? 1.5, texture: o.texture ?? 0.9, realism: o.realism ?? 0.8, focus: o.focus ?? FOCUS, expression: o.expression ?? 0 };
     let guess = null;
     if (o.gender === 'female' || o.gender === 'male') this.gender = o.gender;
     else if (o.gender !== 'keep') {                                  // 7.2: пол по фото

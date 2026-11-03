@@ -64,6 +64,7 @@
     "build": "npx esbuild src/element.js --bundle --minify --format=esm --external:three --external:three/addons/* --outfile=dist/emotional-head.min.js",
     "test:visual": "node tests/visual.mjs",
     "test:likeness": "node tests/likeness.mjs",
+    "test:resemblance": "node tests/resemblance.mjs",
     "fetch:portraits": "node tests/fetch-portraits.mjs",
     "test:detect": "node tests/detect.mjs",
     "test:types": "tsc -p tests/types/tsconfig.json",
