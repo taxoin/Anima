@@ -442,8 +442,8 @@ export class EmotionalHead {
     this._needRender = true;
     if (this.rig) this.rig.dispose();
     this.rig = this._makeRig(this.gender);
-    this._sig = this._portrait?.signature?.(this._photoOpts?.expression ?? 0) || null;   // характерное выражение по фото (14.2)
-    if (this._sig && !Object.keys(this._sig).length) this._sig = null;
+    this._charExpr = this._portrait?.signature?.(this._photoOpts?.expression ?? 0) || null;   // характерное выражение по фото (14.2)
+    if (this._charExpr && !Object.keys(this._charExpr).length) this._charExpr = null;
     this.scene.add(this.rig.object3D);
     this._applyEnv();
   }
@@ -643,9 +643,9 @@ export class EmotionalHead {
     const hide = [this.rig.glasses, ...(this.rig.beard?.parts || []).map((q) => q.mesh)].filter(Boolean);
     hide.forEach((m) => { m.visible = false; m.userData.hidden = true; });
     this.rig.setCornea?.(false);
-    this._noSig = true;                                            // мимика — только та, что передана (у метрики — мимика фото)
+    this._noCharExpr = true;                                       // мимика — только та, что передана (у метрики — мимика фото)
     this.renderStill(o.channels || {}, {}, cam);
-    this._noSig = false;
+    this._noCharExpr = false;
     this.rig.setCornea?.(true);
     hide.forEach((m) => { m.visible = true; m.userData.hidden = false; });
     const s = Math.min(W, H), c = document.createElement('canvas');
@@ -1014,7 +1014,7 @@ export class EmotionalHead {
   renderStill(channels = {}, pose = {}, camera = this.camera) {
     const ch = { ...channels };                                    // + не-ARKit каналы (tongueUp)
     for (const c of CHANNELS) ch[c] = channels[c] || 0;
-    if (this._sig && !this._noSig) for (const c in this._sig) ch[c] = Math.min(1, ch[c] + this._sig[c]);   // характерное выражение (14.2)
+    if (this._charExpr && !this._noCharExpr) for (const c in this._charExpr) ch[c] = Math.min(1, ch[c] + this._charExpr[c]);   // характерное выражение (14.2)
     this.rig.update(ch, { pitch: 0, yaw: 0, roll: 0, eyeYaw: 0, eyePitch: 0, breath: 0, focus: 8, still: true, pupil: channels.pupil || 0, ...pose });   // still: волосы в равновесии
     this.renderer.render(this.scene, camera);
     return this.renderer.domElement;
@@ -1320,11 +1320,11 @@ export class EmotionalHead {
 
     for (const c of CHANNELS) out[c] = base[c];
     // характерное выражение по фото (14.2) — всегда, при сильной эмоции слабее
-    if (this._sig) {
+    if (this._charExpr) {
       let e = 0;
       for (const c of CHANNELS) if (base[c] > e) e = base[c];
       const w = 1 - 0.6 * clamp(e / 0.6, 0, 1);
-      for (const c in this._sig) out[c] = (out[c] || 0) + this._sig[c] * w;
+      for (const c in this._charExpr) out[c] = (out[c] || 0) + this._charExpr[c] * w;
     }
     const g = { '@pitch': 0, '@yaw': 0, '@roll': 0, '@gazeX': 0, '@gazeY': 0, '@breath': 0 };
 
