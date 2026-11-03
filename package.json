@@ -73,6 +73,7 @@
   },
   "devDependencies": {
     "@types/three": "^0.170.0",
+    "@vladmandic/face-api": "1.7.15",
     "puppeteer-core": "^23.11.1",
     "typescript": "^5.6.3"
   }

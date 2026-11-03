@@ -1,109 +1,162 @@
 {
- "date": "2026-11-03T19:14:58.558Z",
+ "date": "2026-11-03T22:34:34.806Z",
  "opts": {},
+ "faceApi": "1.7.15",
  "summary": {
   "cos": 0.662,
   "top1": 5,
   "top5": 19,
   "pct": 96.3,
-  "failed": 0
+  "failed": 0,
+  "idDist": 0.664,
+  "idTop1": 2,
+  "idTop5": 11,
+  "idFailed": 0
  },
  "faces": {
   "004494bc17": {
    "cos": 0.793,
-   "rank": 1
+   "rank": 1,
+   "idDist": 0.695,
+   "idRank": 19
   },
   "fcd353273c": {
    "cos": 0.632,
-   "rank": 3
+   "rank": 3,
+   "idDist": 0.592,
+   "idRank": 3
   },
   "d38f47ee6a": {
    "cos": 0.749,
-   "rank": 3
+   "rank": 3,
+   "idDist": 0.71,
+   "idRank": 17
   },
   "b21dd7581b": {
    "cos": 0.468,
-   "rank": 28
+   "rank": 28,
+   "idDist": 0.676,
+   "idRank": 23
   },
   "0559c6f953": {
    "cos": 0.686,
-   "rank": 2
+   "rank": 2,
+   "idDist": 0.675,
+   "idRank": 15
   },
   "b63d3d621e": {
    "cos": 0.506,
-   "rank": 4
+   "rank": 4,
+   "idDist": 0.622,
+   "idRank": 3
   },
   "e41d5716b8": {
    "cos": 0.704,
-   "rank": 4
+   "rank": 4,
+   "idDist": 0.623,
+   "idRank": 6
   },
   "ee358a370c": {
    "cos": 0.78,
-   "rank": 1
+   "rank": 1,
+   "idDist": 0.692,
+   "idRank": 30
   },
   "a36856c69b": {
    "cos": 0.644,
-   "rank": 2
+   "rank": 2,
+   "idDist": 0.679,
+   "idRank": 3
   },
   "13243f7109": {
    "cos": 0.676,
-   "rank": 5
+   "rank": 5,
+   "idDist": 0.536,
+   "idRank": 1
   },
   "b55a0e7e14": {
    "cos": 0.711,
-   "rank": 5
+   "rank": 5,
+   "idDist": 0.685,
+   "idRank": 19
   },
   "7b53f56d2d": {
    "cos": 0.5,
-   "rank": 5
+   "rank": 5,
+   "idDist": 0.712,
+   "idRank": 16
   },
   "820a4f262c": {
    "cos": 0.871,
-   "rank": 2
+   "rank": 2,
+   "idDist": 0.673,
+   "idRank": 12
   },
   "ac264ef4ac": {
    "cos": 0.652,
-   "rank": 13
+   "rank": 13,
+   "idDist": 0.604,
+   "idRank": 2
   },
   "f9ffbfb5ff": {
    "cos": 0.308,
-   "rank": 27
+   "rank": 27,
+   "idDist": 0.572,
+   "idRank": 3
   },
   "28de559608": {
    "cos": 0.866,
-   "rank": 2
+   "rank": 2,
+   "idDist": 0.563,
+   "idRank": 2
   },
   "aac3dc88c5": {
    "cos": 0.289,
-   "rank": 16
+   "rank": 16,
+   "idDist": 0.626,
+   "idRank": 1
   },
   "3c7149ebf4": {
    "cos": 0.631,
-   "rank": 1
+   "rank": 1,
+   "idDist": 0.621,
+   "idRank": 2
   },
   "ac56d5a36b": {
    "cos": 0.547,
-   "rank": 6
+   "rank": 6,
+   "idDist": 0.826,
+   "idRank": 105
   },
   "b23a56519d": {
    "cos": 0.827,
-   "rank": 1
+   "rank": 1,
+   "idDist": 0.771,
+   "idRank": 30
   },
   "579e859c5c": {
    "cos": 0.669,
-   "rank": 5
+   "rank": 5,
+   "idDist": 0.732,
+   "idRank": 22
   },
   "d539a71591": {
    "cos": 0.691,
-   "rank": 2
+   "rank": 2,
+   "idDist": 0.808,
+   "idRank": 86
   },
   "0e2c354d22": {
    "cos": 0.832,
-   "rank": 4
+   "rank": 4,
+   "idDist": 0.62,
+   "idRank": 4
   },
   "aeb925936b": {
    "cos": 0.845,
-   "rank": 1
+   "rank": 1,
+   "idDist": 0.625,
+   "idRank": 2
   }
  }
 }
