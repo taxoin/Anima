@@ -393,7 +393,16 @@ const BASE_CORR = {
   female: { browY: -0.1098, browArch: 0.0183, browTail: 0.0529, browX0: -0.0018, browX1: 0.0196, browTh: -0.002, noseTip: -0.0405, noseW: 0.0299, mouthHW: -0.0154, lipU: -0.0159, lipL: 0.0162, widths: [0, 0.0871, -0.0319, -0.0334, -0.0698, 0.2957] },
   male: { browY: -0.0858, browArch: 0.0281, browTail: 0.0505, browX0: -0.0035, browX1: 0.0092, browTh: -0.0045, noseTip: -0.0419, noseW: 0.0225, mouthHW: -0.017, lipU: -0.0154, lipL: 0.0267, widths: [0, 0.0541, -0.0499, -0.0453, -0.0831, 0.2947] },
 };
+// Разброс мер по 126 портретам набора (tests/portraits, |yaw| < 0.2): [среднее, СКО] — насколько черта необычна (14.1)
+const MEAS_POP = { eyeCX: [0.2423, 0.01882], eyeW: [0.2126, 0.0165], eyeH: [0.08617, 0.00755], tilt: [0.08072, 0.04222], browY: [0.1492, 0.02378], browArch: [0.03386, 0.01054], browTail: [-0.02115, 0.02049], browX0: [0.1096, 0.0107], browX1: [0.4449, 0.03059], browTh: [0.03722, 0.00364], noseTip: [-0.257, 0.03162], noseW: [0.1586, 0.01182], noseBr: [0.04441, 0.00328], noseProj: [0.3275, 0.04811], mouthHW: [0.1906, 0.01461], lipU: [0.03484, 0.01016], lipL: [0.06847, 0.01179], chin: [-0.8631, 0.04442], upS: [0.07126, 0.02156], upF: [0.6354, 0.02601], loS: [0.2235, 0.062], loF: [0.6467, 0.3358], chinSq: [0.6641, 0.05152], cheekPr: [1.053, 0.01465], bowX: [0.2912, 0.00959], bowRC: [0.8368, 0.03246] };
+const WIDTHS_POP = [[1, 0], [1.005, 0.07572], [1.033, 0.07463], [1.043, 0.08914], [1.072, 0.1241], [1.034, 0.1857]];
 export const REFINE_MEAS = ['eyeCX', 'eyeW', 'eyeH', 'tilt', 'browY', 'browArch', 'browTail', 'browX0', 'browX1', 'browTh', 'noseTip', 'noseW', 'mouthHW', 'lipU', 'lipL', 'chin'];
+// средняя мимика портретов набора (ARKit-оценки MediaPipe, пары — среднее левой и правой) — «обычное» выражение (14.2)
+const BS_POP = { browDown: 0.313, browInnerUp: 0.046, browOuterUp: 0.052, eyeSquint: 0.528, eyeWide: 0.01, cheekSquint: 0, noseSneer: 0, mouthSmile: 0.528, mouthFrown: 0.002, mouthDimple: 0.03, mouthPress: 0.133, mouthStretch: 0.046, mouthLeft: 0.005, mouthRight: 0.004, mouthRollLower: 0.055, mouthRollUpper: 0.08, mouthShrugLower: 0.069, mouthShrugUpper: 0.018, mouthPucker: 0.049 };
+// выборочный шарж по умолчанию (0 — все черты усиливаются одинаково); в «главные черты» не берём меры, которые
+// MediaPipe видит плохо: форму век, ширину спинки и выступ носа (по снимку анфас)
+export const FOCUS = 0.8;
+const SHAPE_NOISY = new Set(['upS', 'upF', 'loS', 'loF', 'noseBr', 'noseProj']);
 const BOW_MEAN = { x: 0.29, rc: 0.866 };    // «лук Купидона» по калибровочным фото: пики на 0.29 полуширины рта, центр/пик = 0.87
 
 // ------------------------------------------------------------------ обработка изображения
@@ -1333,16 +1342,72 @@ export class Portrait {
   }
 
   /**
+   * Выборочный шарж (14.1): во сколько раз усиливать отличие каждой черты от среднего. Как у карикатуриста —
+   * самые необычные черты (в разбросах по набору портретов, z) усиливаются сильнее всего, три главные — всегда,
+   * обычные почти не трогаются (там отличие — чаще шум распознавания), закрытые усами и бородой — тоже.
+   * focus = 0 — все черты одинаково (k).
+   * При k ≤ 1 (портрет, а не шарж) усиление везде k.
+   * @returns {{ meas: Record<string, number>, widths: number[], z: Record<string, number>, top: string[] }}
+   */
+  gains(k = 1.5, focus = FOCUS) {
+    const Q = this.meas, z = {};
+    for (const f in MEAS_POP) if (typeof Q[f] === 'number') z[f] = (Q[f] - MEAS_POP[f][0]) / MEAS_POP[f][1];
+    (Q.widths || []).forEach((r, i) => { if (WIDTHS_POP[i][1]) z['w' + i] = (r - WIDTHS_POP[i][0]) / WIDTHS_POP[i][1]; });
+    // главные черты: овал — одна черта (ширины на разных высотах связаны), из пар губ, век и т.п. — каждая своя
+    // усы закрывают верхнюю губу, борода — подбородок и низ овала: эти меры по фото — не черта лица
+    const hidden = new Set([...(this.beardStyle?.moustache ? ['lipU', 'bowRC', 'bowX'] : []), ...(this.beardStyle?.style && this.beardStyle.style !== 'none' ? ['lipL', 'chin', 'chinSq', 'w5'] : [])]);
+    const cand = Object.keys(z).filter((f) => !SHAPE_NOISY.has(f) && !hidden.has(f));
+    const wTop = cand.filter((f) => f[0] === 'w').sort((a, b) => Math.abs(z[b]) - Math.abs(z[a]))[0];
+    const top = cand.filter((f) => f[0] !== 'w' || f === wTop).sort((a, b) => Math.abs(z[b]) - Math.abs(z[a])).slice(0, 3);
+    const m = (f) => {
+      if (z[f] === undefined) return 1;
+      if (hidden.has(f)) return lerp(1, 0.3, focus);
+      const a = Math.abs(z[f]), w = Math.max(smoothstep(0.7, 2.2, a), top.includes(f) && a > 0.8 ? 0.55 : 0);
+      return lerp(1, 0.3 + 1.7 * w, focus);
+    };
+    const g = (f) => (k <= 1 ? k : 1 + (k - 1) * m(f));
+    const meas = {};
+    for (const f in MEAN_M) meas[f] = g(f);
+    for (const f of ['chinSq', 'cheekPr', 'bowX', 'bowRC']) meas[f] = g(f);
+    return { meas, widths: WIDTHS_POP.map((_, i) => (i && z['w' + i] !== undefined ? g('w' + i) : k)), z, top };
+  }
+
+  /**
+   * Характерное выражение (14.2): мимика снимка за вычетом обычной портретной (средние по набору: почти все
+   * на портретах улыбаются, MediaPipe «видит» прищур и опущенные брови и у нейтральных лиц). Остаётся своё:
+   * нахмуренность, сжатые губы, ямочка, усмешка набок. Асимметрия — только почти анфас (поворот её искажает).
+   * Каналы добавляются к мимике головы постоянно — поверх эмоций и речи.
+   * @param {number} [strength=1] 0 — нейтральное лицо
+   * @returns {Record<string, number>} ARKit-каналы
+   */
+  signature(strength = 1) {
+    const b = this.bs, out = {};
+    if (!b || !(strength > 0)) return out;
+    const g = (c) => b[c] || 0, aw = smoothstep(0.15, 0.05, Math.abs(this.yaw || 0));
+    const soft = (v, t) => Math.sign(v) * Math.max(0, Math.abs(v) - t);
+    for (const [c, mean] of Object.entries(BS_POP)) {
+      const pair = !(c in b) && (c + 'Left') in b;
+      const L = pair ? g(c + 'Left') : g(c), R = pair ? g(c + 'Right') : g(c);
+      const sym = Math.max(0, soft((L + R) / 2 - mean, 0.04)) * 2 * strength;   // ×2: как у карикатуриста, выражение заметнее, чем на снимке
+      const d = pair ? soft((L - R) / 2, 0.03) * 2.5 * strength * aw : 0;
+      const v = (x) => Math.round(clamp(x, 0, 0.7) * 1000) / 1000;
+      if (pair) { const l = v(sym + d), r = v(sym - d); if (l) out[c + 'Left'] = l; if (r) out[c + 'Right'] = r; }
+      else if (v(sym)) out[c] = v(sym);
+    }
+    return out;
+  }
+
+  /**
    * Параметры процедурной головы по фото.
    * @param {object} o { caricature=1.5 (0 — без шаржа, 1 — пропорции как на фото, >1 — усиление), texture=0.9, gender }
    * @returns {object} overrides для ProceduralHead
    */
   fit(o = {}) {
     const k = o.caricature ?? 1.5, tex = clamp(o.texture ?? 0.9, 0, 1), gender = o.gender === 'male' ? 'male' : 'female';
-    const re = clamp(o.realism ?? 0.8, 0, 1);
-    const key = `${k}|${tex}|${gender}|${re}|${this._corrV || 0}|${this.profile?.v || 0}`;
+    const re = clamp(o.realism ?? 0.8, 0, 1), focus = clamp(o.focus ?? FOCUS, 0, 1);
+    const key = `${k}|${tex}|${gender}|${re}|${focus}|${this._corrV || 0}|${this.profile?.v || 0}`;
     if (this._fits.has(key)) return this._fits.get(key);
-    const Q = this.meas, Mn = MEAN_M;
+    const Q = this.meas, Mn = MEAN_M, G = this.gains(k, focus);
     // основа: пресет пола, сдвинутый к реальным пропорциям
     const d0 = PRESETS[gender];
     const baseEyeX = lerp(0.3, REAL.eyeX, re);
@@ -1355,13 +1420,19 @@ export class Portrait {
     const baseChin = lerp(1, REAL.chinScale, re);
     // поправки: глобальная калибровка основы (× realism) и поправки этого лица, найденные через рендер (refine)
     const GC = (!this.noBase && BASE_CORR[gender]) || {}, PC = this.corr?.meas || {};
-    const car = (f) => Mn[f] + k * (Q[f] - Mn[f]) + (GC[f] || 0) * re + (PC[f] || 0);
+    // до «как на фото» (k ≤ 1) — от среднего MEAN_M, усиление сверх фото — от среднего по набору (у MEAN_M подбородок
+    // короче реального на 0.9σ, и шарж удлинял его всем); при focus = 0 — прежняя формула Mn + k·(Q − Mn)
+    // пределы: в выборочном шарже шире (геометрия выдерживает: подбородок ×2, нос 0.13, губы до 0.12); губы тоньше
+    // прежнего не делаем — MediaPipe сдвигает середину рта, и на рендере «расплывается» всё лицо
+    const W = (a, b) => (focus > 0 ? b : a);
+    const C = (f) => (MEAS_POP[f] && focus > 0 ? MEAS_POP[f][0] : Mn[f]);
+    const car = (f) => (k <= 1 ? Mn[f] + k * (Q[f] - Mn[f]) : Q[f] + (G.meas[f] - 1) * (Q[f] - C(f))) + (GC[f] || 0) * re + (PC[f] || 0);
     const ratio = (f) => car(f) / Mn[f];
 
     const eyeX = clamp(baseEyeX + car('eyeCX') - Mn.eyeCX, 0.21, 0.36);
     const eyeR = Math.min(clamp(d.eyeR * ratio('eyeW'), 0.085, 0.145), (eyeX - 0.1) / 1.08);
     const openR = clamp(car('eyeH') / car('eyeW') / (Mn.eyeH / Mn.eyeW), 0.55, 1.7) ** 0.8;
-    const upperOpen = clamp(d.upperOpen * openR, 12, 36), lowerOpen = clamp(d.lowerOpen * openR, -34, -12);
+    const upperOpen = clamp(d.upperOpen * openR, W(12, 9), 36), lowerOpen = clamp(d.lowerOpen * openR, -34, W(-12, -9));
     const eyeTop = EY + eyeR * 1.08 * Math.sin((upperOpen * Math.PI) / 180);
     const brow = {
       ...d.brow,
@@ -1375,28 +1446,28 @@ export class Portrait {
     if (this.browColor) brow.color = hex(this.browColor.map((v) => v * 0.85));
     const gx = d.gx.slice();
     const GW = (!this.noBase && BASE_CORR[gender]?.widths) || [], PW = this.corr?.widths || [];
-    const wr = Q.widths.map((r, i) => clamp(1 + k * (r - 1) + (GW[i] || 0) * re + (PW[i] || 0), 0.75, 1.3));
+    const wr = Q.widths.map((r, i) => clamp((k <= 1 ? 1 + k * (r - 1) : r + (G.widths[i] - 1) * (r - (focus > 0 ? WIDTHS_POP[i][0] : 1))) + (GW[i] || 0) * re + (PW[i] || 0), W(0.75, 0.65), W(1.3, 1.45)));
     for (let i = 0; i < 6; i++) gx[i + 2] = d.gx[i + 2] * wr[i];
     gx[0] = d.gx[0] * lerp(1, wr[0], 0.5); gx[1] = d.gx[1] * lerp(1, wr[0], 0.8); gx[8] = d.gx[8] * wr[5];
     // квадратный подбородок — шире низ овала и шире выступ подбородка; скулы — выраженнее «мышца» скулы
     // (средние по калибровочным фото: chinSq 0.671, cheekPr 1.054)
-    const sq = typeof Q.chinSq === 'number' ? k * (Q.chinSq - 0.671) / 0.671 : 0;
+    const sq = typeof Q.chinSq === 'number' ? G.meas.chinSq * (Q.chinSq - 0.671) / 0.671 : 0;
     gx[8] *= clamp(1 + 1.2 * sq, 0.8, 1.25);
     const chinSX = d.chinSX * clamp(1 + 3 * sq, 0.6, 1.6);
-    const cheek = d.cheek * (typeof Q.cheekPr === 'number' ? clamp(1 + 40 * k * (Q.cheekPr - 1.054), 0.3, 2) : 1);
+    const cheek = d.cheek * (typeof Q.cheekPr === 'number' ? clamp(1 + 40 * G.meas.cheekPr * (Q.cheekPr - 1.054), 0.3, 2) : 1);
 
     const ov = {
       gx, eyeX, eyeR, upperOpen, lowerOpen, chinSX, cheek,
-      eyeTilt: clamp(d.eyeTilt + car('tilt') - Mn.tilt, -0.12, 0.28),
+      eyeTilt: clamp(d.eyeTilt + car('tilt') - Mn.tilt, W(-0.12, -0.22), W(0.28, 0.3)),
       brow,
-      noseTipY: clamp(-0.21 + car('noseTip') - Mn.noseTip, -0.3, -0.13),
-      noseW: clamp(0.07 * ratio('noseW'), 0.05, 0.1),
+      noseTipY: clamp(-0.21 + car('noseTip') - Mn.noseTip, W(-0.3, -0.34), W(-0.13, -0.11)),
+      noseW: clamp(0.07 * ratio('noseW'), W(0.05, 0.045), W(0.1, 0.13)),
       ...(typeof Q.noseBr === 'number' ? { noseBridge: clamp(ratio('noseBr') ** 1.5, 0.7, 1.4) } : {}),   // ширина спинки (MediaPipe по светотени — с осторожностью; в старых файлах меры нет)
       nose: clamp(d.nose * ratio('noseProj') ** 0.6, 0.08, 0.24),
-      mouthHW: clamp(d.mouthHW * ratio('mouthHW'), 0.13, 0.25),
-      lipU: clamp(d.lipU * ratio('lipU'), 0.018, 0.085),
-      lipL: clamp(d.lipL * ratio('lipL'), 0.022, 0.1),
-      chinScale: clamp(baseChin * (car('chin') - MY) / (Mn.chin - MY), 0.8, 1.5),
+      mouthHW: clamp(d.mouthHW * ratio('mouthHW'), W(0.13, 0.12), W(0.25, 0.28)),
+      lipU: clamp(d.lipU * ratio('lipU'), 0.018, W(0.085, 0.1)),
+      lipL: clamp(d.lipL * ratio('lipL'), 0.022, W(0.1, 0.12)),
+      chinScale: clamp(baseChin * (car('chin') - MY) / (Mn.chin - MY), W(0.8, 0.7), W(1.5, 2)),
       // разрез: перекос и полнота век. Коэффициенты — из геометрии кромки (_shapeLid): 1° перекоса ≈ 0.0164 сдвига
       // вершины дуги, 1° полноты ≈ −0.016 отношения «края/середина». По рендеру не калибруется: MediaPipe почти не видит форму век.
       ...(typeof Q.upS === 'number' ? {
@@ -1406,8 +1477,8 @@ export class Portrait {
         lidLoFull: clamp(-(car('loF') - Mn.loF) / 0.016, -8, 8),
       } : {}),
       ...(Q.bowX ? {
-        bowX: clamp(lerp(0.2, BOW_MEAN.x, re) + k * (Q.bowX - BOW_MEAN.x), 0.12, 0.36),
-        bowDip: clamp(0.2 + k * 1.09 * (BOW_MEAN.rc - Q.bowRC), 0.02, 0.45),
+        bowX: clamp(lerp(0.2, BOW_MEAN.x, re) + G.meas.bowX * (Q.bowX - BOW_MEAN.x), 0.12, 0.36),
+        bowDip: clamp(0.2 + G.meas.bowRC * 1.09 * (BOW_MEAN.rc - Q.bowRC), 0.02, 0.45),
       } : {}),
       skin: hex(this.skinTex.map((v) => v * TEX_GAIN)),
       ...(this.skinLow && tex > 0 ? { neckSkin: hex(this.skinTex.map((v, k) => lerp(v, this.skinLow[k], tex) * TEX_GAIN)) } : {}),

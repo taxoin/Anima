@@ -189,6 +189,10 @@ export interface PhotoOptions {
   /** Сила фото-текстуры кожи (0 — ровный тон). */
   texture?: number;
   realism?: number;
+  /** Выборочный шарж: 0 — все черты усиливаются одинаково, 1 — самые необычные черты сильнее, обычные почти нет (по умолчанию 0.8). */
+  focus?: number;
+  /** Характерное выражение по фото (нахмуренность, усмешка, сжатые губы) поверх всей мимики: 0 — нет, 1 — по умолчанию. */
+  expression?: number;
   /** auto — по фото, если модель уверена; keep — текущий пол. */
   gender?: Gender | 'auto' | 'keep';
   /** Сразу подогнать форму по точкам лица (+1.5–3 с). */
@@ -382,7 +386,7 @@ export declare class EmotionalHead {
 
   // фото-аватар
   fromPhoto(src: File | Blob | string | HTMLImageElement | HTMLCanvasElement, o?: PhotoOptions): Promise<PhotoReport>;
-  setPhotoOptions(o?: Partial<Pick<PhotoOptions, 'caricature' | 'texture' | 'realism'>>): this;
+  setPhotoOptions(o?: Partial<Pick<PhotoOptions, 'caricature' | 'texture' | 'realism' | 'focus' | 'expression'>>): this;
   clearPhoto(): this;
   /** Глубина лица по снимку строго в профиль; с фото-аватаром — дополняет его, без него — меняет look. */
   addProfile(src: File | Blob | string | HTMLImageElement | HTMLCanvasElement, o?: { onProgress?: (text: string) => void }): Promise<ProfileResult>;
@@ -392,7 +396,7 @@ export declare class EmotionalHead {
   refineShape(o?: { iterations?: number; alpha?: number; realism?: number; onProgress?: (text: string) => void }): Promise<number[]>;
   exportAvatar(o: ExportAvatarOptions & { format: 'json' }): Promise<string>;
   exportAvatar(o?: ExportAvatarOptions): Promise<Record<string, unknown>>;
-  importAvatar(src: string | File | Blob | Record<string, unknown>, o?: { caricature?: number; texture?: number; realism?: number; gender?: Gender; look?: LookOption; reclone?: boolean }): Promise<PhotoReport | null>;
+  importAvatar(src: string | File | Blob | Record<string, unknown>, o?: { caricature?: number; texture?: number; realism?: number; focus?: number; expression?: number; gender?: Gender; look?: LookOption; reclone?: boolean }): Promise<PhotoReport | null>;
 
   // модели и экспорт
   loadModel(url: string, o?: LoadModelOptions): Promise<unknown>;

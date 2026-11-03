@@ -25,6 +25,8 @@ async function main() {
   const pr = await head.addProfile('/side.jpg');
   console.log(pr.params.chin, pr.side);
   await head.fromPhoto('/me.jpg', { profile: '/side.jpg' });
+  await head.fromPhoto('/me.jpg', { caricature: 2.5, focus: 0.8, expression: 1 });
+  head.setPhotoOptions({ focus: 0, expression: 0 });
   const json: string = await head.exportAvatar({ format: 'json' });
   await head.importAvatar(json);
   const glb: ArrayBuffer = await head.exportGLB({ detail: 'medium' });

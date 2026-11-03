@@ -5,6 +5,7 @@
  *   npm run test:likeness -- path/to/dir     все .jpg/.png из папки (внутри репозитория)
  *   npm run test:likeness -- --k=0,1,1.5,2.5 значения шаржа;  --realism=0.8 — основа ближе к реальным пропорциям
  *   npm run test:likeness -- --shape          с деформацией по точкам (refineShape; --shape=1 — своя realism цели)
+ *   npm run test:likeness -- --focus=0        выборочность шаржа (0 — все черты одинаково; по умолчанию FOCUS)
  * Пол для известных имён (obama, lincoln…) — мужской, иначе женский.
  *
  * Колонки: rms — расхождение точек в % расстояния глаза–рот (меньше — ближе), по зонам: овал, глаза, брови, нос, губы;
@@ -22,6 +23,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const SHAPE = args.find((a) => a.startsWith('--shape'))?.split('=')[1] ?? (args.includes('--shape') ? 'default' : null);
 const RE = +(args.find((a) => a.startsWith('--realism='))?.slice(10) || NaN);
+const FO = +(args.find((a) => a.startsWith('--focus='))?.slice(8) ?? NaN);
 const K = (args.find((a) => a.startsWith('--k='))?.slice(4) || '0,1,1.5,2.5').split(',').map(Number);
 const dir = path.resolve(args.find((a) => !a.startsWith('--')) || path.join(ROOT, 'docs/samples'));
 if (!dir.startsWith(ROOT)) { console.error('Папка должна быть внутри репозитория (её раздаёт локальный сервер).'); process.exit(2); }
@@ -47,10 +49,11 @@ console.log(`${'фото'.padEnd(16)} ${'k'.padStart(4)} ${pad('rms')} ${pad('о
 const sum = {};
 for (const ph of photos) {
   for (const k of K) {
-    const r = await page.evaluate(async (ph, k, re, sh) => {
+    const r = await page.evaluate(async (ph, k, re, sh, fo) => {
       try {
         const male = /obama|biden|clinton|einstein|lincoln|tesla|truman|gandhi|roosevelt|twain/i.test(ph), o = { caricature: k, gender: male ? 'male' : 'female' };
         if (re === re) o.realism = re;
+        if (fo === fo) o.focus = fo;
         if (!head.portrait || head.__src !== ph) { await head.fromPhoto(ph, o); head.__src = ph; }
         else head.setPhotoOptions(o);
         let shape = null;
@@ -59,7 +62,7 @@ for (const ph of photos) {
         if (shape) r.shape = shape;
         return r;
       } catch (e) { return { error: e.message }; }
-    }, ph, k, RE, SHAPE);
+    }, ph, k, RE, SHAPE, FO);
     const name = path.basename(ph).padEnd(16);
     if (r.error) { console.log(`${name} ${pad(k, 4)}  ошибка: ${r.error}`); continue; }
     const g = r.regions;

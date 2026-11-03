@@ -442,6 +442,8 @@ export class EmotionalHead {
     this._needRender = true;
     if (this.rig) this.rig.dispose();
     this.rig = this._makeRig(this.gender);
+    this._sig = this._portrait?.signature?.(this._photoOpts?.expression ?? 0) || null;   // характерное выражение по фото (14.2)
+    if (this._sig && !Object.keys(this._sig).length) this._sig = null;
     this.scene.add(this.rig.object3D);
     this._applyEnv();
   }
@@ -461,10 +463,10 @@ export class EmotionalHead {
    * @returns {Promise<object>} отчёт: предупреждения, цвета, меры лица относительно среднего
    */
   async fromPhoto(src, o = {}) {
-    const { analyzePortrait } = await import('./photo-avatar.js');
+    const { analyzePortrait, FOCUS } = await import('./photo-avatar.js');
     const portrait = src?.isPortrait ? src : await analyzePortrait(src, o);
     this._portrait = portrait;
-    this._photoOpts = { caricature: o.caricature ?? 1.5, texture: o.texture ?? 0.9, realism: o.realism ?? 0.8 };
+    this._photoOpts = { caricature: o.caricature ?? 1.5, texture: o.texture ?? 0.9, realism: o.realism ?? 0.8, focus: o.focus ?? FOCUS, expression: o.expression ?? 1 };
     let guess = null;
     if (o.gender === 'female' || o.gender === 'male') this.gender = o.gender;
     else if (o.gender !== 'keep') {                                  // 7.2: пол по фото
@@ -641,7 +643,9 @@ export class EmotionalHead {
     const hide = [this.rig.glasses, ...(this.rig.beard?.parts || []).map((q) => q.mesh)].filter(Boolean);
     hide.forEach((m) => { m.visible = false; m.userData.hidden = true; });
     this.rig.setCornea?.(false);
+    this._noSig = true;                                            // мимика — только та, что передана (у метрики — мимика фото)
     this.renderStill(o.channels || {}, {}, cam);
+    this._noSig = false;
     this.rig.setCornea?.(true);
     hide.forEach((m) => { m.visible = true; m.userData.hidden = false; });
     const s = Math.min(W, H), c = document.createElement('canvas');
@@ -841,7 +845,8 @@ export class EmotionalHead {
     }
     const { Portrait } = await import('./photo-avatar.js');
     const portrait = await Portrait.fromData(d.portrait);
-    return this.fromPhoto(portrait, { ...d.photo, ...o, gender });
+    const legacy = d.photo && d.photo.focus === undefined ? { focus: 0, expression: 0 } : {};   // файл до 14.1 — как был сохранён
+    return this.fromPhoto(portrait, { ...legacy, ...d.photo, ...o, gender });
   }
 
   /**
@@ -1009,6 +1014,7 @@ export class EmotionalHead {
   renderStill(channels = {}, pose = {}, camera = this.camera) {
     const ch = { ...channels };                                    // + не-ARKit каналы (tongueUp)
     for (const c of CHANNELS) ch[c] = channels[c] || 0;
+    if (this._sig && !this._noSig) for (const c in this._sig) ch[c] = Math.min(1, ch[c] + this._sig[c]);   // характерное выражение (14.2)
     this.rig.update(ch, { pitch: 0, yaw: 0, roll: 0, eyeYaw: 0, eyePitch: 0, breath: 0, focus: 8, still: true, pupil: channels.pupil || 0, ...pose });   // still: волосы в равновесии
     this.renderer.render(this.scene, camera);
     return this.renderer.domElement;
@@ -1313,6 +1319,13 @@ export class EmotionalHead {
     for (const k in this._to) base[k] = (this._from[k] ?? this._to[k]) + (this._to[k] - (this._from[k] ?? this._to[k])) * e;
 
     for (const c of CHANNELS) out[c] = base[c];
+    // характерное выражение по фото (14.2) — всегда, при сильной эмоции слабее
+    if (this._sig) {
+      let e = 0;
+      for (const c of CHANNELS) if (base[c] > e) e = base[c];
+      const w = 1 - 0.6 * clamp(e / 0.6, 0, 1);
+      for (const c in this._sig) out[c] = (out[c] || 0) + this._sig[c] * w;
+    }
     const g = { '@pitch': 0, '@yaw': 0, '@roll': 0, '@gazeX': 0, '@gazeY': 0, '@breath': 0 };
 
     // 2. idle: живой шум мимики (асимметричный, очень слабый)
