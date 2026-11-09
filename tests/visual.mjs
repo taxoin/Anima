@@ -85,6 +85,8 @@ export const CASES = [
   { name: 'male-flat-px3-beard-smile', gender: 'male', look: { beard: 'full', hat: 'fedora' }, flat: { pixel: 3, bands: 4 }, channels: SMILE, pose: { yaw: 0.3 } },
   { name: 'avatar-lincoln-flat-beard', avatar: '/tests/fixtures/lincoln.anima.json', flat: true, framing: 'close' },
   { name: 'avatar-lincoln-caricature', avatar: '/tests/fixtures/lincoln-caricature.anima.json', gender: 'male', flat: { outline: 2 }, framing: 'close' },   // 14.1–14.2: выборочный шарж 2.5 и характерное выражение
+  { name: 'lines-male-frown', gender: 'male', look: { lines: 0.7 }, channels: { browDownLeft: 0.9, browDownRight: 0.9, noseSneerLeft: 0.3, noseSneerRight: 0.3 }, framing: 'close' },   // 14.3: чернильные линии, межбровье с мимикой
+  { name: 'lines-female-soft-flat', gender: 'female', look: { lines: { forehead: 0.5, fold: 0.6, eye: 0.4 }, lineStyle: 'soft' }, flat: { outline: 2 }, channels: { mouthSmileLeft: 0.8, mouthSmileRight: 0.8, browInnerUp: 0.7 }, framing: 'close' },
   { name: 'avatar-monalisa-flat', avatar: '/tests/fixtures/monalisa.anima.json', flat: { pixel: 2 }, framing: 'close' },
   { name: 'female-flat-open-mouth', gender: 'female', look: { hair: '#7a5434' }, flat: true, channels: { jawOpen: 0.7, mouthFunnel: 0.3 }, framing: 'close' },   // полость рта (depthFunc) после упрощения
   { name: 'male-flat-blazer-bust', gender: 'male', look: { outfit: 'blazer' }, flat: true, framing: 'bust', pose: { yaw: -0.3 } },   // слои одежды на грубой сетке

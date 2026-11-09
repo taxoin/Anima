@@ -16,7 +16,7 @@
  *    rig.dispose()
  */
 import * as THREE from 'three';
-import { hasDecals, drawDecals, resolveMakeup, DECAL_BOUNDS } from './skin-decals.js';
+import { hasDecals, drawDecals, resolveMakeup, DECAL_BOUNDS, resolveLines, drawLines } from './skin-decals.js';
 import { thinPlate } from './tps.js';
 import { decimate } from './decimate.js';
 
@@ -1514,6 +1514,58 @@ export class ProceduralHead {
     this.skin = mesh;
     this.headRoot.add(mesh);
     if (hasDecals(P)) this._applyDecals(geo, base);
+    if (resolveLines(P.lines)) this._applyLines(geo, base);
+  }
+
+  /** UV слоя рисунка: фронтальная проекция (x, y), затылок — в угол. Общий у декалей и линий. */
+  _decalUv(geo, pos) {
+    if (geo.attributes.decalUv) return;
+    const B = DECAL_BOUNDS, uv = new Float32Array((pos.length / 3) * 2);
+    for (let k = 0, i = 0; k < pos.length; k += 3, i += 2) {
+      const front = pos[k + 2] > 0.02;
+      uv[i] = front ? (pos[k] - B.x0) / (B.x1 - B.x0) : 0.001;
+      uv[i + 1] = front ? (pos[k + 1] - B.y0) / (B.y1 - B.y0) : 0.999;
+    }
+    geo.setAttribute('decalUv', new THREE.BufferAttribute(uv, 2));
+  }
+
+  /**
+   * Чернильные линии (14.3, skin-decals.js → drawLines): маски четырёх групп в каналах RGBA, цвет кожи смешивается
+   * с цветом линий по сумме масок с весами uLineW. Веса — сила группы из look.lines плюс мимика (update → _lineWeights).
+   */
+  _applyLines(geo, pos = geo.attributes.position.array) {
+    const P = this.P;
+    this._decalUv(geo, pos);
+    const { data, size } = drawLines(P, this.eye, this.tris ? 512 : 1024);
+    const tex = this._track(new THREE.DataTexture(data, size, size));
+    tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = 4; tex.needsUpdate = true;
+    this._lineBase = resolveLines(P.lines);
+    this._lineMotion = clamp(P.lineMotion ?? 0.8, 0, 1.5);
+    const U = this._lineU = { lineMap: { value: tex }, uLineW: { value: new THREE.Vector4() }, uLineColor: { value: new THREE.Color(P.lineColor || '#2a1a14') } };
+    this._lineWeights({});
+    addShaderPatch(this.mat.skin, 'skin-lines', (sh) => {
+      Object.assign(sh.uniforms, U);
+      if (!sh.vertexShader.includes('vDecalUv')) sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec2 decalUv;\nvarying vec2 vDecalUv;')
+        .replace('#include <uv_vertex>', '#include <uv_vertex>\n\tvDecalUv = decalUv;');
+      const decl = sh.fragmentShader.includes('varying vec2 vDecalUv') ? '' : '\nvarying vec2 vDecalUv;';
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>\nuniform sampler2D lineMap;\nuniform vec4 uLineW;\nuniform vec3 uLineColor;${decl}`)
+        .replace('#include <map_fragment>', '#include <map_fragment>\n\tdiffuseColor.rgb = mix( diffuseColor.rgb, uLineColor, clamp( dot( texture2D( lineMap, vDecalUv ), uLineW ), 0.0, 0.9 ) );');
+    });
+  }
+
+  /** Веса групп линий по мимике: лоб — поднятые брови, межбровье — нахмуренность, складки — улыбка, глаза — прищур. */
+  _lineWeights(ch) {
+    if (!this._lineU) return;
+    const b = this._lineBase, m = this._lineMotion, avg = (k) => ((ch[k + 'Left'] || 0) + (ch[k + 'Right'] || 0)) / 2;
+    const act = [
+      Math.max(ch.browInnerUp || 0, avg('browOuterUp')),
+      Math.max(avg('browDown'), 0.5 * (ch.noseSneerLeft || 0) + 0.5 * (ch.noseSneerRight || 0)),
+      Math.max(avg('mouthSmile'), avg('cheekSquint'), 0.8 * avg('noseSneer')),
+      Math.max(avg('eyeSquint'), 0.7 * avg('mouthSmile'), avg('cheekSquint')),
+    ];
+    const w = ['forehead', 'frown', 'fold', 'eye'].map((k, i) => clamp(b[k] * (1 + 0.6 * act[i]) + m * 0.7 * act[i] * act[i], 0, 1.2));
+    this._lineU.uLineW.value.set(...w);
   }
 
   /**
@@ -1521,13 +1573,7 @@ export class ProceduralHead {
    * Инъекция в шейдер MeshPhysicalMaterial: отдельный атрибут decalUv, текстура decalMap.
    */
   _applyDecals(geo, pos = geo.attributes.position.array) {
-    const B = DECAL_BOUNDS, uv = new Float32Array((pos.length / 3) * 2);
-    for (let k = 0, i = 0; k < pos.length; k += 3, i += 2) {
-      const front = pos[k + 2] > 0.02;                              // затылок — в угол (белый пиксель)
-      uv[i] = front ? (pos[k] - B.x0) / (B.x1 - B.x0) : 0.001;
-      uv[i + 1] = front ? (pos[k + 1] - B.y0) / (B.y1 - B.y0) : 0.999;
-    }
-    geo.setAttribute('decalUv', new THREE.BufferAttribute(uv, 2));
+    this._decalUv(geo, pos);                                         // затылок — в угол (белый пиксель)
     const tex = this._track(new THREE.CanvasTexture(drawDecals(this.P, this.eye)));
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 4;
@@ -3388,6 +3434,7 @@ export class ProceduralHead {
       const w = cs[m.name] || 0;
       if (!m.jaw && w > 0.002) this._activeMorphs.push({ fn: m.fn, sg: m.sg, w });
     }
+    this._lineWeights(ch);
     this._updateBrows(ch);
     this._updateMouth(ch);
     this._updateBeard();

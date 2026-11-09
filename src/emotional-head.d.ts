@@ -88,6 +88,13 @@ export interface Look {
   // кожа: декали
   makeup?: MakeupPreset | { blush?: [Color, number]; contour?: number; eyeshadow?: [Color, number]; eyeliner?: number; wing?: number; lipstick?: Color | null; gloss?: number };
   freckles?: number; moles?: number; age?: number;
+  /** Чернильные линии (14.3): сила 0…1.5 — числом всем группам или по группам: лоб, межбровье, складки у рта, у глаз. Проявляются сильнее с мимикой. */
+  lines?: number | { forehead?: number; frown?: number; fold?: number; eye?: number };
+  /** 'ink' — резкий штрих, к концам тоньше (по умолчанию); 'soft' — размытый, как морщина */
+  lineStyle?: 'ink' | 'soft';
+  lineColor?: Color;
+  /** насколько мимика проявляет линии (0 — не проявляет, по умолчанию 0.8) */
+  lineMotion?: number;
   /** мешки под глазами 0..1: валик под нижним веком и слёзная борозда (у фото-аватара — по снимку) */
   eyeBags?: number;
   // одежда и аксессуары
@@ -233,6 +240,8 @@ export interface PhotoOptions {
   focus?: number;
   /** Характерное выражение по фото (нахмуренность, усмешка, сжатые губы) поверх всей мимики: 0 — нет (по умолчанию), 1 — как на снимке, ×2. С кожей с фото удваивает выражение снимка — лучше для texture: 0 и плоского режима. */
   expression?: number;
+  /** Чернильные линии по фото (лоб, межбровье, складки, «лапки»): 0 — нет (по умолчанию), 1 — по глубине на снимке, 2 — вдвое; с кожей с фото слабее. Лучше всего — для texture: 0 и плоского режима. */
+  lines?: number;
   /** auto — по фото, если модель уверена; keep — текущий пол. */
   gender?: Gender | 'auto' | 'keep';
   /** Сразу подогнать форму по точкам лица (+1.5–3 с). */
@@ -428,7 +437,7 @@ export declare class EmotionalHead {
 
   // фото-аватар
   fromPhoto(src: File | Blob | string | HTMLImageElement | HTMLCanvasElement, o?: PhotoOptions): Promise<PhotoReport>;
-  setPhotoOptions(o?: Partial<Pick<PhotoOptions, 'caricature' | 'texture' | 'realism' | 'focus' | 'expression'>>): this;
+  setPhotoOptions(o?: Partial<Pick<PhotoOptions, 'caricature' | 'texture' | 'realism' | 'focus' | 'expression' | 'lines'>>): this;
   clearPhoto(): this;
   /** Глубина лица по снимку строго в профиль; с фото-аватаром — дополняет его, без него — меняет look. */
   addProfile(src: File | Blob | string | HTMLImageElement | HTMLCanvasElement, o?: { onProgress?: (text: string) => void }): Promise<ProfileResult>;
@@ -444,7 +453,7 @@ export declare class EmotionalHead {
   setPhotoTune(t?: PhotoTune): this;
   exportAvatar(o: ExportAvatarOptions & { format: 'json' }): Promise<string>;
   exportAvatar(o?: ExportAvatarOptions): Promise<Record<string, unknown>>;
-  importAvatar(src: string | File | Blob | Record<string, unknown>, o?: { caricature?: number; texture?: number; realism?: number; focus?: number; expression?: number; gender?: Gender; look?: LookOption; reclone?: boolean }): Promise<PhotoReport | null>;
+  importAvatar(src: string | File | Blob | Record<string, unknown>, o?: { caricature?: number; texture?: number; realism?: number; focus?: number; expression?: number; lines?: number; gender?: Gender; look?: LookOption; reclone?: boolean }): Promise<PhotoReport | null>;
 
   // модели и экспорт
   loadModel(url: string, o?: LoadModelOptions): Promise<unknown>;

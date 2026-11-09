@@ -407,6 +407,9 @@ const BS_POP = { browDown: 0.313, browInnerUp: 0.046, browOuterUp: 0.052, eyeSqu
 // выборочный шарж по умолчанию (0 — все черты усиливаются одинаково); в «главные черты» не берём меры, которые
 // MediaPipe видит плохо: форму век, ширину спинки и выступ носа (по снимку анфас)
 export const FOCUS = 0.8;
+// линии лица (14.3): [сырое «нет линий», сырое «глубокие», вычет на единицу мимики снимка] — калибровка по набору портретов
+// (по 123 портретам анфас: около медианы — 0, верхние 5 % — 1; улыбка на снимке углубляет «лапки» и чуть — складки)
+const LINE_POP = { forehead: [0.3, 1.2, 0], frown: [0.1, 0.45, 0], fold: [0.1, 0.4, 0.09], eye: [0.4, 1.7, 0.35] };
 const SHAPE_NOISY = new Set(['upS', 'upF', 'loS', 'loF', 'noseBr', 'noseProj']);
 const BOW_MEAN = { x: 0.29, rc: 0.866 };    // «лук Купидона» по калибровочным фото: пики на 0.29 полуширины рта, центр/пик = 0.87
 // подстройка сходства глазами (14.6): черты, которые можно сдвинуть; сдвиг — в долях разброса по набору (σ), «+» — больше
@@ -515,6 +518,7 @@ export class Portrait {
     this._facialHair();
     this._glasses();
     this._bags();
+    this._lines();
     this._hat();
     this._texture();
     this._explain();
@@ -1044,6 +1048,88 @@ export class Portrait {
   }
 
   /**
+   * Линии лица (14.3): глубина морщин в четырёх зонах — лоб, межбровье, носогубные складки, «гусиные лапки».
+   * Профили яркости поперёк ожидаемых линий (в координатах головы, диск-медиана ~0.004); впадина = min(максимум слева,
+   * максимум справа в окне) − точка, в долях яркости профиля. Лоб и «лапки» — сумма впадин (линий несколько),
+   * межбровье и складки — самая глубокая. Сырые значения — linesRaw; сила 0…1 — по разбросу в наборе портретов (LINE_POP),
+   * за вычетом мимики снимка (улыбка углубляет складки и «лапки», поднятые брови — лоб). Под бородой складок не видно,
+   * под очками — «лапок», под волосами — лба.
+   */
+  _lines() {
+    const H = this.head, s = this.frame.s, rad = 0.004 / s;
+    const sk = this.skinPhoto || [0.8, 0.6, 0.5], skL = lum(...sk), skS = sk[0] + sk[1] + sk[2];
+    // похоже ли на кожу: яркость в 0.45…1.8 от кожи, оттенок (доли каналов) близок — иначе козырёк, волосы, оправа
+    const isSkin = (c) => { const l = lum(...c), S = c[0] + c[1] + c[2] || 1e-3; return l > skL * 0.45 && l < skL * 1.8 && Math.abs(c[0] / S - sk[0] / skS) + Math.abs(c[2] / S - sk[2] / skS) < 0.12; };
+    const lumAt = (x, y) => {                                      // медиана яркости по диску в точке (x, y) головы + средний цвет
+      const q = this.fromHead(x, y), a = [], st = Math.max(1, rad / 3), m = [0, 0, 0];
+      for (let dy = -rad; dy <= rad; dy += st) for (let dx = -rad; dx <= rad; dx += st) {
+        if (dx * dx + dy * dy > rad * rad) continue;
+        const c = this._rgb(q.x + dx, q.y + dy); if (c) { a.push(lum(...c)); m[0] += c[0]; m[1] += c[1]; m[2] += c[2]; }
+      }
+      return a.length ? { L: a.sort((u, v) => u - v)[a.length >> 1], c: m.map((v) => v / a.length) } : null;
+    };
+    // профиль яркости; skin — обрезать на первой точке «не кожа» (нужно не меньше 12 точек)
+    const profile = (x0, y0, x1, y1, step = 0.004, skin = false) => {
+      const n = Math.max(4, Math.round(Math.hypot(x1 - x0, y1 - y0) / step)), v = [];
+      for (let j = 0; j <= n; j++) {
+        const r = lumAt(x0 + (x1 - x0) * j / n, y0 + (y1 - y0) * j / n);
+        if (r === null || (skin && !isSkin(r.c))) { if (skin && v.length >= 12) break; return null; }
+        v.push(r.L);
+      }
+      return v;
+    };
+    // впадины профиля: окно w точек; sum — сумма по всем, иначе самая глубокая; в долях медианы профиля
+    const valleys = (v, w, sum) => {
+      if (!v) return null;
+      const med = [...v].sort((a, b) => a - b)[v.length >> 1] || 1;
+      let tot = 0, best = 0;
+      for (let j = 1; j < v.length - 1; j++) {
+        if (v[j] > v[j - 1] || v[j] > v[j + 1]) continue;
+        const d = Math.min(Math.max(...v.slice(Math.max(0, j - w), j)), Math.max(...v.slice(j + 1, j + 1 + w))) - v[j];
+        if (d > 0.025 * med) { tot += d; best = Math.max(best, d); }      // мельче — шум сжатия и фактура кожи
+      }
+      return (sum ? tot : best) / Math.max(0.05, med);
+    };
+    const mean = (a) => { const b = a.filter((x) => x !== null && Number.isFinite(x)); return b.length ? b.reduce((p, q) => p + q, 0) / b.length : null; };
+    const pt = (i) => H[i], browTop = Math.max(pt(105).y, pt(334).y, pt(66).y, pt(296).y), browIn = (pt(55).y + pt(285).y) / 2;
+    const raw = {};
+    // лоб: вертикали над бровями до линии волос
+    const top = Math.min(browTop + 0.3, (this.hairlineY ?? 0.7) - 0.04);
+    raw.forehead = top - browTop > 0.12 ? mean([-0.16, -0.08, 0, 0.08, 0.16].map((x) => valleys(profile(x, browTop + 0.04, x, top, 0.004, true), 6, true))) : null;
+    // межбровье: горизонтали между внутренними концами бровей
+    raw.frown = mean([-0.01, 0.02, 0.05].map((dy) => valleys(profile(-0.11, browIn + dy, 0.11, browIn + dy), 7, false)));
+    // носогубные складки: перпендикуляры к линии «крыло носа → за угол рта», по обе стороны
+    const fold = [];
+    for (const [al, mc, sg] of [[129, 61, -1], [358, 291, 1]]) {
+      const a = { x: pt(al).x + sg * 0.03, y: pt(al).y - 0.02 }, b = { x: pt(mc).x + sg * 0.045, y: pt(mc).y + 0.02 };
+      const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy), nx = -dy / l, ny = dx / l;
+      for (const t of [0.3, 0.5, 0.7]) { const c = { x: a.x + dx * t, y: a.y + dy * t }; fold.push(valleys(profile(c.x - nx * 0.06, c.y - ny * 0.06, c.x + nx * 0.06, c.y + ny * 0.06), 8, false)); }
+    }
+    raw.fold = mean(fold);
+    // «гусиные лапки»: вертикали за внешними углами глаз
+    const eye = [];
+    for (const [i, sg] of [[33, -1], [263, 1]]) for (const dx of [0.04, 0.07]) { const x = pt(i).x + sg * dx; eye.push(valleys(profile(x, pt(i).y - 0.07, x, pt(i).y + 0.07), 5, true)); }
+    raw.eye = mean(eye);
+    this.linesRaw = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, v === null ? null : +v.toFixed(4)]));
+    this.lines = this._linesFromRaw();
+  }
+  /** Сила линий 0…1 из сырых мер (по разбросу в наборе, за вычетом мимики снимка и того, что закрыто). */
+  _linesFromRaw() {
+    const R = this.linesRaw || {}, b = this.bs || {}, g = (k) => ((b[k + 'Left'] ?? b[k] ?? 0) + (b[k + 'Right'] ?? b[k] ?? 0)) / 2;
+    const expr = { forehead: Math.max(b.browInnerUp || 0, g('browOuterUp')), frown: g('browDown'), fold: g('mouthSmile'), eye: Math.max(g('eyeSquint'), g('mouthSmile')) };
+    const out = {};
+    for (const k of Object.keys(LINE_POP)) {
+      const [lo, hi, e] = LINE_POP[k];
+      out[k] = R[k] === null || R[k] === undefined ? 0 : +smoothstep(lo, hi, R[k] - e * (expr[k] || 0)).toFixed(3);
+    }
+    if (this.beardStyle?.style && this.beardStyle.style !== 'none') out.fold = 0;
+    if (this.glasses?.detected) out.eye = 0;
+    const yawK = 1 - smoothstep(0.2, 0.4, Math.abs(this.yaw || 0));
+    for (const k in out) out[k] = +(out[k] * yawK).toFixed(3);
+    return out;
+  }
+
+  /**
    * Мешки под глазами (12.7): профиль яркости от нижнего века к щеке в трёх вертикалях под каждым глазом.
    * Мешок — впадина в профиле (тень под валиком, ниже светлая щека): глубина = min(максимум выше, максимум ниже) − точка,
    * в долях яркости щеки. Просто «темнее щеки» путает мешки с пигментацией. По 147 портретам: молодые 0–0.15,
@@ -1463,7 +1549,7 @@ export class Portrait {
   fit(o = {}) {
     const k = o.caricature ?? 1.5, tex = clamp(o.texture ?? 0.9, 0, 1), gender = o.gender === 'male' ? 'male' : 'female';
     const re = clamp(o.realism ?? 0.8, 0, 1), focus = clamp(o.focus ?? FOCUS, 0, 1);
-    const key = `${k}|${tex}|${gender}|${re}|${focus}|${this._corrV || 0}|${this.profile?.v || 0}|${this._tuneKey()}`;
+    const key = `${k}|${tex}|${gender}|${re}|${focus}|${o.lines ?? 0}|${this._corrV || 0}|${this.profile?.v || 0}|${this._tuneKey()}`;
     if (this._fits.has(key)) return this._fits.get(key);
     const Q = this._tuned(), Mn = MEAN_M, G = this.gains(k, focus);
     // основа: пресет пола, сдвинутый к реальным пропорциям
@@ -1547,6 +1633,13 @@ export class Portrait {
     if (this.lidTex && tex > 0) ov.lidTint = this.lidTex.map((v) => lerp(1, v, tex));
     if (this.beard > 0.05) ov.stubble = this.beard * 2.2;      // борода/щетина: затемнение челюсти и усов поверх текстуры
     if (this.bags > 0.02) ov.eyeBags = +clamp(this.bags * k / 1.5, 0, 1).toFixed(3);   // мешки под глазами (12.7)
+    // линии лица (14.3): по умолчанию нет — сходство по точкам с ними хуже (test:resemblance: с кожей с фото cos 0,657 → 0,637,
+    // без кожи 0,644 → 0,632); заданы — сильнее при шарже, с кожей с фото слабее (морщины уже на коже)
+    const lk = clamp(o.lines ?? 0, 0, 2) * (1 - 0.6 * tex) * clamp(k / 1.5, 0, 1.5);
+    if (this.lines && lk > 0) {
+      const L = Object.fromEntries(Object.entries(this.lines).map(([g, v]) => [g, +clamp(v * lk, 0, 1.5).toFixed(3)]));
+      if (Object.values(L).some((v) => v > 0.02)) { ov.lines = L; ov.lineColor = hex(this.skinTex.map((v) => v * 0.32)); }
+    }
     if (this.hairColor) ov.hair = hex(this.hairColor.map((v) => v * 1.05));
     Object.assign(ov, this._eyeAsymOv(k, eyeR));
     Object.assign(ov, this._lipAsymOv(k, ov.mouthHW));
@@ -1700,7 +1793,7 @@ export class Portrait {
       colors: { skinPhoto: rc(this.skinPhoto), skin: rc(this.skinTex), skinLow: rc(this.skinLow), lip: rc(this.lipColor), brow: rc(this.browColor), iris: rc(this.irisColor), hair: rc(this.hairColor), cloth: rc(this.clothColor) },
       teeth: this.teethTone ? { d: r4(this.teethTone.d) } : null,
       outfit: this.outfitRaw ? { ...this.outfitRaw, spread: undefined, Cs: rc(this.outfitRaw.Cs), Csh: rc(this.outfitRaw.Csh), Ct: rc(this.outfitRaw.Ct) } : null,
-      lidTex: rc(this.lidTex), beard: r4(this.beard), bags: r4(this.bags || 0), grayscale: !!this.grayscale, glasses: this.glasses || null, beardStyle: this.beardStyle || null, hat: this.hat || null,
+      lidTex: rc(this.lidTex), beard: r4(this.beard), bags: r4(this.bags || 0), linesRaw: this.linesRaw || null, grayscale: !!this.grayscale, glasses: this.glasses || null, beardStyle: this.beardStyle || null, hat: this.hat || null,
       bs: this.bs ? Object.fromEntries(Object.entries(this.bs).filter(([, v]) => v > 0.03).map(([k, v]) => [k, Math.round(v * 100) / 100])) : null,
       hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY), r: this.hairR ? this.hairR.map(r4) : null, bang: this.bang ? { side: this.bang.side, depth: r4(this.bang.depth) } : null, gray: r4(this.hairGray || 0), grayColor: rc(this.hairGrayColor), vari: r4(this.hairVar) },
       profile: this.profile ? { params: this.profile.params, rms: this.profile.rms, side: this.profile.side, warnings: this.profile.warnings } : null,
@@ -1746,7 +1839,7 @@ export class Portrait {
     const C = d.colors || {};
     p.skinPhoto = C.skinPhoto || C.skin || [0.85, 0.68, 0.58]; p.skinTex = C.skin || p.skinPhoto; p.skinLow = C.skinLow || null;
     p.lipColor = C.lip; p.browColor = C.brow; p.irisColor = C.iris; p.hairColor = C.hair; p.clothColor = C.cloth;
-    p.lidTex = d.lidTex; p.beard = d.beard || 0; p.bags = d.bags || 0; p.grayscale = !!d.grayscale; p.bs = d.bs || null; p.glasses = d.glasses || null; p.beardStyle = d.beardStyle || null; p.hat = d.hat || null;
+    p.lidTex = d.lidTex; p.beard = d.beard || 0; p.bags = d.bags || 0; p.linesRaw = d.linesRaw || null; p.grayscale = !!d.grayscale; p.bs = d.bs || null; p.glasses = d.glasses || null; p.beardStyle = d.beardStyle || null; p.hat = d.hat || null;
     p.hairStyle = d.hair?.style ?? null; p.hairBottom = d.hair?.bottom ?? null; p.hairlineY = d.hair?.line ?? null;
     p.hairR = d.hair?.r ?? null; p.bang = d.hair?.bang ?? null;
     p.teethTone = d.teeth ? { d: d.teeth.d } : null;
@@ -1765,6 +1858,7 @@ export class Portrait {
     }
     p.corr = d.corr || null;
     p.setTune(d.tune);
+    p.lines = p.linesRaw ? p._linesFromRaw() : null;   // старые файлы — без линий, как были
     p.warp = d.warp || null;
     p._fits = new Map();
     return p;

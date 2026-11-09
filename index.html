@@ -268,6 +268,7 @@
         <div class="row"><label style="width:84px" for="caric">шарж</label><input type="range" id="caric" min="0" max="3" step="0.1" value="1.5"><span class="val" id="caricV">1.5</span></div>
         <div class="row"><label style="width:84px" for="focus" title="0 — все черты усиливаются одинаково; выше — сильнее самые необычные черты, как у карикатуриста">выборочность</label><input type="range" id="focus" min="0" max="1" step="0.05" value="0.8"><span class="val" id="focusV">0.8</span></div>
         <div class="row"><label style="width:84px" for="sigExpr" title="Характерное выражение с фото: нахмуренность, усмешка, сжатые губы — поверх всей мимики">выражение</label><input type="range" id="sigExpr" min="0" max="2" step="0.1" value="0"><span class="val" id="sigExprV">0</span></div>
+        <div class="row"><label style="width:84px" for="photoLines" title="Чернильные линии по глубине морщин на фото: лоб, межбровье, складки у рта, «лапки» у глаз; проявляются с мимикой">линии</label><input type="range" id="photoLines" min="0" max="2" step="0.1" value="0"><span class="val" id="photoLinesV">0</span></div>
         <div class="row"><label style="width:84px" for="photoTex">кожа с фото</label><input type="range" id="photoTex" min="0" max="1" step="0.05" value="0.9"><span class="val" id="photoTexV">0.9</span></div>
         <div class="row"><label style="width:84px" for="realism">реализм</label><input type="range" id="realism" min="0" max="1" step="0.05" value="0.8"><span class="val" id="realismV">0.8</span></div>
         <div class="row"><label><input type="checkbox" id="photoAcc"> искать очки и шапки (+16 МБ модель)</label></div>
@@ -619,7 +620,7 @@ tap.onclick = () => greet($('#ttsMode').value === 'none' ? 'webspeech' : ttsSel(
 if (new URLSearchParams(location.search).get('autoplay') !== '0') setTimeout(() => greet('none'), 900);
 
 // ---- аватар по фото
-const photoOpts = () => ({ caricature: +$('#caric').value, focus: +$('#focus').value, expression: +$('#sigExpr').value, texture: +$('#photoTex').value, realism: +$('#realism').value });
+const photoOpts = () => ({ caricature: +$('#caric').value, focus: +$('#focus').value, expression: +$('#sigExpr').value, lines: +$('#photoLines').value, texture: +$('#photoTex').value, realism: +$('#realism').value });
 const photoExtra = () => ($('#photoAcc').checked ? { detail: 'full' } : {});
 const status = (t) => { $('#photoStatus').textContent = t; };
 let photoBusy = false;
@@ -844,7 +845,9 @@ async function openAvatar(f) {
     $('#photoBox').hidden = true;
     $('#photoClear').disabled = $('#avatarSave').disabled = !rep;
     const o = head._photoOpts || {};
-    for (const [id, k] of [['caric', 'caricature'], ['focus', 'focus'], ['sigExpr', 'expression'], ['photoTex', 'texture'], ['realism', 'realism']]) if (o[k] !== undefined) { $('#' + id).value = o[k]; $('#' + id + 'V').textContent = o[k]; }
+    for (const [id, k] of [['caric', 'caricature'], ['focus', 'focus'], ['sigExpr', 'expression'], ['photoLines', 'lines'], ['photoTex', 'texture'], ['realism', 'realism']]) if (o[k] !== undefined) {
+      $('#' + id).value = o[k]; $('#' + id + 'V').textContent = o[k];
+    }
     document.querySelectorAll('[data-gender]').forEach((b) => b.classList.toggle('on', b.dataset.gender === head.gender));
     syncLook();
     $('#photoRefine').disabled = $('#photoTune').disabled = !rep;
@@ -856,7 +859,7 @@ async function openAvatar(f) {
 }
 $('#avatarFile').onchange = (e) => { const f = e.target.files[0]; if (f) openAvatar(f); e.target.value = ''; };
 let photoT = 0;
-for (const id of ['caric', 'focus', 'sigExpr', 'photoTex', 'realism']) {
+for (const id of ['caric', 'focus', 'sigExpr', 'photoLines', 'photoTex', 'realism']) {
   $('#' + id).addEventListener('input', (e) => {
     $('#' + id + 'V').textContent = e.target.value;
     clearTimeout(photoT);

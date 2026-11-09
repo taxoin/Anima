@@ -148,3 +148,87 @@ export function drawDecals(P, E, size = 1024) {
   }
   return c;
 }
+
+// ---------------------------------------------------------------- чернильные линии (14.3)
+/**
+ * Линии лица как у карикатуриста: четыре группы, каждая в своём канале текстуры — шейдер смешивает их с весами,
+ * которые растут с мимикой (поднятые брови — лоб, нахмуренность — межбровье, улыбка — носогубные складки и «лапки»).
+ *   lines: number | { forehead, frown, fold, eye } — сила 0…1 (число — всем группам); lineStyle: 'ink' | 'soft';
+ *   lineColor — цвет линий (по умолчанию тёмно-коричневый); lineMotion — насколько мимика проявляет линии (0…1, 0.8).
+ */
+export const LINE_GROUPS = ['forehead', 'frown', 'fold', 'eye'];
+
+/** Силы групп линий из look.lines → { forehead, frown, fold, eye } или null. */
+export function resolveLines(lines) {
+  if (!lines) return null;
+  const o = typeof lines === 'number' ? Object.fromEntries(LINE_GROUPS.map((k) => [k, lines])) : lines;
+  const r = Object.fromEntries(LINE_GROUPS.map((k) => [k, clamp(+o[k] || 0, 0, 1.5)]));
+  return LINE_GROUPS.some((k) => r[k] > 0) || (+lines.motion || 0) > 0 ? r : null;
+}
+
+/**
+ * Маски линий: RGBA = лоб, межбровье, складки у рта, глаза (покрытие 0…255), строки снизу вверх (как UV).
+ * Рисуется полная сила; ослабление — весами в шейдере. Позиции — от глаз, бровей, носа и рта этой головы.
+ * @returns {{ data: Uint8Array, size: number }}
+ */
+export function drawLines(P, E, size = 1024) {
+  const L = resolveLines(P.lines) || Object.fromEntries(LINE_GROUPS.map((k) => [k, 0]));
+  const B = DECAL_BOUNDS, sx = size / (B.x1 - B.x0), sy = size / (B.y1 - B.y0);
+  const X = (x) => (x - B.x0) * sx, Y = (y) => (B.y1 - y) * sy, R = (r) => r * sx;
+  const ink = P.lineStyle !== 'soft';
+  const MY = LAYOUT.mouthY, ex = E.x, ey = E.y, rs = E.rs;
+  const by = P.brow?.y ?? 0.2, nw = P.noseW ?? 0.07, ny = P.noseTipY ?? -0.21, mw = P.mouthHW ?? 0.185;
+  const out = new Uint8Array(size * size * 4);
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  // штрих: квадратичная кривая через три точки, к концам тоньше (как кисть); a — непрозрачность
+  const stroke = (p0, p1, p2, w, a = 1) => {
+    const n = 18;
+    g.lineCap = 'round';
+    for (let i = 0; i < n; i++) {
+      const t0 = i / n, t1 = (i + 1) / n, tm = (t0 + t1) / 2;
+      const q = (t) => [(1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * p1[0] + t * t * p2[0], (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * p1[1] + t * t * p2[1]];
+      const [xa, ya] = q(t0), [xb, yb] = q(t1);
+      g.strokeStyle = `rgba(255,255,255,${a})`;
+      g.lineWidth = Math.max(0.8, R(w * (ink ? 0.25 + 0.75 * Math.sin(Math.PI * tm) ** 0.7 : 1)));
+      g.beginPath(); g.moveTo(X(xa), Y(ya)); g.lineTo(X(xb), Y(yb)); g.stroke();
+    }
+  };
+  const both = (fn) => { fn(1); fn(-1); };
+  const groups = {
+    // лоб: 2–4 волны над бровями, верхние короче и бледнее; число — от силы
+    forehead: (s) => {
+      const n = 2 + Math.round(2 * clamp(s, 0, 1)), y0 = by + 0.11;
+      for (let i = 0; i < n; i++) {
+        const y = y0 + i * 0.075, hw = 0.28 - i * 0.035, a = 1 - i * 0.2;
+        if (i % 2) stroke([-hw, y - 0.014], [0, y + 0.03], [hw, y - 0.014], 0.009, a);   // через весь лоб
+        else both((d) => stroke([d * 0.035, y + 0.008], [d * hw * 0.6, y + 0.016], [d * hw, y - 0.014], 0.009, a));   // с разрывом посередине
+      }
+    },
+    // межбровье: две вертикали «11», к низу сходятся
+    frown: () => both((d) => stroke([d * 0.05, by + 0.07], [d * 0.04, by + 0.02], [d * 0.032, by - 0.035], 0.007)),
+    // носогубные складки от крыла носа за угол рта и «марионеточные» вниз от угла
+    fold: () => both((d) => {
+      stroke([d * (nw + 0.045), ny - 0.005], [d * (mw + 0.07), MY + 0.06], [d * (mw + 0.05), MY - 0.07], 0.009);
+      stroke([d * (mw + 0.015), MY - 0.025], [d * (mw + 0.03), MY - 0.08], [d * (mw + 0.045), MY - 0.15], 0.007, 0.7);
+    }),
+    // глаза: «гусиные лапки», линия под мешком, складка верхнего века
+    eye: () => both((d) => {
+      for (let i = -1; i <= 1; i++) stroke([d * (ex + rs * 1.12), ey + i * 0.018], [d * (ex + rs * 1.35), ey + i * 0.03], [d * (ex + rs * 1.6), ey + i * 0.048 - 0.006], 0.005, 1 - Math.abs(i) * 0.25);
+      stroke([d * (ex - rs * 0.65), ey - rs * 1.2], [d * ex, ey - rs * 1.5], [d * (ex + rs * 0.75), ey - rs * 1.15], 0.0055, 0.85);
+      stroke([d * (ex - rs * 0.75), ey + rs * 0.95], [d * (ex + rs * 0.05), ey + rs * 1.3], [d * (ex + rs * 0.95), ey + rs * 0.9], 0.005, 0.6);
+    }),
+  };
+  LINE_GROUPS.forEach((k, ch) => {
+    g.globalCompositeOperation = 'source-over'; g.fillStyle = '#000'; g.fillRect(0, 0, size, size);
+    g.filter = ink ? 'none' : `blur(${Math.max(1, R(0.004))}px)`;
+    groups[k](L[k]);
+    g.filter = 'none';
+    const px = g.getImageData(0, 0, size, size).data;
+    for (let y = 0; y < size; y++) {
+      const src = y * size * 4, dst = (size - 1 - y) * size * 4;   // строки снизу вверх: v = 0 — низ (как UV)
+      for (let x = 0; x < size; x++) out[dst + x * 4 + ch] = px[src + x * 4];
+    }
+  });
+  return { data: out, size };
+}
