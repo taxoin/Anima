@@ -121,6 +121,34 @@
     .caption, body.sheet .caption { top:auto; bottom:8px; font-size:13.5px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; left:calc((100% - var(--side)) / 2); width:min(92%, calc(100% - var(--side) - 24px)); }
   }
   :root { --dockH:52px; --sheetH:46dvh; --side:0px; }
+  /* подстройка сходства (14.6): фото | воссозданный портрет, по бокам — варианты «меньше» и «больше» */
+  #tuneDlg { width:min(1180px, calc(100vw - 24px)); max-height:calc(100vh - 24px); padding:16px; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:14px; }
+  #tuneDlg::backdrop { background:rgba(5,6,10,.72); }
+  #tuneDlg h2 { font-size:16px; margin:0; }
+  .tune-head { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; margin-bottom:4px; }
+  /* по высоте: три карточки сбоку и большие портреты помещаются в окно вместе с кнопками */
+  .tune-grid { --side:min(17vw, calc((100vh - 330px) / 3)); display:grid; grid-template-columns:var(--side) minmax(0,1fr) minmax(0,1fr) var(--side); grid-template-areas:"l a b r"; gap:12px; align-items:center; justify-content:center; margin:12px 0; }
+  .tune-a .tune-pic, .tune-b .tune-pic { max-width:calc(100vh - 290px); margin-inline:auto; }
+  .tune-side { display:flex; flex-direction:column; gap:10px; }
+  .tune-l { grid-area:l; } .tune-r { grid-area:r; } .tune-a { grid-area:a; } .tune-b { grid-area:b; }
+  .tune-grid figure { margin:0; }
+  .tune-grid figcaption { font-size:12px; color:var(--dim); margin-top:4px; text-align:center; }
+  .tune-pic { width:100%; aspect-ratio:1; border-radius:10px; background:#1d212c; display:block; object-fit:cover; }
+  .tune-card { padding:0 0 4px; border:2px solid var(--line); border-radius:12px; cursor:pointer; text-align:center; font-size:12px; color:var(--text); overflow:hidden; }
+  .tune-card:hover:not(:disabled), .tune-card:focus-visible { border-color:var(--acc); outline:none; }
+  .tune-card:disabled { cursor:wait; opacity:.55; }
+  .tune-card .tune-pic { border-radius:0; margin-bottom:4px; }
+  .tune-foot { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .tune-foot .grow { flex:1; }
+  #tuneFixes { font-size:12px; color:var(--dim); margin-top:8px; min-height:1.4em; }
+  #photoThumb { cursor:zoom-in; }
+  @media (max-width: 899px) {
+    .tune-grid { grid-template-columns:1fr 1fr; grid-template-areas:"a b" "l r"; gap:8px; }
+    .tune-a .tune-pic, .tune-b .tune-pic { max-width:none; }
+    .tune-side { flex-direction:row; }
+    .tune-side > * { flex:1; min-width:0; }
+  }
+  @media (prefers-reduced-motion: no-preference) { .tune-card { transition:border-color .15s, opacity .15s; } }
 </style>
 </head>
 <body>
@@ -243,9 +271,9 @@
         <div class="row"><label style="width:84px" for="photoTex">кожа с фото</label><input type="range" id="photoTex" min="0" max="1" step="0.05" value="0.9"><span class="val" id="photoTexV">0.9</span></div>
         <div class="row"><label style="width:84px" for="realism">реализм</label><input type="range" id="realism" min="0" max="1" step="0.05" value="0.8"><span class="val" id="realismV">0.8</span></div>
         <div class="row"><label><input type="checkbox" id="photoAcc"> искать очки и шапки (+16 МБ модель)</label></div>
-        <div class="row"><button id="photoClear" disabled>Стандартная голова</button><button id="photoRefine" disabled title="Рендер → те же точки лица → сдвинуть овал и нос под фото (~2–4 с)">Подогнать форму</button><span class="hint" id="photoStatus"></span></div>
+        <div class="row"><button id="photoClear" disabled>Стандартная голова</button><button id="photoRefine" disabled title="Рендер → те же точки лица → сдвинуть овал и нос под фото (~2–4 с)">Подогнать форму</button><button id="photoTune" disabled title="Фото рядом с головой и варианты черт — выбирайте похожее (или двойной клик по фото)">Подстроить сходство</button><span class="hint" id="photoStatus"></span></div>
         <div class="row"><label class="filebtn" for="profileFile" title="Второй снимок того же человека строго сбоку: глубина носа, губ, подбородка">Добавить профиль</label><input type="file" id="profileFile" accept="image/*" hidden><span class="hint" id="profileInfo"></span></div>
-        <div class="row"><button id="avatarSave" disabled>Сохранить аватар</button><label class="filebtn" for="avatarFile">Открыть аватар</label><input type="file" id="avatarFile" accept=".json,application/json" hidden></div>
+        <div class="row"><button id="avatarSave" disabled>Сохранить аватар</button><label class="filebtn" for="avatarFile">Открыть аватар</label><input type="file" id="avatarFile" accept=".json,application/json" hidden><input type="file" id="tunePhotoFile" accept="image/*" hidden></div>
         <div class="row"><button id="glbSave" title="Сетка, материалы и 52 ARKit-морфа — для Blender, Unity, Unreal">Скачать .glb</button><select id="glbDetail" title="Детализация файла"><option value="high">high</option><option value="medium" selected>medium</option><option value="low">low</option></select></div>
       </div>
       <div class="hint more">Файл аватара весит около 10 КБ: точки лица, цвета и кожа, без исходного фото. Его можно переслать на другой телефон и открыть там, распознавание не нужно.</div>
@@ -609,7 +637,8 @@ async function usePhoto(src, label) {
       + ['skin', 'hair', 'iris', 'lip'].filter((k) => c[k]).map((k) => `<span title="${k}" style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;background:${c[k]}"></span>`).join(' ')
       + rep.warnings.map((w) => `<div class="warn">${w}</div>`).join('');
     status(`Готово за ${((performance.now() - t0) / 1000).toFixed(1)} с`);
-    $('#photoClear').disabled = $('#avatarSave').disabled = $('#photoRefine').disabled = false;
+    $('#photoClear').disabled = $('#avatarSave').disabled = $('#photoRefine').disabled = $('#photoTune').disabled = false;
+    tunePhoto = null;
     log(`⟵ photoAvatar ${fmt(rep.measures)}`);
     head.stopSpeaking();
     head.speak('[e:curious] Ну, здравствуй. [e:smirk*0.8] Узнаёшь? [g:tilt] Теперь я говорю твоим лицом.', { tts: ttsSel() ?? undefined, revert: true });
@@ -620,7 +649,7 @@ async function usePhoto(src, label) {
 }
 $('#photoFile').onchange = (e) => { const f = e.target.files[0]; if (f) usePhoto(f, f.name); e.target.value = ''; };
 document.querySelectorAll('[data-sample]').forEach((b) => b.onclick = () => usePhoto(b.dataset.sample, b.textContent));
-$('#photoClear').onclick = () => { api('head.clearPhoto()', () => head.clearPhoto()); $('#photoBox').hidden = true; $('#photoClear').disabled = $('#avatarSave').disabled = $('#photoRefine').disabled = true; status(''); };
+$('#photoClear').onclick = () => { api('head.clearPhoto()', () => head.clearPhoto()); $('#photoBox').hidden = true; $('#photoClear').disabled = $('#avatarSave').disabled = $('#photoRefine').disabled = $('#photoTune').disabled = true; status(''); };
 $('#profileFile').onchange = async (e) => {
   const f = e.target.files[0]; e.target.value = '';
   if (!f || photoBusy) return;
@@ -646,6 +675,79 @@ $('#photoRefine').onclick = async () => {
   } catch (e) { status(''); log('✕ ' + (e.message || e), 'err'); }
   finally { photoBusy = false; $('#photoRefine').disabled = false; }
 };
+// ---- подстройка сходства глазами (14.6)
+let tuneS = null, tuneRoundId = 0, tunePhoto = null;
+const tuneDlg = $('#tuneDlg');
+const tuneCount = () => (innerWidth >= 900 ? 6 : innerWidth >= 600 ? 4 : 2);   // вариантов в раунде: 3 / 2 / 1 черта
+const tuneSigma = (v) => `${v > 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}σ`;
+const tunePut = (el, canvas) => { canvas.className = 'tune-pic'; canvas.removeAttribute('id'); el.replaceWith(canvas); return canvas; };
+function tuneFixes() {
+  const t = tuneS.tune, L = tuneS.tuner.labels, ks = Object.keys(t);
+  $('#tuneFixes').textContent = ks.length ? 'Поправки: ' + ks.map((k) => `${L[k]} ${tuneSigma(t[k])}`).join(', ') : 'Поправок пока нет.';
+  $('#tuneUndo').disabled = !tuneS.tuner.history.length;
+}
+async function tuneRound() {
+  const id = ++tuneRoundId, S = tuneS;
+  const list = S.tuner.variants(tuneCount()), shown = [...new Set(list.map((v) => v.feature))];
+  $('#tuneInfo').textContent = S.done ? 'все черты подобраны — можно заканчивать' : `выбор ${S.picks + 1} · ${shown.map((f) => S.tuner.labels[f]).join(', ')}`;
+  tuneFixes();
+  const cards = list.map((v) => {
+    const b = document.createElement('button');
+    b.className = 'tune-card'; b.disabled = true;
+    b.innerHTML = `<div class="tune-pic"></div>${v.label}: ${v.dir < 0 ? 'меньше' : 'больше'}`;
+    b.title = `${v.label} ${tuneSigma(v.dir * v.step)}`;
+    b.onclick = () => { if (tuneS) { tuneS.pick(b._v, shown); tuneRound(); } };
+    return b;
+  });
+  $('#tuneL').replaceChildren(...cards.filter((_, i) => list[i].dir < 0));
+  $('#tuneR').replaceChildren(...cards.filter((_, i) => list[i].dir > 0));
+  $('#tuneSame').onclick = () => { S.pick(null, shown); tuneRound(); };
+  $('#tuneSame').disabled = !shown.length;
+  const cur = await S.current();
+  if (id !== tuneRoundId) return;
+  tunePut(tuneDlg.querySelector('.tune-b .tune-pic'), cur);
+  await S.variants(list.length, (v, i) => {
+    if (id !== tuneRoundId) return;
+    const b = cards[i]; b._v = v; tunePut(b.querySelector('.tune-pic'), v.image); b.disabled = false;
+  });
+}
+async function tuneOpen() {
+  if (photoBusy || !head.portrait || tuneDlg.open) return;
+  photoBusy = true;
+  tuneDlg.showModal();
+  $('#tuneInfo').textContent = 'готовлю портреты…';
+  $('#tuneL').replaceChildren(); $('#tuneR').replaceChildren(); $('#tuneFixes').textContent = '';
+  try {
+    const o = tunePhoto ? { photo: tunePhoto } : {};
+    tuneS = await api(`const tuning = await head.tuneLikeness(${tunePhoto ? '{ photo }' : ''})`, () => head.tuneLikeness(o));
+    tunePut(tuneDlg.querySelector('.tune-a .tune-pic'), tuneS.photo);
+    await tuneRound();
+  } catch (e) {
+    tuneDlg.close(); tuneS = null; photoBusy = false;
+    if (/нет исходного фото/.test(e.message)) { status('Для подстройки нужно исходное фото: выберите его'); $('#tunePhotoFile').click(); }
+    else { status(''); log('✕ ' + (e.message || e), 'err'); }
+  }
+}
+function tuneClose(keep) {
+  if (!tuneS) { tuneDlg.close(); photoBusy = false; return; }
+  tuneRoundId++;
+  if (keep) {
+    const t = api('tuning.finish()', () => tuneS.finish()), n = Object.keys(t).length;
+    log(`⟵ photoTune ${fmt(t)}`);
+    status(n ? `Сходство подстроено: поправок ${n} (сохраняются в файле аватара)` : 'Поправок нет');
+  } else api('tuning.cancel()', () => tuneS.cancel());
+  tuneS = null; photoBusy = false;
+  if (tuneDlg.open) tuneDlg.close();
+}
+$('#photoTune').onclick = tuneOpen;
+$('#photoThumb').ondblclick = tuneOpen;
+$('#tuneUndo').onclick = () => { if (tuneS?.undo()) tuneRound(); };
+$('#tuneReset').onclick = () => { if (tuneS) { tuneS.reset(); tuneRound(); } };
+$('#tuneDone').onclick = () => tuneClose(true);
+$('#tuneCancel').onclick = () => tuneClose(false);
+tuneDlg.addEventListener('cancel', (e) => { e.preventDefault(); tuneClose(false); });   // Esc — как «Отмена»
+$('#tunePhotoFile').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) { tunePhoto = f; tuneOpen(); } };
+
 const lookSel = (id, key, map = (v) => v) => {
   $(id).onchange = (e) => {
     const look = head.getLook(), v = e.target.value;
@@ -745,7 +847,8 @@ async function openAvatar(f) {
     for (const [id, k] of [['caric', 'caricature'], ['focus', 'focus'], ['sigExpr', 'expression'], ['photoTex', 'texture'], ['realism', 'realism']]) if (o[k] !== undefined) { $('#' + id).value = o[k]; $('#' + id + 'V').textContent = o[k]; }
     document.querySelectorAll('[data-gender]').forEach((b) => b.classList.toggle('on', b.dataset.gender === head.gender));
     syncLook();
-    $('#photoRefine').disabled = !rep;
+    $('#photoRefine').disabled = $('#photoTune').disabled = !rep;
+    tunePhoto = null;
     status(`Аватар открыт: ${f.name}`);
     head.stopSpeaking();
     head.speak('[e:curious] Я снова здесь. [e:smirk*0.8] Скучали?', { tts: ttsSel() ?? undefined, revert: true });
@@ -808,5 +911,24 @@ layout();
 
 log('Готово. Попробуйте "Сложные состояния" или нарратив.', 'ev');
 </script>
+<dialog id="tuneDlg" aria-labelledby="tuneTitle">
+  <div class="tune-head"><h2 id="tuneTitle">Подстройка сходства</h2><span class="hint" id="tuneInfo"></span></div>
+  <div class="hint">Какой портрет больше похож на фото? Сбоку та же голова, но одна черта чуть меньше (слева) или больше (справа). Выбирайте, пока не станет похоже.</div>
+  <div class="tune-grid">
+    <div class="tune-side tune-l" id="tuneL"></div>
+    <figure class="tune-a"><div class="tune-pic" id="tuneA"></div><figcaption>фото</figcaption></figure>
+    <figure class="tune-b"><div class="tune-pic" id="tuneB"></div><figcaption>голова сейчас</figcaption></figure>
+    <div class="tune-side tune-r" id="tuneR"></div>
+  </div>
+  <div class="tune-foot">
+    <button id="tuneSame" title="Ни один вариант не лучше: шаг по этим чертам уменьшится">Как сейчас — лучше</button>
+    <button id="tuneUndo">Отменить выбор</button>
+    <button id="tuneReset">Сбросить поправки</button>
+    <span class="grow"></span>
+    <button id="tuneCancel">Отмена</button>
+    <button id="tuneDone" class="primary">Класс, похоже!</button>
+  </div>
+  <div id="tuneFixes"></div>
+</dialog>
 </body>
 </html>

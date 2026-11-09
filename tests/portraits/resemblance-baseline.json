@@ -1,162 +1,163 @@
 {
- "date": "2026-11-03T22:34:34.806Z",
+ "date": "2026-11-09T17:41:24.800Z",
  "opts": {},
+ "delegate": "CPU",
  "faceApi": "1.7.15",
  "summary": {
-  "cos": 0.662,
-  "top1": 5,
-  "top5": 19,
-  "pct": 96.3,
+  "cos": 0.657,
+  "top1": 8,
+  "top5": 18,
+  "pct": 94.2,
   "failed": 0,
-  "idDist": 0.664,
-  "idTop1": 2,
-  "idTop5": 11,
+  "idDist": 0.661,
+  "idTop1": 1,
+  "idTop5": 10,
   "idFailed": 0
  },
  "faces": {
   "004494bc17": {
-   "cos": 0.793,
-   "rank": 1,
-   "idDist": 0.695,
-   "idRank": 19
+   "cos": 0.692,
+   "rank": 2,
+   "idDist": 0.708,
+   "idRank": 18
   },
   "fcd353273c": {
-   "cos": 0.632,
+   "cos": 0.698,
    "rank": 3,
-   "idDist": 0.592,
-   "idRank": 3
+   "idDist": 0.575,
+   "idRank": 2
   },
   "d38f47ee6a": {
-   "cos": 0.749,
-   "rank": 3,
-   "idDist": 0.71,
-   "idRank": 17
+   "cos": 0.62,
+   "rank": 5,
+   "idDist": 0.706,
+   "idRank": 14
   },
   "b21dd7581b": {
-   "cos": 0.468,
-   "rank": 28,
-   "idDist": 0.676,
+   "cos": 0.515,
+   "rank": 24,
+   "idDist": 0.689,
    "idRank": 23
   },
   "0559c6f953": {
-   "cos": 0.686,
-   "rank": 2,
-   "idDist": 0.675,
-   "idRank": 15
+   "cos": 0.623,
+   "rank": 3,
+   "idDist": 0.681,
+   "idRank": 16
   },
   "b63d3d621e": {
-   "cos": 0.506,
-   "rank": 4,
-   "idDist": 0.622,
+   "cos": 0.051,
+   "rank": 51,
+   "idDist": 0.617,
    "idRank": 3
   },
   "e41d5716b8": {
-   "cos": 0.704,
-   "rank": 4,
-   "idDist": 0.623,
-   "idRank": 6
+   "cos": 0.718,
+   "rank": 1,
+   "idDist": 0.615,
+   "idRank": 5
   },
   "ee358a370c": {
-   "cos": 0.78,
+   "cos": 0.729,
    "rank": 1,
-   "idDist": 0.692,
-   "idRank": 30
+   "idDist": 0.695,
+   "idRank": 24
   },
   "a36856c69b": {
-   "cos": 0.644,
+   "cos": 0.724,
    "rank": 2,
-   "idDist": 0.679,
-   "idRank": 3
+   "idDist": 0.693,
+   "idRank": 6
   },
   "13243f7109": {
-   "cos": 0.676,
-   "rank": 5,
-   "idDist": 0.536,
-   "idRank": 1
-  },
-  "b55a0e7e14": {
-   "cos": 0.711,
-   "rank": 5,
-   "idDist": 0.685,
-   "idRank": 19
-  },
-  "7b53f56d2d": {
-   "cos": 0.5,
-   "rank": 5,
-   "idDist": 0.712,
-   "idRank": 16
-  },
-  "820a4f262c": {
-   "cos": 0.871,
-   "rank": 2,
-   "idDist": 0.673,
-   "idRank": 12
-  },
-  "ac264ef4ac": {
-   "cos": 0.652,
-   "rank": 13,
-   "idDist": 0.604,
+   "cos": 0.742,
+   "rank": 6,
+   "idDist": 0.517,
    "idRank": 2
   },
+  "b55a0e7e14": {
+   "cos": 0.743,
+   "rank": 4,
+   "idDist": 0.676,
+   "idRank": 18
+  },
+  "7b53f56d2d": {
+   "cos": 0.527,
+   "rank": 5,
+   "idDist": 0.725,
+   "idRank": 31
+  },
+  "820a4f262c": {
+   "cos": 0.896,
+   "rank": 1,
+   "idDist": 0.675,
+   "idRank": 15
+  },
+  "ac264ef4ac": {
+   "cos": 0.758,
+   "rank": 8,
+   "idDist": 0.61,
+   "idRank": 3
+  },
   "f9ffbfb5ff": {
-   "cos": 0.308,
-   "rank": 27,
-   "idDist": 0.572,
+   "cos": 0.116,
+   "rank": 57,
+   "idDist": 0.563,
    "idRank": 3
   },
   "28de559608": {
-   "cos": 0.866,
-   "rank": 2,
-   "idDist": 0.563,
-   "idRank": 2
-  },
-  "aac3dc88c5": {
-   "cos": 0.289,
-   "rank": 16,
-   "idDist": 0.626,
+   "cos": 0.864,
+   "rank": 3,
+   "idDist": 0.593,
    "idRank": 1
   },
+  "aac3dc88c5": {
+   "cos": 0.276,
+   "rank": 24,
+   "idDist": 0.608,
+   "idRank": 2
+  },
   "3c7149ebf4": {
-   "cos": 0.631,
+   "cos": 0.75,
    "rank": 1,
-   "idDist": 0.621,
+   "idDist": 0.604,
    "idRank": 2
   },
   "ac56d5a36b": {
-   "cos": 0.547,
-   "rank": 6,
-   "idDist": 0.826,
-   "idRank": 105
+   "cos": 0.822,
+   "rank": 1,
+   "idDist": 0.803,
+   "idRank": 93
   },
   "b23a56519d": {
-   "cos": 0.827,
+   "cos": 0.8,
    "rank": 1,
-   "idDist": 0.771,
-   "idRank": 30
+   "idDist": 0.732,
+   "idRank": 24
   },
   "579e859c5c": {
-   "cos": 0.669,
-   "rank": 5,
-   "idDist": 0.732,
-   "idRank": 22
+   "cos": 0.765,
+   "rank": 4,
+   "idDist": 0.7,
+   "idRank": 15
   },
   "d539a71591": {
-   "cos": 0.691,
-   "rank": 2,
-   "idDist": 0.808,
-   "idRank": 86
+   "cos": 0.671,
+   "rank": 1,
+   "idDist": 0.786,
+   "idRank": 68
   },
   "0e2c354d22": {
-   "cos": 0.832,
-   "rank": 4,
-   "idDist": 0.62,
-   "idRank": 4
+   "cos": 0.848,
+   "rank": 2,
+   "idDist": 0.656,
+   "idRank": 11
   },
   "aeb925936b": {
-   "cos": 0.845,
+   "cos": 0.822,
    "rank": 1,
-   "idDist": 0.625,
-   "idRank": 2
+   "idDist": 0.636,
+   "idRank": 3
   }
  }
 }

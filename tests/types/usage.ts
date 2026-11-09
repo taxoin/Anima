@@ -1,6 +1,6 @@
 // Проверка типов (npm run test:types): типичное использование пакета должно компилироваться в strict-режиме,
 // а ошибки (@ts-expect-error) — ловиться.
-import EmotionalHead, { CHANNELS, EMOTIONS, SKIN_TONES, OUTFITS, VISEMES, parseNarrative, type Channels, type Look, type PhotoReport, ElevenLabsVoice, type VoiceProfile } from 'emotional-head';
+import EmotionalHead, { CHANNELS, EMOTIONS, SKIN_TONES, OUTFITS, VISEMES, parseNarrative, type Channels, type Look, type PhotoReport, type PhotoTune, ElevenLabsVoice, type VoiceProfile } from 'emotional-head';
 import { EmotionalHeadElement } from 'emotional-head/element';
 import { resolveEmotion, type ARKitChannel } from 'emotional-head/emotions';
 import { buildTimeline, parseMarkup, spellNumber, type Viseme } from 'emotional-head/lipsync';
@@ -27,6 +27,14 @@ async function main() {
   await head.fromPhoto('/me.jpg', { profile: '/side.jpg' });
   await head.fromPhoto('/me.jpg', { caricature: 2.5, focus: 0.8, expression: 1 });
   head.setPhotoOptions({ focus: 0, expression: 0 });
+  const tuning = await head.tuneLikeness({ size: 256 });
+  const vs = await tuning.variants(6, (v, i) => document.body.append(v.image, String(i)));
+  tuning.pick(vs[0] ?? null, ['noseW', 'face']);
+  if (tuning.undo()) tuning.reset();
+  const tuned: PhotoTune = tuning.finish();
+  head.setPhotoTune({ ...tuned, chin: -0.5 });
+  console.log(head.photoTune?.noseW, tuning.done, tuning.picks, (await tuning.current()).width, tuning.photo.height);
+  head.on('photoTune', (e) => console.log(e.tune.jaw, e.picks));
   const json: string = await head.exportAvatar({ format: 'json' });
   await head.importAvatar(json);
   const glb: ArrayBuffer = await head.exportGLB({ detail: 'medium' });

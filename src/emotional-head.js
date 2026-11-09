@@ -659,6 +659,116 @@ export class EmotionalHead {
     return d;
   }
 
+  /** Поправки сходства, выбранные глазами (14.6): { черта: сдвиг в σ }; null — нет. */
+  get photoTune() { return this._portrait?.tune ? { ...this._portrait.tune } : null; }
+  /** Задать поправки сходства (ключи — TUNE из photo-avatar.js; {} — убрать). Пересобирает голову. */
+  setPhotoTune(t = {}) {
+    if (!this._portrait) return this;
+    this._portrait.setTune(t);
+    this._rebuildRig();
+    return this;
+  }
+
+  /**
+   * Подстройка сходства глазами (14.6): рядом с фото — воссозданный портрет и варианты, где сомнительные черты
+   * чуть меньше или больше; пользователь выбирает похожее, голова поправляется, раунды — пока не скажет «похоже».
+   * Портрет — анфас, в ракурсе и с мимикой фото, фото выровнено по глазам и рту так же, как рендер.
+   * @param {object} [o]
+   * @param {File|Blob|string|HTMLImageElement|HTMLCanvasElement} [o.photo]  исходное фото (по умолчанию — то, по которому
+   *   строилась голова; у открытого из файла аватара фото нет — передайте его)
+   * @param {number} [o.size=320]  сторона картинок
+   * @param {number} [o.step=0.8]  начальный сдвиг черты, σ
+   * @returns {Promise<LikenessTuning>} сессия: photo, current(), variants(n, onVariant), pick(v|null), undo(), reset(), finish(), cancel()
+   */
+  async tuneLikeness(o = {}) {
+    const P = this._portrait;
+    if (!P) throw new Error('tuneLikeness(): сначала fromPhoto() или importAvatar()');
+    const src = o.photo || P.img;
+    if (!src) throw new Error('tuneLikeness(): у аватара из файла нет исходного фото — передайте его: tuneLikeness({ photo })');
+    const { detectFace, TUNE } = await import('./photo-avatar.js');
+    const { LikenessTuner } = await import('./tuner.js');
+    const size = o.size ?? 320, saved = P.tune ? { ...P.tune } : {};
+    const tuner = new LikenessTuner(P.tuneOrder(), saved, { step: o.step, labels: Object.fromEntries(Object.entries(TUNE).map(([k, v]) => [k, v.label])) });
+    const head = this, channels = P.bs || {};
+    // выравнивание: середина глаз → (0.5, 0.42), глаза–рот → 0.3 стороны, наклон головы снят
+    const align = (L, w, h) => {
+      const pt = (i) => ({ x: L[i].x * w, y: L[i].y * h }), mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      const eR = mid(pt(33), pt(133)), eL = mid(pt(362), pt(263)), c = mid(eR, eL), m = mid(pt(13), pt(14));
+      const roll = Math.atan2(eL.y - eR.y, eL.x - eR.x);
+      return { c, roll, k: (0.3 * size) / Math.hypot(m.x - c.x, m.y - c.y) };
+    };
+    const draw = (img, A) => {
+      const c = document.createElement('canvas'); c.width = c.height = size;
+      const g = c.getContext('2d');
+      g.fillStyle = '#6b6f78'; g.fillRect(0, 0, size, size);
+      g.translate(0.5 * size, 0.42 * size); g.rotate(-A.roll); g.scale(A.k, A.k); g.translate(-A.c.x, -A.c.y);
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(img, 0, 0);
+      return c;
+    };
+    const { toCanvas } = await import('./photo-avatar.js');
+    const photoC = src instanceof HTMLCanvasElement ? src : await toCanvas(src);
+    const dp = await detectFace(photoC);
+    if (!dp) throw new Error('tuneLikeness(): на фото не нашлось лица');
+    const photo = draw(photoC, align(dp.L, photoC.width, photoC.height));
+    let A = null;
+    const shot = async (tune) => {
+      P.setTune(tune); this._rebuildRig();
+      const c = this._shotImage({ channels });
+      if (!A) {
+        const d = await detectFace(c);
+        A = d ? align(d.L, c.width, c.height) : { c: { x: c.width / 2, y: c.height * 0.45 }, roll: 0, k: size / c.width * 1.6 };
+      }
+      return draw(c, A);
+    };
+    const restore = () => { P.setTune(tuner.tune); this._rebuildRig(); };
+    let busy = 0;   // номер раунда: старый раунд, перебитый выбором, дальше не рисуется
+    return {
+      photo, tuner,
+      get tune() { return { ...tuner.tune }; },
+      get done() { return tuner.done; },
+      get picks() { return tuner.picks; },
+      async current() { try { return await shot(tuner.tune); } finally { restore(); } },
+      async variants(n = 6, onVariant) {
+        const id = ++busy, list = tuner.variants(n), out = [];
+        try {
+          for (let i = 0; i < list.length; i++) {
+            if (id !== busy) break;
+            const v = { ...list[i], image: await shot(list[i].tune) };
+            out.push(v); onVariant?.(v, i);
+            await new Promise((r) => setTimeout(r, 0));      // кадр интерфейсу между рендерами
+          }
+        } finally { restore(); }
+        return out;
+      },
+      /** Выбор: вариант или null («как сейчас лучше»); shown — черты раунда. Голова сразу поправляется. */
+      pick(v, shown) { busy++; tuner.pick(v, shown || (v ? [v.feature] : [])); restore(); head._emit('photoTune', { tune: { ...tuner.tune }, picks: tuner.picks }); },
+      undo() { busy++; const r = tuner.undo(); restore(); return r; },
+      reset() { busy++; tuner.reset(); restore(); },
+      /** Оставить поправки. */
+      finish() { busy++; restore(); head._emit('photoAvatar', { ...P.report, gender: { value: head.gender } }); return { ...tuner.tune }; },
+      /** Вернуть поправки, что были до подстройки. */
+      cancel() { busy++; P.setTune(saved); head._rebuildRig(); },
+    };
+  }
+
+  /** Портрет для подстройки: та же камера, что у _shotFace, но с очками и бородой — как увидит пользователь. */
+  _shotImage(o = {}) {
+    const cam = this._faceCam ||= new THREE.PerspectiveCamera(11, 1, 1, 60);
+    const W = this.renderer.domElement.width, H = this.renderer.domElement.height, size = o.size ?? 640;
+    cam.aspect = W / H; cam.position.set(0, -0.3, 19); cam.lookAt(0, -0.3, 0); cam.updateProjectionMatrix();
+    this._noCharExpr = true;
+    this.renderStill(o.channels || {}, {}, cam);
+    this._noCharExpr = false;
+    const s = Math.min(W, H), c = document.createElement('canvas');
+    c.width = c.height = size;
+    const g = c.getContext('2d');
+    g.fillStyle = '#6b6f78'; g.fillRect(0, 0, size, size);
+    g.drawImage(this.renderer.domElement, (W - s) / 2, (H - s) / 2, s, s, 0, 0, size, size);
+    this._render();
+    return c;
+  }
+
   /**
    * Детализация геометрии: 'high' (ПК, ~200 тыс. треугольников), 'medium' (телефоны, ~95 тыс.), 'low' (~55 тыс.), 'auto' — medium на телефонах.
    * Пересобирает голову; эмоция и речь продолжаются.

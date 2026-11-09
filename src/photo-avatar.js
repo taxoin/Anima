@@ -85,20 +85,25 @@ const EYES = [
 
 // ------------------------------------------------------------------ MediaPipe
 
-let _tasks = null, _tasksKey = '';
+let _tasks = null, _tasksKey = '', _delegate = null;
+/** На чём считает MediaPipe: 'GPU', 'CPU' (GPU не поднялся или задан PHOTO_ASSETS.delegate = 'CPU'), null — ещё не загружен. */
+export const photoDelegate = () => _delegate;
 async function loadTasks(A) {
-  const key = A.module + A.face + A.hair;
+  const key = A.module + A.face + A.hair + (A.delegate || '');
   if (_tasks && _tasksKey === key) return _tasks;
   _tasksKey = key;
   _tasks = (async () => {
     const V = await import(/* @vite-ignore */ A.module);
     const fs = await V.FilesetResolver.forVisionTasks(A.wasm);
-    const make = async (Cls, opts) => {
-      try { return await Cls.createFromOptions(fs, { ...opts, baseOptions: { ...opts.baseOptions, delegate: 'GPU' } }); }
-      catch (e) { return Cls.createFromOptions(fs, { ...opts, baseOptions: { ...opts.baseOptions, delegate: 'CPU' } }); }
+    // GPU и CPU дают немного разные точки (меры — до 1–2 %): тесты сходства задают CPU, чтобы не зависеть от видеокарты
+    const make = async (Cls, opts, main) => {
+      const cpu = () => { if (main) _delegate = 'CPU'; return Cls.createFromOptions(fs, { ...opts, baseOptions: { ...opts.baseOptions, delegate: 'CPU' } }); };
+      if (A.delegate === 'CPU') return cpu();
+      try { const t = await Cls.createFromOptions(fs, { ...opts, baseOptions: { ...opts.baseOptions, delegate: 'GPU' } }); if (main) _delegate = 'GPU'; return t; }
+      catch (e) { return cpu(); }
     };
     const [face, hair] = await Promise.all([
-      make(V.FaceLandmarker, { baseOptions: { modelAssetPath: A.face }, runningMode: 'IMAGE', numFaces: 1, outputFaceBlendshapes: true }),
+      make(V.FaceLandmarker, { baseOptions: { modelAssetPath: A.face }, runningMode: 'IMAGE', numFaces: 1, outputFaceBlendshapes: true }, true),
       A.hair ? make(V.ImageSegmenter, { baseOptions: { modelAssetPath: A.hair }, runningMode: 'IMAGE', outputCategoryMask: true, outputConfidenceMasks: false }).catch(() => null) : null,
     ]);
     return { face, hair };
@@ -404,6 +409,16 @@ const BS_POP = { browDown: 0.313, browInnerUp: 0.046, browOuterUp: 0.052, eyeSqu
 export const FOCUS = 0.8;
 const SHAPE_NOISY = new Set(['upS', 'upF', 'loS', 'loF', 'noseBr', 'noseProj']);
 const BOW_MEAN = { x: 0.29, rc: 0.866 };    // «лук Купидона» по калибровочным фото: пики на 0.29 полуширины рта, центр/пик = 0.87
+// подстройка сходства глазами (14.6): черты, которые можно сдвинуть; сдвиг — в долях разброса по набору (σ), «+» — больше
+// (длиннее, шире, выше). sign — знак меры для «больше» (подбородок и кончик носа ниже — отрицательные y), w — индексы ширин овала
+export const TUNE = {
+  face: { label: 'ширина лица', w: [1, 2, 3] }, jaw: { label: 'ширина челюсти', w: [4, 5] },
+  chin: { label: 'длина подбородка', sign: -1 }, eyeW: { label: 'размер глаз' }, eyeCX: { label: 'расстояние между глазами' },
+  noseW: { label: 'ширина носа' }, noseTip: { label: 'длина носа', sign: -1 }, mouthHW: { label: 'ширина рта' },
+  browY: { label: 'высота бровей' }, lipU: { label: 'верхняя губа' }, lipL: { label: 'нижняя губа' },
+  eyeH: { label: 'раскрытие глаз' }, browArch: { label: 'изгиб бровей' }, browTh: { label: 'толщина бровей' },
+  cheekPr: { label: 'скулы' }, chinSq: { label: 'квадратный подбородок' }, tilt: { label: 'наклон глаз' },
+};
 
 // ------------------------------------------------------------------ обработка изображения
 
@@ -1342,6 +1357,49 @@ export class Portrait {
   }
 
   /**
+   * Поправки сходства, выбранные глазами (14.6): { черта: сдвиг в σ } из TUNE. Применяются к мерам с фото до шаржа —
+   * шарж усиливает уже поправленное лицо; какие черты главные (gains), решается по фото без поправок — иначе
+   * поправка одной черты меняла бы усиление других. Хранятся в портрете и в файле аватара. Пустой объект — без поправок.
+   */
+  setTune(t = {}) {
+    const out = {};
+    for (const [f, v] of Object.entries(t || {})) if (TUNE[f] && Number.isFinite(v) && Math.abs(v) > 1e-3) out[f] = Math.round(clamp(v, -3, 3) * 1000) / 1000;
+    this.tune = Object.keys(out).length ? out : null;
+    this._tunedQ = null;
+    return this;
+  }
+  _tuneKey() { return this.tune ? JSON.stringify(this.tune) : ''; }
+  /** Меры с фото с поправками сходства. */
+  _tuned() {
+    if (!this.tune) return this.meas;
+    if (this._tunedQ?.key === this._tuneKey()) return this._tunedQ.Q;
+    const Q = { ...this.meas, widths: [...this.meas.widths] };
+    for (const [f, v] of Object.entries(this.tune)) {
+      const T = TUNE[f];
+      if (T.w) { for (const i of T.w) Q.widths[i] += v * WIDTHS_POP[i][1]; continue; }
+      if (typeof Q[f] === 'number' && MEAS_POP[f]) Q[f] += v * (T.sign || 1) * MEAS_POP[f][1];
+    }
+    this._tunedQ = { key: this._tuneKey(), Q };
+    return Q;
+  }
+  /**
+   * Черты для подстройки глазами — сначала самые сомнительные: под очками — глаза и брови, главные черты шаржа
+   * (их ошибка заметнее всего), затем по заметности. Закрытые бородой и усами — в конце (их не видно и на фото).
+   * @returns {string[]} ключи TUNE
+   */
+  tuneOrder() {
+    const keys = Object.keys(TUNE).filter((f) => TUNE[f].w || typeof this.meas[f] === 'number');
+    const G = this.gains(1.5, FOCUS), score = {};
+    const hidden = new Set([...(this.beardStyle?.moustache ? ['lipU'] : []), ...(this.beardStyle?.style && this.beardStyle.style !== 'none' ? ['lipL', 'chin', 'chinSq', 'jaw'] : [])]);
+    const glasses = this.glasses?.detected ? new Set(['eyeW', 'eyeH', 'eyeCX', 'browY', 'tilt']) : new Set();
+    keys.forEach((f, i) => {
+      const top = G.top.includes(f) || (TUNE[f].w && TUNE[f].w.some((j) => G.top.includes('w' + j)));
+      score[f] = -i + (top ? 6 : 0) + (glasses.has(f) ? 5 : 0) - (hidden.has(f) ? 30 : 0);
+    });
+    return keys.sort((a, b) => score[b] - score[a]);
+  }
+
+  /**
    * Выборочный шарж (14.1): во сколько раз усиливать отличие каждой черты от среднего. Как у карикатуриста —
    * самые необычные черты (в разбросах по набору портретов, z) усиливаются сильнее всего, три главные — всегда,
    * обычные почти не трогаются (там отличие — чаще шум распознавания), закрытые усами и бородой — тоже.
@@ -1350,7 +1408,7 @@ export class Portrait {
    * @returns {{ meas: Record<string, number>, widths: number[], z: Record<string, number>, top: string[] }}
    */
   gains(k = 1.5, focus = FOCUS) {
-    const Q = this.meas, z = {};
+    const Q = this.meas, z = {};   // по фото, без поправок сходства: поправка черты не меняет, какие черты главные
     for (const f in MEAS_POP) if (typeof Q[f] === 'number') z[f] = (Q[f] - MEAS_POP[f][0]) / MEAS_POP[f][1];
     (Q.widths || []).forEach((r, i) => { if (WIDTHS_POP[i][1]) z['w' + i] = (r - WIDTHS_POP[i][0]) / WIDTHS_POP[i][1]; });
     // главные черты: овал — одна черта (ширины на разных высотах связаны), из пар губ, век и т.п. — каждая своя
@@ -1405,9 +1463,9 @@ export class Portrait {
   fit(o = {}) {
     const k = o.caricature ?? 1.5, tex = clamp(o.texture ?? 0.9, 0, 1), gender = o.gender === 'male' ? 'male' : 'female';
     const re = clamp(o.realism ?? 0.8, 0, 1), focus = clamp(o.focus ?? FOCUS, 0, 1);
-    const key = `${k}|${tex}|${gender}|${re}|${focus}|${this._corrV || 0}|${this.profile?.v || 0}`;
+    const key = `${k}|${tex}|${gender}|${re}|${focus}|${this._corrV || 0}|${this.profile?.v || 0}|${this._tuneKey()}`;
     if (this._fits.has(key)) return this._fits.get(key);
-    const Q = this.meas, Mn = MEAN_M, G = this.gains(k, focus);
+    const Q = this._tuned(), Mn = MEAN_M, G = this.gains(k, focus);
     // основа: пресет пола, сдвинутый к реальным пропорциям
     const d0 = PRESETS[gender];
     const baseEyeX = lerp(0.3, REAL.eyeX, re);
@@ -1647,6 +1705,7 @@ export class Portrait {
       hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY), r: this.hairR ? this.hairR.map(r4) : null, bang: this.bang ? { side: this.bang.side, depth: r4(this.bang.depth) } : null, gray: r4(this.hairGray || 0), grayColor: rc(this.hairGrayColor), vari: r4(this.hairVar) },
       profile: this.profile ? { params: this.profile.params, rms: this.profile.rms, side: this.profile.side, warnings: this.profile.warnings } : null,
       tex: null,
+      tune: this.tune || null,
       corr: this.corr ? JSON.parse(JSON.stringify(this.corr, (k, v) => (typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v))) : null,
       warp: this.warp ? { k: this.warp.k, n: this.warp.n, win: this.warp.win, pts: this.warp.pts.map((p) => p.map(r4)) } : null,
     };
@@ -1705,6 +1764,7 @@ export class Portrait {
       p.tex = { R, G, B, S: t.S || p.skinTex };
     }
     p.corr = d.corr || null;
+    p.setTune(d.tune);
     p.warp = d.warp || null;
     p._fits = new Map();
     return p;

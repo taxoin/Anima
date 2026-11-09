@@ -18,6 +18,8 @@
  *          среди снимков набора по этому расстоянию.
  * Падает (код 1), если средний cos упал больше чем на 0.03, в пятёрку попадает на 2+ лица меньше, среднее idDist
  * выросло больше чем на 0.02 или по отпечатку в пятёрке на 3+ лица меньше.
+ * MediaPipe — на CPU (PHOTO_ASSETS.delegate): на GPU точки немного другие (меры до 1–2 %), и если GPU молча не поднимется,
+ * снимки и рендеры разойдутся. Режим и версия — в базовой линии; при другом режиме сравнение не делается.
  * Лист «фото | голова» — dev/resemblance-sheet.png. Нужны Chrome ($CHROME) и сеть (MediaPipe с CDN).
  */
 import http from 'node:http';
@@ -56,6 +58,13 @@ page.on('pageerror', (e) => console.error('pageerror', e.message));
 await page.setViewport({ width: 600, height: 700 });
 await page.goto(`http://127.0.0.1:${server.address().port}/tests/render.html`, { waitUntil: 'networkidle0' });
 await page.waitForFunction('window.ready === true', { timeout: 30000 });
+const DELEGATE = await page.evaluate(async (src) => {
+  const pa = await import('/src/photo-avatar.js');
+  pa.PHOTO_ASSETS.delegate = 'CPU';
+  await pa.analyzePortrait(src, {}).catch(() => null);
+  return pa.photoDelegate();
+}, `/dev/portraits/${have[0].id}.jpg`);
+if (DELEGATE !== 'CPU') { console.error(`MediaPipe не на CPU (${DELEGATE}) — результат несравним с базовой линией`); process.exit(2); }
 // face-api — в своей вкладке: в одной странице с MediaPipe она сдвигает его разбор
 const idPage = await browser.newPage();
 idPage.on('pageerror', (e) => console.error('pageerror', e.message));
@@ -82,7 +91,7 @@ const pick = (meas) => {
 };
 // 1. меры всех снимков набора (кэш — по содержимому photo-avatar.js: от него зависят меры)
 const hash = crypto.createHash('sha1').update(fs.readFileSync(path.join(ROOT, 'src/photo-avatar.js'))).digest('hex').slice(0, 12);
-const CACHE = path.join(ROOT, `dev/resemblance-gallery-${hash}.json`);
+const CACHE = path.join(ROOT, `dev/resemblance-gallery-${hash}-${DELEGATE.toLowerCase()}.json`);
 let gallery = fs.existsSync(CACHE) ? JSON.parse(fs.readFileSync(CACHE, 'utf8')) : null;
 if (!gallery || gallery.hash !== hash || Object.keys(gallery.meas).length !== have.length) {
   process.stdout.write(`Меры ${have.length} снимков набора`);
@@ -187,10 +196,11 @@ fs.writeFileSync(path.join(ROOT, args.find((a) => a.startsWith('--sheet='))?.sli
 await browser.close();
 server.close();
 
-const result = { date: new Date().toISOString(), opts: OPTS, faceApi: FA_VER, summary, faces: Object.fromEntries(ok.map((r) => [r.id, { cos: r.cos, rank: r.rank, idDist: r.idDist, idRank: r.idRank }])) };
+const result = { date: new Date().toISOString(), opts: OPTS, delegate: DELEGATE, faceApi: FA_VER, summary, faces: Object.fromEntries(ok.map((r) => [r.id, { cos: r.cos, rank: r.rank, idDist: r.idDist, idRank: r.idRank }])) };
 if (saveBase) { fs.writeFileSync(BASE, JSON.stringify(result, null, 1) + '\n'); console.log(`Базовая линия записана: ${path.relative(ROOT, BASE)}`); process.exit(0); }
 if (!fs.existsSync(BASE)) { console.log('Базовой линии нет: npm run test:resemblance -- --save-baseline'); process.exit(0); }
 const b = JSON.parse(fs.readFileSync(BASE, 'utf8'));
+if ((b.delegate || 'смешанный') !== DELEGATE) { console.log(`Базовая линия записана в другом режиме MediaPipe (${b.delegate || 'смешанный'}), сейчас ${DELEGATE}: перезапишите её — --save-baseline`); process.exit(2); }
 const worst = ok.map((r) => ({ ...r, d: r.cos - (b.faces[r.id]?.cos ?? r.cos) })).sort((x, y) => x.d - y.d).slice(0, 5);
 console.log(`базовая линия (${b.date.slice(0, 10)}): cos ${b.summary.cos}, в пятёрке ${b.summary.top5}; хуже всего: ` + worst.map((r) => `${r.id} ${r.d >= 0 ? '+' : ''}${r.d.toFixed(2)}`).join(', '));
 if (b.summary.idDist) console.log(`  отпечаток в базовой линии: расстояние ${b.summary.idDist}, в пятёрке ${b.summary.idTop5}`);

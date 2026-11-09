@@ -183,6 +183,46 @@ export interface SpeakAudioOptions extends SpeakOptions {
   visemes?: Array<{ t: number; v: Viseme | number }>;
 }
 
+/** Черты подстройки сходства (14.6): ширины овала и меры лица. */
+export type TuneFeature = 'face' | 'jaw' | 'chin' | 'eyeW' | 'eyeCX' | 'noseW' | 'noseTip' | 'mouthHW' | 'browY' | 'lipU' | 'lipL' | 'eyeH' | 'browArch' | 'browTh' | 'cheekPr' | 'chinSq' | 'tilt';
+/** Поправки сходства: сдвиг черты в σ (разбросах по набору портретов), «+» — больше, предел ±3. */
+export type PhotoTune = Partial<Record<TuneFeature, number>>;
+/** Вариант раунда подстройки: голова, где одна черта чуть меньше (dir −1) или больше (+1). */
+export interface TuneVariant {
+  feature: TuneFeature;
+  /** название черты по-русски («ширина носа») */
+  label: string;
+  dir: -1 | 1;
+  /** сдвиг относительно текущего, σ */
+  step: number;
+  /** поправки целиком, если выбрать этот вариант */
+  tune: PhotoTune;
+  image: HTMLCanvasElement;
+}
+/** Сессия подстройки сходства глазами (tuneLikeness). */
+export interface LikenessTuning {
+  /** исходное фото, выровненное по глазам и рту так же, как портреты */
+  readonly photo: HTMLCanvasElement;
+  readonly tune: PhotoTune;
+  /** все черты подобраны (шаг стал мелким или выборов по черте 5) */
+  readonly done: boolean;
+  readonly picks: number;
+  /** портрет головы сейчас — в том же ракурсе и с мимикой фото */
+  current(): Promise<HTMLCanvasElement>;
+  /** варианты раунда: n/2 черт по паре «меньше / больше»; onVariant — по мере готовности */
+  variants(n?: number, onVariant?: (v: TuneVariant, i: number) => void): Promise<TuneVariant[]>;
+  /** выбор: вариант или null — «как сейчас лучше»; shown — черты раунда; голова сразу поправляется */
+  pick(v: TuneVariant | null, shown?: TuneFeature[]): void;
+  /** отменить последний выбор; false — нечего отменять */
+  undo(): boolean;
+  /** убрать все поправки */
+  reset(): void;
+  /** оставить поправки (попадут в exportAvatar) */
+  finish(): PhotoTune;
+  /** вернуть поправки, что были до подстройки */
+  cancel(): void;
+}
+
 export interface PhotoOptions {
   /** 0 — стандартные пропорции, 1 — как на фото, 1.5–2.5 — шарж. */
   caricature?: number;
@@ -284,6 +324,8 @@ export interface EmotionalHeadEvents {
   blink: Record<string, never>;
   modelLoaded: { url: string };
   photoAvatar: PhotoReport | null;
+  /** выбор в подстройке сходства (tuneLikeness) */
+  photoTune: { tune: PhotoTune; picks: number };
   lookChange: LookOption;
   detailChange: { detail: DetailLevel; pixelRatio: number; step: number; reason: string };
   flatChange: Required<FlatOptions> | null;
@@ -394,6 +436,12 @@ export declare class EmotionalHead {
   likeness(o?: { base?: boolean; expression?: boolean; size?: number }): Promise<LikenessReport>;
   refinePhoto(o?: { iterations?: number; alpha?: number; onProgress?: (text: string) => void }): Promise<number[]>;
   refineShape(o?: { iterations?: number; alpha?: number; realism?: number; onProgress?: (text: string) => void }): Promise<number[]>;
+  /** Подстройка сходства глазами: фото рядом с воссозданным портретом и варианты сомнительных черт. У аватара из файла передайте фото. */
+  tuneLikeness(o?: { photo?: File | Blob | string | HTMLImageElement | HTMLCanvasElement; size?: number; step?: number }): Promise<LikenessTuning>;
+  /** Поправки сходства, выбранные глазами; null — нет. */
+  readonly photoTune: PhotoTune | null;
+  /** Задать поправки сходства ({} — убрать). Пересобирает голову. */
+  setPhotoTune(t?: PhotoTune): this;
   exportAvatar(o: ExportAvatarOptions & { format: 'json' }): Promise<string>;
   exportAvatar(o?: ExportAvatarOptions): Promise<Record<string, unknown>>;
   importAvatar(src: string | File | Blob | Record<string, unknown>, o?: { caricature?: number; texture?: number; realism?: number; focus?: number; expression?: number; gender?: Gender; look?: LookOption; reclone?: boolean }): Promise<PhotoReport | null>;
