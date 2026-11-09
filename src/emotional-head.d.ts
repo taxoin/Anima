@@ -75,6 +75,16 @@ export interface Look {
   // нос
   noseShape?: 'straight' | 'roman' | 'snub' | 'button' | 'greek' | 'bulbous' | 'wide' | 'narrow';
   noseBridge?: number; noseHump?: number; noseRoot?: number; noseUp?: number; noseBulb?: number; noseFlare?: number;
+  /** Нос «картошкой» (14.4): 1 — как есть, 2–4 — кончик и крылья шаром крупнее во столько раз (переносица прежняя), 0.6–1 — меньше. */
+  noseSize?: number;
+  /** Контур носа штрихом — дуги крыльев и ноздри (0…1). По умолчанию 1 в плоском режиме с обводкой, иначе 0. */
+  noseLine?: number;
+  /** Крупный выступающий подбородок (14.4): 1 — как есть, до 4 — вперёд, шире и длиннее. */
+  chinSize?: number;
+  /** Длина подбородка (всё ниже рта), 0.7…2. */
+  chinScale?: number;
+  /** Купол черепа (14.4): 0.8…1.6 — выше лба вытягивается вверх и шире к макушке; волосы, уборы и наушники идут за ним. */
+  dome?: number;
   // волосы
   hair?: Color;
   hairStyle?: HairStyle;
@@ -242,6 +252,8 @@ export interface PhotoOptions {
   expression?: number;
   /** Чернильные линии по фото (лоб, межбровье, складки, «лапки»): 0 — нет (по умолчанию), 1 — по глубине на снимке, 2 — вдвое; с кожей с фото слабее. Лучше всего — для texture: 0 и плоского режима. */
   lines?: number;
+  /** Большие деформации (14.4): необычно широкий нос — «картошкой», длинный подбородок — крупным, сверх обычного шаржа: 0 — нет (по умолчанию), 1 — полностью. */
+  bold?: number;
   /** auto — по фото, если модель уверена; keep — текущий пол. */
   gender?: Gender | 'auto' | 'keep';
   /** Сразу подогнать форму по точкам лица (+1.5–3 с). */
@@ -437,7 +449,7 @@ export declare class EmotionalHead {
 
   // фото-аватар
   fromPhoto(src: File | Blob | string | HTMLImageElement | HTMLCanvasElement, o?: PhotoOptions): Promise<PhotoReport>;
-  setPhotoOptions(o?: Partial<Pick<PhotoOptions, 'caricature' | 'texture' | 'realism' | 'focus' | 'expression' | 'lines'>>): this;
+  setPhotoOptions(o?: Partial<Pick<PhotoOptions, 'caricature' | 'texture' | 'realism' | 'focus' | 'expression' | 'lines' | 'bold'>>): this;
   clearPhoto(): this;
   /** Глубина лица по снимку строго в профиль; с фото-аватаром — дополняет его, без него — меняет look. */
   addProfile(src: File | Blob | string | HTMLImageElement | HTMLCanvasElement, o?: { onProgress?: (text: string) => void }): Promise<ProfileResult>;
@@ -453,7 +465,7 @@ export declare class EmotionalHead {
   setPhotoTune(t?: PhotoTune): this;
   exportAvatar(o: ExportAvatarOptions & { format: 'json' }): Promise<string>;
   exportAvatar(o?: ExportAvatarOptions): Promise<Record<string, unknown>>;
-  importAvatar(src: string | File | Blob | Record<string, unknown>, o?: { caricature?: number; texture?: number; realism?: number; focus?: number; expression?: number; lines?: number; gender?: Gender; look?: LookOption; reclone?: boolean }): Promise<PhotoReport | null>;
+  importAvatar(src: string | File | Blob | Record<string, unknown>, o?: { caricature?: number; texture?: number; realism?: number; focus?: number; expression?: number; lines?: number; bold?: number; gender?: Gender; look?: LookOption; reclone?: boolean }): Promise<PhotoReport | null>;
 
   // модели и экспорт
   loadModel(url: string, o?: LoadModelOptions): Promise<unknown>;

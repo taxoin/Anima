@@ -1517,6 +1517,21 @@ export class Portrait {
   }
 
   /**
+   * Большие деформации (14.4): необычно широкий нос — «картошкой» (noseSize), необычно длинный подбородок — крупным
+   * (chinSize), сверх обычного шаржа. Только у черт, заметно отличных от среднего (|z| > 1), и только при усилении (k > 1);
+   * подбородок под бородой не трогаем. bold 0…1 (по умолчанию 0).
+   */
+  _boldOv(bold, k, z) {
+    const b = clamp(bold ?? 0, 0, 1), ov = {};
+    if (!(b > 0) || k <= 1) return ov;
+    const big = (zf, max) => +clamp(1 + 0.9 * b * Math.max(0, zf - 1) * (k - 1), 1, max).toFixed(3);
+    if (z.noseW > 1) ov.noseSize = big(z.noseW, 3.5);
+    const beard = this.beardStyle?.style && this.beardStyle.style !== 'none';
+    if (!beard && z.chin < -1) ov.chinSize = big(-z.chin, 3);   // мера chin — y низа подбородка: ниже среднего — длиннее
+    return ov;
+  }
+
+  /**
    * Характерное выражение (14.2): мимика снимка за вычетом обычной портретной (средние по набору: почти все
    * на портретах улыбаются, MediaPipe «видит» прищур и опущенные брови и у нейтральных лиц). Остаётся своё:
    * нахмуренность, сжатые губы, ямочка, усмешка набок. Асимметрия — только почти анфас (поворот её искажает).
@@ -1549,7 +1564,7 @@ export class Portrait {
   fit(o = {}) {
     const k = o.caricature ?? 1.5, tex = clamp(o.texture ?? 0.9, 0, 1), gender = o.gender === 'male' ? 'male' : 'female';
     const re = clamp(o.realism ?? 0.8, 0, 1), focus = clamp(o.focus ?? FOCUS, 0, 1);
-    const key = `${k}|${tex}|${gender}|${re}|${focus}|${o.lines ?? 0}|${this._corrV || 0}|${this.profile?.v || 0}|${this._tuneKey()}`;
+    const key = `${k}|${tex}|${gender}|${re}|${focus}|${o.lines ?? 0}|${o.bold ?? 0}|${this._corrV || 0}|${this.profile?.v || 0}|${this._tuneKey()}`;
     if (this._fits.has(key)) return this._fits.get(key);
     const Q = this._tuned(), Mn = MEAN_M, G = this.gains(k, focus);
     // основа: пресет пола, сдвинутый к реальным пропорциям
@@ -1640,6 +1655,7 @@ export class Portrait {
       const L = Object.fromEntries(Object.entries(this.lines).map(([g, v]) => [g, +clamp(v * lk, 0, 1.5).toFixed(3)]));
       if (Object.values(L).some((v) => v > 0.02)) { ov.lines = L; ov.lineColor = hex(this.skinTex.map((v) => v * 0.32)); }
     }
+    Object.assign(ov, this._boldOv(o.bold, k, G.z));
     if (this.hairColor) ov.hair = hex(this.hairColor.map((v) => v * 1.05));
     Object.assign(ov, this._eyeAsymOv(k, eyeR));
     Object.assign(ov, this._lipAsymOv(k, ov.mouthHW));

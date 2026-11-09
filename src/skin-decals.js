@@ -33,6 +33,7 @@ export function resolveMakeup(m) {
 }
 
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, t) => a + (b - a) * t;
 const rgba = (hex, a) => {
   const n = parseInt(String(hex).replace('#', ''), 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${clamp(a, 0, 1)})`;
@@ -230,5 +231,47 @@ export function drawLines(P, E, size = 1024) {
       for (let x = 0; x < size; x++) out[dst + x * 4 + ch] = px[src + x * 4];
     }
   });
+  return { data: out, size };
+}
+
+// ---------------------------------------------------------------- контур носа (14.4)
+/**
+ * Контур носа штрихом, как у карикатуриста: крылья — две дуги «( )», ноздри — короткие запятые, низ кончика — лёгкая
+ * дуга. В плоском режиме нос иначе — одна тень, и ширина носа не читается. F — noseFrame (head-model.js), toY — y
+ * «эталонного» носа → y головы. Маска — в канале R (строки снизу вверх, как UV).
+ * @returns {{ data: Uint8Array, size: number }}
+ */
+export function drawNoseLine(P, F, toY, size = 512) {
+  const B = DECAL_BOUNDS, sx = size / (B.x1 - B.x0), sy = size / (B.y1 - B.y0);
+  const X = (x) => (x - B.x0) * sx, Y = (y) => (B.y1 - toY(y)) * sy, R = (r) => r * sx;
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.fillStyle = '#000'; g.fillRect(0, 0, size, size);
+  g.lineCap = 'round'; g.strokeStyle = '#fff';
+  const curve = (pts, w) => {                                       // квадратичные кривые через середины, к концам тоньше
+    const n = 24, at = (t) => {
+      const u = t * (pts.length - 1), i = Math.min(Math.floor(u), pts.length - 2), f = u - i;
+      return [lerp(pts[i][0], pts[i + 1][0], f), lerp(pts[i][1], pts[i + 1][1], f)];
+    };
+    for (let i = 0; i < n; i++) {
+      const t0 = i / n, t1 = (i + 1) / n, [xa, ya] = at(t0), [xb, yb] = at(t1);
+      g.lineWidth = Math.max(0.8, R(w * (0.3 + 0.7 * Math.sin(Math.PI * (t0 + t1) / 2) ** 0.6)));
+      g.beginPath(); g.moveTo(X(xa), Y(ya)); g.lineTo(X(xb), Y(yb)); g.stroke();
+    }
+  };
+  const w = 0.0075 * clamp(Math.sqrt(F.s), 0.8, 1.6);
+  for (const d of [1, -1]) {
+    const cx = d * F.lx, cy = F.ly, rx = F.lrx, ry = F.lry;
+    // крыло: от верха снаружи вниз и внутрь к ноздре
+    const arc = [];
+    for (let i = 0; i <= 8; i++) { const a = lerp(1.75, -2.0, i / 8); arc.push([cx + d * rx * Math.cos(a) * 0.95, cy + ry * Math.sin(a)]); }
+    curve(arc, w);
+    curve([[d * F.lx * 0.88, F.ty + 0.004], [d * F.lx * 0.62, F.ty - 0.004], [d * F.lx * 0.42, F.ty + 0.002]], w * 0.8);   // ноздря
+  }
+  g.globalAlpha = 0.55;
+  curve([[-F.lx * 0.35, F.ty + 0.006], [0, F.ty - 0.004], [F.lx * 0.35, F.ty + 0.006]], w * 0.7);   // низ кончика
+  g.globalAlpha = 1;
+  const px = g.getImageData(0, 0, size, size).data, out = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) out[((size - 1 - y) * size + x) * 4] = px[(y * size + x) * 4];
   return { data: out, size };
 }

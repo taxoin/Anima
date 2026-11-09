@@ -16,7 +16,7 @@
  *    rig.dispose()
  */
 import * as THREE from 'three';
-import { hasDecals, drawDecals, resolveMakeup, DECAL_BOUNDS, resolveLines, drawLines } from './skin-decals.js';
+import { hasDecals, drawDecals, resolveMakeup, DECAL_BOUNDS, resolveLines, drawLines, drawNoseLine } from './skin-decals.js';
 import { thinPlate } from './tps.js';
 import { decimate } from './decimate.js';
 
@@ -288,6 +288,19 @@ const JAW_PIVOT = { y: -0.12, z: -0.05 };
 
 // ------------------------------------------------------------------ форма черепа
 
+/**
+ * Купол черепа (14.4, look.dome 0.8…1.6): всё выше лба (y > 0.3) вытягивается вверх в d раз (плавно, без излома)
+ * и к макушке шире на 35 % от прибавки. Лицо, брови, уши — на месте; волосы и уборы идут за черепом.
+ */
+const DOME_A = 0.3, DOME_B = 0.65;
+export function domeY(y, d) {
+  if (d === 1 || y <= DOME_A) return y;
+  const t = Math.min(1, (y - DOME_A) / (DOME_B - DOME_A)), g = (DOME_B - DOME_A) * (t ** 3 - t ** 4 / 2) + Math.max(0, y - DOME_B);
+  return y + (d - 1) * g;
+}
+const domeK = (y, d) => (d === 1 ? 1 : 1 + 0.35 * (d - 1) * smoothstep(DOME_A, 0.85, y));
+const domeOf = (P) => clamp(P.dome ?? 1, 0.8, 1.6);
+
 /** Точка единичной сферы → точка головы (без глазниц). */
 function shapeHead(px, py, pz, P, out) {
   const s = smoothstep(-0.3, 0.3, pz);
@@ -297,9 +310,28 @@ function shapeHead(px, py, pz, P, out) {
   const F = smoothstep(0.15, 0.55, pz);
   if (F > 0) z += F * featureDz(x, y, P);
   // длина подбородка: всё ниже линии рта растягивается/сжимается (рот остаётся на месте)
-  const cs = P.chinScale ?? 1, yM = LAYOUT.mouthY;
-  out[0] = x; out[1] = y < yM ? yM + (y - yM) * cs : y; out[2] = z;
+  const cs = (P.chinScale ?? 1) * (1 + 0.12 * (clamp(P.chinSize ?? 1, 1, 4) - 1)), yM = LAYOUT.mouthY, d = domeOf(P), k = domeK(y, d);
+  out[0] = x * k; out[1] = y < yM ? yM + (y - yM) * cs : domeY(y, d); out[2] = z * k;
   return out;
+}
+
+/** Купол черепа для готовых частей, построенных по черепу без него (уборы, наушники): вершины в координатах головы. */
+function domeGroup(group, d) {
+  if (d === 1) return;
+  group.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(group.matrixWorld).invert(), m = new THREE.Matrix4(), v = new THREE.Vector3();
+  group.traverse((o) => {
+    if (!o.isMesh) return;
+    const g = o.geometry, p = g.attributes.position;
+    m.multiplyMatrices(inv, o.matrixWorld);
+    const back = m.clone().invert();
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i).applyMatrix4(m);                   // в координаты группы (= головы)
+      const k = domeK(v.y, d); v.set(v.x * k, domeY(v.y, d), v.z * k).applyMatrix4(back);
+      p.setXYZ(i, v.x, v.y, v.z);
+    }
+    p.needsUpdate = true; g.computeVertexNormals(); g.computeBoundingSphere();
+  });
 }
 
 /** Функция деформации по точкам (P.warp) или null; см. ProceduralHead._initWarp. Сдвигает только x, y. */
@@ -352,12 +384,29 @@ export function profileCurve(gender, overrides = {}, { y0 = -1.1, y1 = 0.6, step
 /** Нос по вертикали: y головы → y "эталонного" носа (кончик на -0.21). */
 const noseY = (y, P) => LAYOUT.eyeY + (y - LAYOUT.eyeY) * (0.24 / (LAYOUT.eyeY - (P.noseTipY ?? -0.21)));
 
-function featureDz(x, y, P) {
-  const ax = Math.abs(x), ex = P.eyeX ?? LAYOUT.eyeX, nw = (P.noseW ?? 0.07) / 0.07;
+/**
+ * Нос «картошкой» (14.4, look.noseSize 0.6…4): кончик — шар, крылья — два шара поменьше по бокам; спинка и переносица
+ * прежние. Ширина шара растёт почти как s, высота и выступ — медленнее (вниз — губы, вверх — глаза).
+ * Геометрия в координатах «эталонного» носа (yn, см. noseY): нужна и коже, и тени ноздрей, и контуру в плоском режиме.
+ */
+export function noseFrame(P) {
+  const s = clamp(P.noseSize ?? 1, 0.6, 4), d = s - 1, nw = (P.noseW ?? 0.07) / 0.07, up = P.noseUp || 0;
+  const rx = 0.052 * nw * (1 + 0.75 * d), ry = 0.05 * (1 + 0.55 * d), cy = -0.205 + 0.018 * up - 0.012 * d;
+  const H = ((P.nose ?? 0.165) + 0.035) * (1 + 0.18 * d);
+  const F = { s, rx, ry, cy, H, wx: 0.8 * rx, wy: cy - 0.35 * ry, wrx: 0.55 * rx, wry: 0.6 * ry, wH: 0.42 * H };
+  // видимое крыло (контур, ноздри): у обычного носа — гауссово крыло featureDz, у крупного — шар
+  const fl = P.noseFlare || 0, k = Math.min(1, s), t = smoothstep(1, 2, s);
+  F.lx = lerp(0.07 * nw * (1 + 0.15 * fl) * k, F.wx, t); F.ly = lerp(-0.245, F.wy, t);
+  F.lrx = lerp(0.05 * nw * (1 + 0.2 * fl) * k, F.wrx, t); F.lry = lerp(0.04, F.wry, t);
+  F.ty = lerp(-0.27, cy - 0.95 * ry, t);                               // низ кончика
+  return F;
+}
+const ball = (x, y, cx, cy, rx, ry, h) => { const r = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2; return r < 1 ? h * Math.pow(1 - r, 0.6) : 0; };
+const smax = (a, b, k) => 0.5 * (a + b + Math.sqrt((a - b) ** 2 + k * k)) - 0.5 * k;
+
+function noseDz(x, yn, P) {
+  const nw = (P.noseW ?? 0.07) / 0.07;
   let dz = 0;
-  dz -= 0.05 * G(ax, y, ex, 0.02, 0.13, 0.1);                       // мягкая глазница
-  dz += P.browRidge * G(ax, y, ex - 0.03, 0.2, 0.16, 0.05);         // надбровье
-  const yn = noseY(y, P);
   // форма носа (4.4): ширина спинки, горбинка, глубина переносицы, вздёрнутость, «картошка», крылья (см. NOSE_SHAPES)
   const br = P.noseBridge ?? 1, hump = P.noseHump || 0, root = P.noseRoot || 0, up = P.noseUp || 0, bulb = P.noseBulb || 0, flare = P.noseFlare || 0;
   const ny = smoothstep(0.2, -0.23, yn);                             // спинка носа растёт к кончику
@@ -366,11 +415,28 @@ function featureDz(x, y, P) {
   const ridge = Math.exp(-(x * x) / (2 * nsx * nsx));
   dz += P.nose * ny * below * ridge;
   dz += P.nose * hump * 0.32 * ridge * Math.exp(-(((yn + 0.07) / 0.055) ** 2));   // горбинка (< 0 — вогнутая спинка)
-  dz += 0.025 * (1 + root) * G(ax, yn, 0, 0.12, 0.05 * br, 0.08);   // переносица (root > 0 — «греческий» профиль без ямки)
+  dz += 0.025 * (1 + root) * G(Math.abs(x), yn, 0, 0.12, 0.05 * br, 0.08);   // переносица (root > 0 — «греческий» профиль без ямки)
   const tipY = -0.21 + 0.018 * up;
   dz += 0.035 * (1 + 0.9 * bulb) * G(x, yn, 0, tipY, 0.05 * nw * (1 + 0.35 * bulb), 0.05 * (1 + 0.25 * bulb));   // кончик носа
   dz -= 0.03 * Math.max(0, up) * G(x, yn, 0, -0.262, 0.045 * nw, 0.022);           // вздёрнутый: колумелла уходит вверх
-  dz += 0.042 * (1 + 0.6 * flare) * G(ax, yn, 0.07 * nw * (1 + 0.15 * flare), -0.245, 0.032 * nw * (1 + 0.2 * flare), 0.028);   // крылья носа
+  dz += 0.042 * (1 + 0.6 * flare) * G(Math.abs(x), yn, 0.07 * nw * (1 + 0.15 * flare), -0.245, 0.032 * nw * (1 + 0.2 * flare), 0.028);   // крылья носа
+  return dz;
+}
+
+function featureDz(x, y, P) {
+  const ax = Math.abs(x), ex = P.eyeX ?? LAYOUT.eyeX;
+  let dz = 0;
+  dz -= 0.05 * G(ax, y, ex, 0.02, 0.13, 0.1);                       // мягкая глазница
+  dz += P.browRidge * G(ax, y, ex - 0.03, 0.2, 0.16, 0.05);         // надбровье
+  const yn = noseY(y, P);
+  const ns = clamp(P.noseSize ?? 1, 0.6, 4);
+  let nd = ns < 1 ? ns * noseDz(x / ns, yn, P) : noseDz(x, yn, P);   // мелкий нос: уже и ниже
+  if (ns > 1) {                                       // крупный нос: шар кончика и крыльев поверх спинки, у глаз — на нет (веки)
+    const F = noseFrame(P), eye = 1 - G(ax, y, ex, LAYOUT.eyeY, 0.12, 0.09);
+    const b = smax(ball(x, yn, 0, F.cy, F.rx, F.ry, F.H), ball(ax, yn, F.wx, F.wy, F.wrx, F.wry, F.wH), 0.02);
+    nd = smax(nd, b * eye, 0.03);
+  }
+  dz += nd;
   // губы в 3D (4.5): выступ губ вперёд (lipPro), впадина над верхней губой (lipDepthU), ямка под нижней (lipDepthL),
   // фильтрум — желобок с валиками от носа к «луку Купидона» (philtrum, 0…1)
   const pro = P.lipPro || 0, dU = P.lipDepthU || 0, dL = P.lipDepthL || 0, ph = P.philtrum || 0;
@@ -380,6 +446,11 @@ function featureDz(x, y, P) {
   if (ph) dz += ph * (0.005 * G(ax, y, 0.03, -0.385, 0.012, 0.055) - 0.004 * G(x, y, 0, -0.385, 0.014, 0.055));
   dz -= 0.02 * (1 + dL) * G(x, y, 0, -0.635, 0.12, 0.025);          // ямка под губой
   dz += P.chin * G(x, y, 0, -0.78, P.chinSX, 0.07);                  // подбородок
+  const cz = clamp(P.chinSize ?? 1, 1, 4);
+  if (cz > 1) {                                                      // крупный подбородок (14.4): шар вперёд и вниз, шире
+    const d = cz - 1, rx = (P.chinSX + 0.06) * (1 + 0.45 * d), ry = 0.11 * (1 + 0.25 * d);
+    dz = smax(dz, ball(x, y, 0, -0.79 - 0.015 * d, rx, ry, (P.chin + 0.04) * (1 + 0.6 * d)), 0.03);
+  }
   dz += P.cheek * G(ax, y, 0.44, -0.05, 0.1, 0.08);                  // скулы
   if (P.cheekFull) dz += P.cheekFull * G(ax, y, 0.36, -0.3, 0.13, 0.12);   // пухлые щёки (мультяшность)
   dz -= P.hollow * G(ax, y, 0.46, -0.32, 0.1, 0.1);                  // впалые щёки (м)
@@ -1454,7 +1525,9 @@ export class ProceduralHead {
 
     // vertex colors: AO, румянец, щетина
     const col = new Float32Array(pos.length);
-    const blush = [1, 0.74, 0.74];
+    const blush = [1, 0.74, 0.74], NF = noseFrame(P);
+    // ноздри и тень под носом: у крупного носа — под шарами крыльев (14.4)
+    NF.k = NF.s > 1 ? NF.lx / (P.noseW ?? 0.07) : NF.s; NF.ky = 1 + 0.3 * Math.max(0, NF.s - 1); NF.nx = NF.s > 1 ? 0.7 * NF.lx : 0.05 * ((P.noseW ?? 0.07) / 0.07) * NF.s;
     for (let k = 0; k < pos.length; k += 3) {
       const x = pos[k], y = pos[k + 1], z = pos[k + 2], ax = Math.abs(x);
       const yn = noseY(y, P), nw = (P.noseW ?? 0.07) / 0.07;
@@ -1464,8 +1537,8 @@ export class ProceduralHead {
         ao += 0.22 * G(ax, y, E.x - E.r * 0.95, 0.03, 0.03, 0.035);          // внутренний угол глаза
         ao += 0.26 * (this.flat ? 0 : P.lidShade ?? 1) * this._eyeRing[k / 3];   // плоский режим — без пятен: тон ровный, форму дают ступени                                     // глазница / складка века
         if (this._bagCrease && !this.flat) ao += 0.25 * clamp(P.eyeBags, 0, 1) * this._bagCrease[k / 3];          // слёзная борозда под мешком
-        ao += 0.65 * G(ax, yn, 0.05 * nw, -0.272, 0.017 * nw, 0.011);         // ноздри
-        ao += 0.16 * G(x, yn, 0, -0.285, 0.07 * nw, 0.016);                    // под носом
+        ao += 0.65 * G(ax, yn, NF.nx, NF.ty - 0.002, 0.017 * nw * NF.k, 0.011 * NF.ky);   // ноздри
+        ao += 0.16 * G(x, yn, 0, NF.ty - 0.015, 0.07 * nw * NF.k, 0.016 * NF.ky);              // под носом
         ao += 0.3 * G(ax, y, 0.205, -0.52, 0.022, 0.02);                       // уголки рта
         ao += 0.12 * G(x, y, 0, -0.63, 0.1, 0.02);                             // под губой
         ao += 0.25 * smoothstep(-0.82, -0.98, y);                              // под подбородком
@@ -1515,6 +1588,29 @@ export class ProceduralHead {
     this.headRoot.add(mesh);
     if (hasDecals(P)) this._applyDecals(geo, base);
     if (resolveLines(P.lines)) this._applyLines(geo, base);
+    if (this._noseLineK() > 0) this._applyNoseLine(geo, base);
+  }
+
+  /** Сила контура носа (14.4): look.noseLine 0…1; по умолчанию — в плоском режиме с обводкой. */
+  _noseLineK() { return clamp(this.P.noseLine ?? (this.flat?.outline > 0 ? 1 : 0), 0, 1); }
+
+  /** Контур носа (skin-decals.js → drawNoseLine): маска в своей текстуре, цвет — как у обводки головы. */
+  _applyNoseLine(geo, pos = geo.attributes.position.array) {
+    const P = this.P, tipY = P.noseTipY ?? -0.21, EY = LAYOUT.eyeY;
+    this._decalUv(geo, pos);
+    const { data, size } = drawNoseLine(P, noseFrame(P), (yn) => EY + ((yn - EY) * (EY - tipY)) / 0.24, this.tris ? 512 : 1024);
+    const tex = this._track(new THREE.DataTexture(data, size, size));
+    tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = 4; tex.needsUpdate = true;
+    const U = { noseMap: { value: tex }, uNoseLine: { value: 0.85 * this._noseLineK() }, uNoseColor: { value: new THREE.Color(P.lineColor || this.flat?.outlineColor || '#1c1418') } };
+    addShaderPatch(this.mat.skin, 'skin-nose-line', (sh) => {
+      Object.assign(sh.uniforms, U);
+      if (!sh.vertexShader.includes('vDecalUv')) sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec2 decalUv;\nvarying vec2 vDecalUv;')
+        .replace('#include <uv_vertex>', '#include <uv_vertex>\n\tvDecalUv = decalUv;');
+      const decl = sh.fragmentShader.includes('varying vec2 vDecalUv') ? '' : '\nvarying vec2 vDecalUv;';
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>\nuniform sampler2D noseMap;\nuniform float uNoseLine;\nuniform vec3 uNoseColor;${decl}`)
+        .replace('#include <map_fragment>', '#include <map_fragment>\n\tdiffuseColor.rgb = mix( diffuseColor.rgb, uNoseColor, uNoseLine * texture2D( noseMap, vDecalUv ).r );');
+    });
   }
 
   /** UV слоя рисунка: фронтальная проекция (x, y), затылок — в угол. Общий у декалей и линий. */
@@ -2040,7 +2136,7 @@ export class ProceduralHead {
     const long = P.hairStyle === 'long';
     // линия роста волос как функция долготы (0 = лоб, π = затылок)
     // объём по фото (photo-avatar): толщина волос над силуэтом черепа по углу θ от макушки (0, 20 … 100°, анфас)
-    const vol = P.hairVol, HC = 0.15;
+    const vol = P.hairVol, HC = 0.15, dome = domeOf(P);
     const volAt = (x, y) => {
       if (!vol) return null;
       const t = clamp(Math.atan2(Math.abs(x), y - HC) / DEG / 20, 0, vol.length - 1), i = Math.min(Math.floor(t), vol.length - 2);
@@ -2062,6 +2158,7 @@ export class ProceduralHead {
       const a = Math.atan2(tmp[0], tmp[2]);
       let yh = hairline(a);
       if (bangSide) yh -= bangDepth * G(a, 0, bangSide * 0.45, 0, 0.3, 1);  // чёлка набок (сторона и глубина — по фото)
+      yh = domeY(yh, dome);                                                    // купол черепа (14.4): линия роста едет с лбом
       let H = long ? 0.06 + 0.06 * smoothstep(0.2, 0.9, tmp[1]) + 0.05 * (1 - clamp(P.hairClump || 0, 0, 1)) * G(a, tmp[1], bangSide * 0.5 || -0.5, 0.45, 0.4, 0.18) : 0.032 + 0.018 * smoothstep(0.3, 0.9, tmp[1]);
       if (!long) H += 0.012 * G(a, tmp[1], 0, 0.6, 0.5, 0.1);               // лёгкий объём надо лбом
       const v = volAt(tmp[0], tmp[1]);
@@ -2224,8 +2321,9 @@ export class ProceduralHead {
 
   /** Головной убор: тело вращения по силуэту черепа + волос (эллипс в плане), козырёк/поля — отдельно. */
   _buildHat() {
-    const P = this.P, h = P.hat;
+    const h = this.P.hat;
     if (!h) return;
+    const P = { ...this.P, dome: 1 };                                 // строится по черепу без купола, купол — в конце (domeGroup)
     const st = h.style || 'beanie', y0 = h.y0 ?? HAT_LINE[st] ?? 0.45, tmp = [0, 0, 0], brimmed = st === 'fedora' || st === 'bowler';
     const hairT = P.hairStyle === 'none' ? 0.005 : 0.035;
     // полуоси головы на высоте y: ширина (x) и глубина вперёд/назад (z), центр по z
@@ -2313,6 +2411,7 @@ export class ProceduralHead {
       if (st === 'beanie') ball.scale.set(1, 0.92, 1);
       group.add(ball);
     }
+    domeGroup(group, domeOf(this.P));
     this.hat = group; group.userData.batch = true;
     this.headRoot.add(group);
   }
