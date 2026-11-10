@@ -1,6 +1,6 @@
 // Проверка типов (npm run test:types): типичное использование пакета должно компилироваться в strict-режиме,
 // а ошибки (@ts-expect-error) — ловиться.
-import EmotionalHead, { CHANNELS, EMOTIONS, SKIN_TONES, OUTFITS, VISEMES, parseNarrative, type Channels, type Look, type PhotoReport, type PhotoTune, ElevenLabsVoice, type VoiceProfile } from 'emotional-head';
+import EmotionalHead, { CHANNELS, EMOTIONS, SKIN_TONES, OUTFITS, VISEMES, parseNarrative, type Channels, type Look, type PhotoReport, type PhotoTune, type PhotoPoints, type TuneFeature, ElevenLabsVoice, type VoiceProfile } from 'emotional-head';
 import { EmotionalHeadElement } from 'emotional-head/element';
 import { resolveEmotion, type ARKitChannel } from 'emotional-head/emotions';
 import { buildTimeline, parseMarkup, spellNumber, type Viseme } from 'emotional-head/lipsync';
@@ -40,6 +40,13 @@ async function main() {
   head.setPhotoTune({ ...tuned, chin: -0.5 });
   console.log(head.photoTune?.noseW, tuning.done, tuning.picks, (await tuning.current()).width, tuning.photo.height);
   head.on('photoTune', (e) => console.log(e.tune.jaw, e.picks));
+  const pv = tuning.points.view(), h0 = pv.handles[0];
+  const moved: PhotoPoints = tuning.points.move(h0.id, h0.side, h0.x + 2, h0.y, tuning.points.value);
+  const again: TuneFeature[] = tuning.points.set(moved);
+  console.log(again, pv.lines.length, tuning.points.image.width, tuning.canUndo);
+  head.setPhotoPoints({ chin: [0, -0.03], mouthCorner: [0.01, 0] }, { keepTune: true });
+  console.log(head.photoPoints?.chin?.[1]);
+  head.on('photoPoints', (e) => console.log(e.points.oval4));
   const json: string = await head.exportAvatar({ format: 'json' });
   await head.importAvatar(json);
   const glb: ArrayBuffer = await head.exportGLB({ detail: 'medium' });

@@ -142,9 +142,22 @@
   .tune-foot .grow { flex:1; }
   #tuneFixes { font-size:12px; color:var(--dim); margin-top:8px; min-height:1.4em; }
   #photoThumb { cursor:zoom-in; }
+  /* точки лица поверх фото (14.7): контуры, ручки (поправленные — другим цветом), лупа при перетаскивании */
+  .tune-photo { position:relative; max-width:calc(100vh - 290px); margin-inline:auto; }
+  .tune-photo .tune-pic { max-width:none; }
+  #tunePts { position:absolute; inset:0; width:100%; height:100%; touch-action:none; overflow:visible; }
+  #tunePts .ln { fill:none; stroke:#fff; stroke-opacity:.5; stroke-width:1; vector-effect:non-scaling-stroke; }
+  #tunePts .dot { fill:var(--acc); stroke:#0e1015; stroke-width:1; vector-effect:non-scaling-stroke; pointer-events:none; }
+  #tunePts .dot.moved { fill:var(--acc2); }
+  #tunePts .hit { fill:transparent; cursor:grab; outline:none; }
+  #tunePts .hit:focus-visible + .dot, #tunePts .hit:hover + .dot { stroke:#fff; stroke-width:2; }
+  #tunePts.drag .hit { cursor:grabbing; }
+  #tuneLoupe { position:absolute; width:38%; aspect-ratio:1; border:2px solid var(--acc); border-radius:50%; pointer-events:none; top:6px; left:6px; background:#1d212c; }
+  #tuneLoupe.right { left:auto; right:6px; }
+  #tunePtsBtn[aria-pressed="true"] { border-color:var(--acc); color:var(--acc); }
   @media (max-width: 899px) {
     .tune-grid { grid-template-columns:1fr 1fr; grid-template-areas:"a b" "l r"; gap:8px; }
-    .tune-a .tune-pic, .tune-b .tune-pic { max-width:none; }
+    .tune-a .tune-pic, .tune-b .tune-pic, .tune-photo { max-width:none; }
     .tune-side { flex-direction:row; }
     .tune-side > * { flex:1; min-width:0; }
   }
@@ -688,8 +701,11 @@ const tuneSigma = (v) => `${v > 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}σ`;
 const tunePut = (el, canvas) => { canvas.className = 'tune-pic'; canvas.removeAttribute('id'); el.replaceWith(canvas); return canvas; };
 function tuneFixes() {
   const t = tuneS.tune, L = tuneS.tuner.labels, ks = Object.keys(t);
-  $('#tuneFixes').textContent = ks.length ? 'Поправки: ' + ks.map((k) => `${L[k]} ${tuneSigma(t[k])}`).join(', ') : 'Поправок пока нет.';
-  $('#tuneUndo').disabled = !tuneS.tuner.history.length;
+  const pv = tuneS.points.value, pk = Object.keys(pv);
+  $('#tuneFixes').textContent = (ks.length ? 'Поправки: ' + ks.map((k) => `${L[k]} ${tuneSigma(t[k])}`).join(', ') : 'Поправок пока нет.')
+    + (pk.length ? ` Точки поправлены: ${pk.length}.` : '');
+  $('#tuneUndo').disabled = !tuneS.canUndo;
+  $('#tunePtsReset').hidden = !pk.length;
 }
 async function tuneRound() {
   const id = ++tuneRoundId, S = tuneS;
@@ -725,7 +741,8 @@ async function tuneOpen() {
   try {
     const o = tunePhoto ? { photo: tunePhoto } : {};
     tuneS = await api(`const tuning = await head.tuneLikeness(${tunePhoto ? '{ photo }' : ''})`, () => head.tuneLikeness(o));
-    tunePut(tuneDlg.querySelector('.tune-a .tune-pic'), tuneS.photo);
+    tunePut(tuneDlg.querySelector('.tune-a .tune-pic'), tuneS.points.image);   // втрое крупнее — чётче на большом экране и в лупе
+    ptsDraw();
     await tuneRound();
   } catch (e) {
     tuneDlg.close(); tuneS = null; photoBusy = false;
@@ -741,16 +758,98 @@ function tuneClose(keep) {
     log(`⟵ photoTune ${fmt(t)}`);
     status(n ? `Сходство подстроено: поправок ${n} (сохраняются в файле аватара)` : 'Поправок нет');
   } else api('tuning.cancel()', () => tuneS.cancel());
-  tuneS = null; photoBusy = false;
+  tuneS = null; photoBusy = false; ptsDrag = null;
   if (tuneDlg.open) tuneDlg.close();
 }
 $('#photoTune').onclick = tuneOpen;
 $('#photoThumb').ondblclick = tuneOpen;
-$('#tuneUndo').onclick = () => { if (tuneS?.undo()) tuneRound(); };
+$('#tuneUndo').onclick = () => { if (tuneS?.undo()) { ptsDraw(); tuneRound(); } };
 $('#tuneReset').onclick = () => { if (tuneS) { tuneS.reset(); tuneRound(); } };
 $('#tuneDone').onclick = () => tuneClose(true);
 $('#tuneCancel').onclick = () => tuneClose(false);
 tuneDlg.addEventListener('cancel', (e) => { e.preventDefault(); tuneClose(false); });   // Esc — как «Отмена»
+// точки лица поверх фото (14.7): перетаскивание мышкой или пальцем (с лупой), стрелки — по 0,5 px фото (Shift — по 2)
+let ptsOn = false, ptsDrag = null, ptsKeyT = 0, ptsPending = null;
+const svgNS = 'http://www.w3.org/2000/svg', ptsSvg = $('#tunePts'), loupe = $('#tuneLoupe');
+function ptsDraw(pts) {
+  ptsSvg.hidden = !ptsOn || !tuneS;
+  $('#tuneACap').textContent = ptsOn ? 'фото — тяните точки, что легли мимо (вторая сторона — зеркально)' : 'фото';
+  if (ptsSvg.hidden) return;
+  const n = tuneS.photo.width, V = tuneS.points.view(pts), focus = document.activeElement?.dataset?.key;
+  ptsSvg.setAttribute('viewBox', `0 0 ${n} ${n}`);
+  const els = V.lines.map((l) => {
+    const e = document.createElementNS(svgNS, 'polyline');
+    e.setAttribute('class', 'ln'); e.setAttribute('points', l.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '));
+    return e;
+  });
+  for (const h of V.handles) {
+    const hit = document.createElementNS(svgNS, 'circle'), dot = document.createElementNS(svgNS, 'circle');
+    hit.setAttribute('class', 'hit'); hit.setAttribute('cx', h.x); hit.setAttribute('cy', h.y); hit.setAttribute('r', n / 55);
+    hit.setAttribute('tabindex', '0'); hit.dataset.id = h.id; hit.dataset.side = h.side; hit.dataset.key = h.id + h.side;
+    const t = document.createElementNS(svgNS, 'title'); t.textContent = h.label + (h.moved ? ' (поправлено)' : ''); hit.append(t);
+    dot.setAttribute('class', 'dot' + (h.moved ? ' moved' : '')); dot.setAttribute('cx', h.x); dot.setAttribute('cy', h.y); dot.setAttribute('r', n / 120);
+    els.push(hit, dot);
+  }
+  ptsSvg.replaceChildren(...els);
+  if (focus) ptsSvg.querySelector(`[data-key="${focus}"]`)?.focus();
+}
+const ptsXY = (e) => { const m = ptsSvg.getScreenCTM().inverse(), p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m); return { x: p.x, y: p.y }; };
+function ptsLoupe(x, y, pts) {
+  const img = tuneS.points.image, n = tuneS.photo.width, k = img.width / n, L = loupe.width, R = n / 9;   // поле лупы — 2R пикселей фото
+  const g = loupe.getContext('2d');
+  g.clearRect(0, 0, L, L);
+  g.save(); g.beginPath(); g.arc(L / 2, L / 2, L / 2, 0, Math.PI * 2); g.clip();
+  g.drawImage(img, (x - R) * k, (y - R) * k, 2 * R * k, 2 * R * k, 0, 0, L, L);
+  const s = L / (2 * R), tx = (p) => (p.x - x + R) * s, ty = (p) => (p.y - y + R) * s, V = tuneS.points.view(pts);
+  g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 1;
+  for (const l of V.lines) { g.beginPath(); l.forEach((p, i) => (i ? g.lineTo(tx(p), ty(p)) : g.moveTo(tx(p), ty(p)))); g.stroke(); }
+  g.strokeStyle = '#7aa2ff'; g.beginPath(); g.moveTo(L / 2 - 10, L / 2); g.lineTo(L / 2 + 10, L / 2); g.moveTo(L / 2, L / 2 - 10); g.lineTo(L / 2, L / 2 + 10); g.stroke();
+  g.restore();
+  loupe.classList.toggle('right', x < n / 2);    // лупа — с другой стороны от пальца
+}
+async function ptsCommit(pts) {
+  if (!tuneS) return;
+  const touched = api(`tuning.points.set(${fmt(pts)})`, () => tuneS.points.set(pts));
+  if (touched.length) log(`точки → заново подстраиваются: ${[...new Set(touched)].map((f) => tuneS.tuner.labels[f] || f).join(', ')}`);
+  ptsDraw();
+  await tuneRound();
+}
+$('#tunePtsBtn').onclick = () => { ptsOn = !ptsOn; $('#tunePtsBtn').setAttribute('aria-pressed', ptsOn); ptsDraw(); };
+$('#tunePtsReset').onclick = () => { if (tuneS) ptsCommit({}); };
+ptsSvg.addEventListener('pointerdown', (e) => {
+  const t = e.target.closest('.hit');
+  if (!t || !tuneS) return;
+  e.preventDefault();
+  ptsSvg.setPointerCapture(e.pointerId);
+  ptsDrag = { id: t.dataset.id, side: +t.dataset.side, pid: e.pointerId, pts: tuneS.points.value, moved: false };
+  ptsSvg.classList.add('drag');
+  const p = ptsXY(e); loupe.hidden = false; ptsLoupe(p.x, p.y, ptsDrag.pts);
+});
+ptsSvg.addEventListener('pointermove', (e) => {
+  if (!ptsDrag || e.pointerId !== ptsDrag.pid) return;
+  const p = ptsXY(e);
+  ptsDrag.pts = tuneS.points.move(ptsDrag.id, ptsDrag.side, p.x, p.y, ptsDrag.pts); ptsDrag.moved = true;
+  ptsDraw(ptsDrag.pts); ptsLoupe(p.x, p.y, ptsDrag.pts);
+});
+const ptsUp = (e) => {
+  if (!ptsDrag || e.pointerId !== ptsDrag.pid) return;
+  const d = ptsDrag; ptsDrag = null;
+  ptsSvg.classList.remove('drag'); loupe.hidden = true;
+  if (d.moved && e.type === 'pointerup') ptsCommit(d.pts); else ptsDraw();
+};
+ptsSvg.addEventListener('pointerup', ptsUp);
+ptsSvg.addEventListener('pointercancel', ptsUp);
+ptsSvg.addEventListener('keydown', (e) => {
+  const t = e.target.closest('.hit'), dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+  if (!t || !dir || !tuneS) return;
+  e.preventDefault();
+  const st = e.shiftKey ? 2 : 0.5, id = t.dataset.id, side = +t.dataset.side;
+  const base = ptsPending || tuneS.points.value, h = tuneS.points.view(base).handles.find((q) => q.id === id && q.side === side);
+  ptsPending = tuneS.points.move(id, side, h.x + dir[0] * st, h.y + dir[1] * st, base);
+  ptsDraw(ptsPending);
+  clearTimeout(ptsKeyT);
+  ptsKeyT = setTimeout(() => { const p = ptsPending; ptsPending = null; ptsCommit(p); }, 500);
+});
 $('#tunePhotoFile').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) { tunePhoto = f; tuneOpen(); } };
 
 const lookSel = (id, key, map = (v) => v) => {
@@ -925,14 +1024,16 @@ log('Готово. Попробуйте "Сложные состояния" ил
   <div class="hint">Какой портрет больше похож на фото? Сбоку та же голова, но одна черта чуть меньше (слева) или больше (справа). Выбирайте, пока не станет похоже.</div>
   <div class="tune-grid">
     <div class="tune-side tune-l" id="tuneL"></div>
-    <figure class="tune-a"><div class="tune-pic" id="tuneA"></div><figcaption>фото</figcaption></figure>
+    <figure class="tune-a"><div class="tune-photo"><div class="tune-pic" id="tuneA"></div><svg id="tunePts" hidden aria-label="Точки лица на фото: перетаскивайте мышкой или стрелками"></svg><canvas id="tuneLoupe" width="240" height="240" hidden></canvas></div><figcaption id="tuneACap">фото</figcaption></figure>
     <figure class="tune-b"><div class="tune-pic" id="tuneB"></div><figcaption>голова сейчас</figcaption></figure>
     <div class="tune-side tune-r" id="tuneR"></div>
   </div>
   <div class="tune-foot">
     <button id="tuneSame" title="Ни один вариант не лучше: шаг по этим чертам уменьшится">Как сейчас — лучше</button>
-    <button id="tuneUndo">Отменить выбор</button>
+    <button id="tuneUndo">Отменить</button>
     <button id="tuneReset">Сбросить поправки</button>
+    <button id="tunePtsBtn" aria-pressed="false" title="Показать распознанные точки лица поверх фото и поправить те, что легли мимо">Точки на фото</button>
+    <button id="tunePtsReset" hidden>Сбросить точки</button>
     <span class="grow"></span>
     <button id="tuneCancel">Отмена</button>
     <button id="tuneDone" class="primary">Класс, похоже!</button>

@@ -669,6 +669,19 @@ export class EmotionalHead {
     return this;
   }
 
+  /** Правки точек лица по фото (14.7): { id из POINTS: [dx, dy] }; null — нет. */
+  get photoPoints() { return this._portrait?.points ? JSON.parse(JSON.stringify(this._portrait.points)) : null; }
+  /**
+   * Задать правки точек лица (ключи — POINTS из photo-avatar.js, сдвиг якоря в координатах головы; {} — убрать).
+   * σ-поправки подстройки у задетых черт сбрасываются (o.keepTune — оставить). Пересобирает голову.
+   */
+  setPhotoPoints(pts = {}, o = {}) {
+    if (!this._portrait) return this;
+    this._portrait.setPoints(pts, o);
+    this._rebuildRig();
+    return this;
+  }
+
   /**
    * Подстройка сходства глазами (14.6): рядом с фото — воссозданный портрет и варианты, где сомнительные черты
    * чуть меньше или больше; пользователь выбирает похожее, голова поправляется, раунды — пока не скажет «похоже».
@@ -678,16 +691,17 @@ export class EmotionalHead {
    *   строилась голова; у открытого из файла аватара фото нет — передайте его)
    * @param {number} [o.size=320]  сторона картинок
    * @param {number} [o.step=0.8]  начальный сдвиг черты, σ
-   * @returns {Promise<LikenessTuning>} сессия: photo, current(), variants(n, onVariant), pick(v|null), undo(), reset(), finish(), cancel()
+   * @returns {Promise<LikenessTuning>} сессия: photo, current(), variants(n, onVariant), pick(v|null), undo(), reset(), finish(), cancel();
+   *   points — точки лица поверх фото (14.7): view(), move(id, side, x, y), set(pts), reset(), image (фото втрое крупнее, для лупы)
    */
   async tuneLikeness(o = {}) {
     const P = this._portrait;
     if (!P) throw new Error('tuneLikeness(): сначала fromPhoto() или importAvatar()');
     const src = o.photo || P.img;
     if (!src) throw new Error('tuneLikeness(): у аватара из файла нет исходного фото — передайте его: tuneLikeness({ photo })');
-    const { detectFace, TUNE } = await import('./photo-avatar.js');
+    const { detectFace, TUNE, POINTS } = await import('./photo-avatar.js');
     const { LikenessTuner } = await import('./tuner.js');
-    const size = o.size ?? 320, saved = P.tune ? { ...P.tune } : {};
+    const size = o.size ?? 320, saved = P.tune ? { ...P.tune } : {}, savedPts = P.points ? JSON.parse(JSON.stringify(P.points)) : {};
     const tuner = new LikenessTuner(P.tuneOrder(), saved, { step: o.step, labels: Object.fromEntries(Object.entries(TUNE).map(([k, v]) => [k, v.label])) });
     const head = this, channels = P.bs || {};
     // выравнивание: середина глаз → (0.5, 0.42), глаза–рот → 0.3 стороны, наклон головы снят
@@ -697,10 +711,11 @@ export class EmotionalHead {
       const roll = Math.atan2(eL.y - eR.y, eL.x - eR.x);
       return { c, roll, k: (0.3 * size) / Math.hypot(m.x - c.x, m.y - c.y) };
     };
-    const draw = (img, A) => {
-      const c = document.createElement('canvas'); c.width = c.height = size;
+    const draw = (img, A, sc = 1) => {
+      const c = document.createElement('canvas'); c.width = c.height = size * sc;
       const g = c.getContext('2d');
-      g.fillStyle = '#6b6f78'; g.fillRect(0, 0, size, size);
+      g.fillStyle = '#6b6f78'; g.fillRect(0, 0, size * sc, size * sc);
+      g.scale(sc, sc);
       g.translate(0.5 * size, 0.42 * size); g.rotate(-A.roll); g.scale(A.k, A.k); g.translate(-A.c.x, -A.c.y);
       g.imageSmoothingQuality = 'high';
       g.drawImage(img, 0, 0);
@@ -710,7 +725,27 @@ export class EmotionalHead {
     const photoC = src instanceof HTMLCanvasElement ? src : await toCanvas(src);
     const dp = await detectFace(photoC);
     if (!dp) throw new Error('tuneLikeness(): на фото не нашлось лица');
-    const photo = draw(photoC, align(dp.L, photoC.width, photoC.height));
+    const Ap = align(dp.L, photoC.width, photoC.height), photo = draw(photoC, Ap);
+    // координаты головы ↔ пиксели выровненного фото: подобие по точкам лица (фото могло быть другого размера)
+    const toA = (p) => {
+      const dx = (p.x * photoC.width - Ap.c.x) * Ap.k, dy = (p.y * photoC.height - Ap.c.y) * Ap.k, cs = Math.cos(-Ap.roll), sn = Math.sin(-Ap.roll);
+      return { x: 0.5 * size + dx * cs - dy * sn, y: 0.42 * size + dx * sn + dy * cs };
+    };
+    const sim = (() => {
+      const H0 = P.head0 || P.head, n = Math.min(468, H0.length, dp.L.length), U = [], V = [];
+      for (let i = 0; i < n; i++) { U.push({ x: H0[i].x, y: -H0[i].y }); V.push(toA(dp.L[i])); }
+      const m = (A, k) => A.reduce((s, p) => s + p[k], 0) / n, ux = m(U, 'x'), uy = m(U, 'y'), vx = m(V, 'x'), vy = m(V, 'y');
+      let re = 0, im = 0, den = 0;
+      for (let i = 0; i < n; i++) {
+        const a = U[i].x - ux, b = U[i].y - uy, c = V[i].x - vx, d = V[i].y - vy;
+        re += c * a + d * b; im += d * a - c * b; den += a * a + b * b;
+      }
+      const a = re / den, b = im / den;
+      return { a, b, tx: vx - (a * ux - b * uy), ty: vy - (b * ux + a * uy), n2: a * a + b * b };
+    })();
+    const toPhoto = (p) => ({ x: sim.a * p.x + sim.b * p.y + sim.tx, y: sim.b * p.x - sim.a * p.y + sim.ty });
+    const fromPhoto = (X, Y) => { const dx = X - sim.tx, dy = Y - sim.ty; return { x: (sim.a * dx + sim.b * dy) / sim.n2, y: -(sim.a * dy - sim.b * dx) / sim.n2 }; };
+    let photoHi = null;
     let A = null;
     const shot = async (tune) => {
       P.setTune(tune); this._rebuildRig();
@@ -723,7 +758,40 @@ export class EmotionalHead {
     };
     const restore = () => { P.setTune(tuner.tune); this._rebuildRig(); };
     let busy = 0;   // номер раунда: старый раунд, перебитый выбором, дальше не рисуется
+    const ops = [];  // для «отменить»: выборы ('tune') и правки точек ('pts') по порядку
+    const points = {
+      /** Фото втрое крупнее photo (то же выравнивание) — для лупы. */
+      get image() { return (photoHi ||= draw(photoC, Ap, 3)); },
+      /** Текущие правки. */
+      get value() { return P.points ? JSON.parse(JSON.stringify(P.points)) : {}; },
+      /**
+       * Точки и контуры в пикселях photo: { handles: [{ id, label, side, x, y, moved }], lines: [[{x, y}]] }.
+       * @param {object} [pts] правки (по умолчанию текущие) — для показа во время перетаскивания
+       */
+      view(pts) {
+        const V = P.pointsView(pts ?? P.points);
+        return { handles: V.handles.map((h) => ({ ...h, ...toPhoto(h) })), lines: V.lines.map((l) => l.map(toPhoto)) };
+      },
+      /** Правки, при которых точка id стороны side окажется в пикселе (x, y) photo; голова не меняется. */
+      move(id, side, x, y, pts) { const q = fromPhoto(x, y); return P.pointsWith(pts ?? P.points, id, side, q.x, q.y); },
+      /** Применить правки: меры по точкам, у задетых черт σ-поправки и шаг подстройки — с начала. Голова пересобирается. */
+      set(pts) {
+        busy++;
+        ops.push({ kind: 'pts', pts: P.points ? JSON.parse(JSON.stringify(P.points)) : {}, tune: { ...tuner.tune }, state: JSON.parse(JSON.stringify(tuner.state)) });
+        const old = P.points || {}, ids = new Set([...Object.keys(old), ...Object.keys(pts || {})]);
+        P.setPoints(pts, { keepTune: true });
+        const now = P.points || {};
+        const touched = [...ids].filter((id) => JSON.stringify(old[id]) !== JSON.stringify(now[id])).flatMap((id) => POINTS[id]?.feat || []);
+        tuner.forget([...new Set(touched)]);
+        restore();
+        head._emit('photoPoints', { points: points.value });
+        return touched;
+      },
+      reset() { return points.set({}); },
+    };
     return {
+      points,
+      get canUndo() { return ops.length > 0; },
       photo, tuner,
       get tune() { return { ...tuner.tune }; },
       get done() { return tuner.done; },
@@ -742,13 +810,23 @@ export class EmotionalHead {
         return out;
       },
       /** Выбор: вариант или null («как сейчас лучше»); shown — черты раунда. Голова сразу поправляется. */
-      pick(v, shown) { busy++; tuner.pick(v, shown || (v ? [v.feature] : [])); restore(); head._emit('photoTune', { tune: { ...tuner.tune }, picks: tuner.picks }); },
-      undo() { busy++; const r = tuner.undo(); restore(); return r; },
-      reset() { busy++; tuner.reset(); restore(); },
+      pick(v, shown) { busy++; ops.push({ kind: 'tune' }); tuner.pick(v, shown || (v ? [v.feature] : [])); restore(); head._emit('photoTune', { tune: { ...tuner.tune }, picks: tuner.picks }); },
+      /** Отменить последний выбор или правку точек. */
+      undo() {
+        busy++;
+        const op = ops.pop();
+        if (!op) return false;
+        if (op.kind === 'tune') tuner.undo();
+        else { P.setPoints(op.pts, { keepTune: true }); Object.assign(tuner, { tune: op.tune, state: op.state }); }
+        restore();
+        return true;
+      },
+      /** Сбросить σ-поправки (правки точек остаются). */
+      reset() { busy++; tuner.reset(); ops.length = 0; restore(); },
       /** Оставить поправки. */
       finish() { busy++; restore(); head._emit('photoAvatar', { ...P.report, gender: { value: head.gender } }); return { ...tuner.tune }; },
       /** Вернуть поправки, что были до подстройки. */
-      cancel() { busy++; P.setTune(saved); head._rebuildRig(); },
+      cancel() { busy++; P.setPoints(savedPts, { keepTune: true }); P.setTune(saved); head._rebuildRig(); },
     };
   }
 

@@ -222,8 +222,34 @@ export interface TuneVariant {
   tune: PhotoTune;
   image: HTMLCanvasElement;
 }
+/** Точки лица, которые можно поправить по фото (14.7): углы глаз, веки, брови, нос, губы, подбородок, овал. */
+export type FacePoint = 'eyeOut' | 'eyeIn' | 'lidU1' | 'lidU2' | 'lidU3' | 'lidL1' | 'lidL2' | 'lidL3' | 'browIn' | 'browPeak' | 'browTail' | 'browTop'
+  | 'noseTip' | 'noseWing' | 'noseBridge' | 'mouthCorner' | 'lipTop' | 'lipPeak' | 'lipUIn' | 'lipLIn' | 'lipBottom' | 'chin' | 'oval1' | 'oval2' | 'oval3' | 'oval4' | 'oval5';
+/** Правки точек: сдвиг якоря [dx, dy] в координатах головы (левая сторона персонажа, правая — зеркально; y вверх). */
+export type PhotoPoints = Partial<Record<FacePoint, [number, number]>>;
+/** Точка поверх фото: side 1 — левая сторона персонажа (справа на фото), −1 — правая, 0 — средняя линия. */
+export interface PointHandle { id: FacePoint; label: string; side: -1 | 0 | 1; x: number; y: number; moved: boolean }
+/** Точки лица в окне подстройки (14.7); координаты — пиксели LikenessTuning.photo. */
+export interface TuningPoints {
+  /** фото втрое крупнее photo (то же выравнивание) — для лупы и большого экрана */
+  readonly image: HTMLCanvasElement;
+  /** текущие правки */
+  readonly value: PhotoPoints;
+  /** точки и контуры; pts — показать другие правки (во время перетаскивания) */
+  view(pts?: PhotoPoints): { handles: PointHandle[]; lines: Array<Array<{ x: number; y: number }>> };
+  /** правки, при которых точка окажется в пикселе (x, y); голова не меняется */
+  move(id: FacePoint, side: -1 | 0 | 1, x: number, y: number, pts?: PhotoPoints): PhotoPoints;
+  /** применить правки: меры по точкам, голова пересобирается; возвращает черты, чья подстройка начата заново */
+  set(pts: PhotoPoints): TuneFeature[];
+  /** убрать правки */
+  reset(): TuneFeature[];
+}
 /** Сессия подстройки сходства глазами (tuneLikeness). */
 export interface LikenessTuning {
+  /** точки лица поверх фото (14.7) */
+  readonly points: TuningPoints;
+  /** есть что отменить (выбор или правку точек) */
+  readonly canUndo: boolean;
   /** исходное фото, выровненное по глазам и рту так же, как портреты */
   readonly photo: HTMLCanvasElement;
   readonly tune: PhotoTune;
@@ -236,13 +262,13 @@ export interface LikenessTuning {
   variants(n?: number, onVariant?: (v: TuneVariant, i: number) => void): Promise<TuneVariant[]>;
   /** выбор: вариант или null — «как сейчас лучше»; shown — черты раунда; голова сразу поправляется */
   pick(v: TuneVariant | null, shown?: TuneFeature[]): void;
-  /** отменить последний выбор; false — нечего отменять */
+  /** отменить последний выбор или правку точек; false — нечего отменять */
   undo(): boolean;
-  /** убрать все поправки */
+  /** убрать все σ-поправки (правки точек остаются) */
   reset(): void;
   /** оставить поправки (попадут в exportAvatar) */
   finish(): PhotoTune;
-  /** вернуть поправки, что были до подстройки */
+  /** вернуть поправки и точки, что были до подстройки */
   cancel(): void;
 }
 
@@ -353,6 +379,8 @@ export interface EmotionalHeadEvents {
   photoAvatar: PhotoReport | null;
   /** выбор в подстройке сходства (tuneLikeness) */
   photoTune: { tune: PhotoTune; picks: number };
+  /** правка точек лица в подстройке (14.7) */
+  photoPoints: { points: PhotoPoints };
   lookChange: LookOption;
   detailChange: { detail: DetailLevel; pixelRatio: number; step: number; reason: string };
   flatChange: Required<FlatOptions> | null;
@@ -469,6 +497,10 @@ export declare class EmotionalHead {
   readonly photoTune: PhotoTune | null;
   /** Задать поправки сходства ({} — убрать). Пересобирает голову. */
   setPhotoTune(t?: PhotoTune): this;
+  /** Правки точек лица по фото (14.7); null — нет. */
+  readonly photoPoints: PhotoPoints | null;
+  /** Задать правки точек ({} — убрать); σ-поправки задетых черт сбрасываются (keepTune — оставить). Пересобирает голову. */
+  setPhotoPoints(pts?: PhotoPoints, o?: { keepTune?: boolean }): this;
   exportAvatar(o: ExportAvatarOptions & { format: 'json' }): Promise<string>;
   exportAvatar(o?: ExportAvatarOptions): Promise<Record<string, unknown>>;
   importAvatar(src: string | File | Blob | Record<string, unknown>, o?: { caricature?: number; texture?: number; realism?: number; focus?: number; expression?: number; lines?: number; bold?: number; gender?: Gender; look?: LookOption; reclone?: boolean }): Promise<PhotoReport | null>;

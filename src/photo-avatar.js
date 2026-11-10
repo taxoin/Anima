@@ -426,6 +426,49 @@ export const TUNE = {
   cheekPr: { label: 'скулы' }, chinSq: { label: 'квадратный подбородок' }, tilt: { label: 'наклон глаз' },
 };
 
+// точки лица, которые пользователь поправляет мышкой по фото (14.7). at — якорь (точки левой стороны персонажа или средней
+// линии; несколько — середина), set — точки контура, которые тянет правка «кистью»: вес (1 − (d/r)²)², d — расстояние до
+// якоря на исходном лице, у самого якоря — 1; правая сторона — зеркально. mid — на средней линии (только по высоте).
+// oval — якорь на краю овала у этой высоты эталонной головы (ниже рта — с поправкой на длину подбородка). feat — черты
+// подстройки 14.6, которые правка задевает (их σ-поправка сбрасывается)
+const LIP_UO = [0, 267, 269, 270, 409, 291], LIP_LO = [17, 314, 405, 321, 375, 291], LIP_UI = [13, 312, 311, 310, 415, 308], LIP_LI = [14, 317, 402, 318, 324, 308];
+const OVAL_L = OVAL.filter((i) => MEAN[i].x > 1e-3 || i === 152);
+const RING = EYE_RINGS[0], LID_IN = (l) => l.filter((i) => i !== 263 && i !== 362), BR = BROWS[0];
+export const POINTS = {
+  eyeOut: { label: 'внешний угол глаза', at: [263], set: RING, r: 0.13, feat: ['eyeW', 'eyeCX', 'tilt'] },
+  eyeIn: { label: 'внутренний угол глаза', at: [362], set: RING, r: 0.13, feat: ['eyeW', 'eyeCX', 'tilt'] },
+  lidU1: { label: 'верхнее веко у внешнего угла', at: [388], set: LID_IN(LID_UP), r: 0.06, feat: ['eyeH'] },
+  lidU2: { label: 'верхнее веко', at: [386], set: LID_IN(LID_UP), r: 0.06, feat: ['eyeH'] },
+  lidU3: { label: 'верхнее веко у внутреннего угла', at: [384], set: LID_IN(LID_UP), r: 0.06, feat: ['eyeH'] },
+  lidL1: { label: 'нижнее веко у внешнего угла', at: [390], set: LID_IN(LID_LO), r: 0.06, feat: ['eyeH'] },
+  lidL2: { label: 'нижнее веко', at: [374], set: LID_IN(LID_LO), r: 0.06, feat: ['eyeH'] },
+  lidL3: { label: 'нижнее веко у внутреннего угла', at: [381], set: LID_IN(LID_LO), r: 0.06, feat: ['eyeH'] },
+  browIn: { label: 'начало брови', at: [BR.up[0], BR.lo[0]], set: [...BR.up, ...BR.lo], r: 0.13, feat: ['browY', 'browArch'] },
+  browPeak: { label: 'изгиб брови', at: [BR.up[2], BR.lo[2]], set: [...BR.up, ...BR.lo], r: 0.13, feat: ['browY', 'browArch'] },
+  browTail: { label: 'хвост брови', at: [BR.up[4], BR.lo[4]], set: [...BR.up, ...BR.lo], r: 0.13, feat: ['browY', 'browArch'] },
+  browTop: { label: 'верхний край брови', at: [BR.up[2]], set: BR.up, r: 0.2, feat: ['browTh'] },
+  noseTip: { label: 'кончик носа', at: [4], set: [4, 1, 5, 19, 94], r: 0.12, mid: true, feat: ['noseTip'] },
+  noseWing: { label: 'крыло носа', at: [358], set: [358, 327, 326], r: 0.1, feat: ['noseW'] },
+  noseBridge: { label: 'спинка носа', at: [351, 419], set: [351, 419], r: 1, feat: [] },
+  mouthCorner: { label: 'уголок рта', at: [291], set: [...new Set([...LIP_UO, ...LIP_LO, ...LIP_UI, ...LIP_LI])], r: 0.2, feat: ['mouthHW'] },
+  lipTop: { label: 'верх верхней губы', at: [0], set: LIP_UO.slice(0, -1), r: 0.16, mid: true, feat: ['lipU'] },
+  lipPeak: { label: 'пик «лука Купидона»', at: [267], set: LIP_UO.slice(0, -1), r: 0.07, feat: ['lipU'] },
+  lipUIn: { label: 'низ верхней губы', at: [13], set: LIP_UI.slice(0, -1), r: 0.16, mid: true, feat: ['lipU'] },
+  lipLIn: { label: 'верх нижней губы', at: [14], set: LIP_LI.slice(0, -1), r: 0.16, mid: true, feat: ['lipL'] },
+  lipBottom: { label: 'низ нижней губы', at: [17], set: LIP_LO.slice(0, -1), r: 0.16, mid: true, feat: ['lipL'] },
+  chin: { label: 'низ подбородка', at: [152], set: OVAL_L, r: 0.3, mid: true, feat: ['chin', 'chinSq'] },
+  oval1: { label: 'висок', oval: 0.25, set: OVAL_L, r: 0.2, feat: ['face', 'cheekPr'] },
+  oval2: { label: 'скула', oval: 0, set: OVAL_L, r: 0.2, feat: ['face', 'cheekPr'] },
+  oval3: { label: 'щека', oval: -0.25, set: OVAL_L, r: 0.2, feat: ['face', 'cheekPr'] },
+  oval4: { label: 'челюсть', oval: -0.5, set: OVAL_L, r: 0.2, feat: ['jaw', 'chinSq'] },
+  oval5: { label: 'низ челюсти', oval: -0.75, set: OVAL_L, r: 0.2, feat: ['jaw', 'chinSq'] },
+};
+// контуры для показа поверх фото (обе стороны)
+const POINT_LINES = [
+  [...EYE_RINGS[0], 263], [...EYE_RINGS[1], 33], ...BROWS.flatMap((b) => [b.up, b.lo]),
+  [...LIPS_OUT, 61], [...LIPS_IN, 78], [358, 327, 326, 2, 97, 98, 129], [168, 6, 197, 195, 5, 4], [...OVAL, 10],
+];
+
 // ------------------------------------------------------------------ обработка изображения
 
 function boxBlur(src, W, H, r, out = new Float32Array(src.length)) {
@@ -557,16 +600,21 @@ export class Portrait {
     const cs = Math.cos(-roll), sn = Math.sin(-roll), m = mid(px[13], px[14]);
     const my = (m.x - c.x) * sn + (m.y - c.y) * cs;
     this.frame = { c, roll, s: (EY - MY) / my };
-    this.head = px.map((p) => this.toHead(p));
+    this._setHead(px.map((p) => this.toHead(p)));
     const P = this.head;
-    this.sym = P.map((p, i) => {
-      const j = MIRROR[i] ?? i, q = P[j];
-      return j === i ? { x: 0, y: p.y, z: p.z } : { x: (p.x - q.x) / 2, y: (p.y + q.y) / 2, z: (p.z + q.z) / 2 };
-    });
 
     // поворот лица (по асимметрии): сильный поворот портит сходство
     const dl = Math.hypot(P[263].x - P[4].x, P[263].y - P[4].y), dr = Math.hypot(P[33].x - P[4].x, P[33].y - P[4].y);
     this.yaw = (dl - dr) / (dl + dr);
+  }
+
+  /** Точки в координатах головы → head и симметризованные sym. */
+  _setHead(P) {
+    this.head = P;
+    this.sym = P.map((p, i) => {
+      const j = MIRROR[i] ?? i, q = P[j];
+      return j === i ? { x: 0, y: p.y, z: p.z } : { x: (p.x - q.x) / 2, y: (p.y + q.y) / 2, z: (p.z + q.z) / 2 };
+    });
   }
 
   toHead(p) {
@@ -740,7 +788,15 @@ export class Portrait {
 
   /** Меры лица с поправкой на выражение на снимке. */
   _measure() {
-    const b = this.bs, g = (k) => b[k] || 0;
+    this.meas = this._measCore();
+    this._eyeAsym();
+    this._lipAsym();
+    this._teeth();
+  }
+
+  /** Меры по текущим точкам (head, sym) и мимике снимка; заодно — this.expression. */
+  _measCore() {
+    const b = this.bs || {}, g = (k) => b[k] || 0;
     const M = measure(this.sym);
     const smile = (g('mouthSmileLeft') + g('mouthSmileRight')) / 2, stretch = (g('mouthStretchLeft') + g('mouthStretchRight')) / 2;
     const squint = (g('eyeSquintLeft') + g('eyeSquintRight')) / 2 + 0.3 * (g('cheekSquintLeft') + g('cheekSquintRight')) / 2;
@@ -775,11 +831,8 @@ export class Portrait {
       M.bowX = xp / hw;
       M.bowRC = (S[0].y - S[13].y) / Math.max(0.004, S[267].y - yIn);
     }
-    this.meas = M;
-    this._eyeAsym();
-    this._lipAsym();
-    this._teeth();
     this.expression = { smile, squint, blink, mouthOpen: gap };
+    return M;
   }
 
   _colors() {
@@ -1502,6 +1555,122 @@ export class Portrait {
     return this;
   }
   _tuneKey() { return this.tune ? JSON.stringify(this.tune) : ''; }
+
+  /**
+   * Правка точек лица по фото (14.7): { id из POINTS: [dx, dy] } — сдвиг якоря в координатах головы (левая сторона
+   * персонажа; правая — зеркально). Точки контура тянутся кистью, меры пересчитываются по точкам: к мерам анализа
+   * прибавляется разница «исправленные − исходные» (так поправки снимка — улыбка, прищур, калибровка — сохраняются),
+   * текстура кожи ложится по исправленным точкам. Исходные точки и меры не меняются (px0, meas0) — в файл идут они и правки.
+   * @param {Record<string, [number, number]>} pts
+   * @param {{ keepTune?: boolean }} [o] по умолчанию σ-поправки черт, задетых изменёнными точками, сбрасываются
+   * @returns {string[]} сброшенные черты подстройки
+   */
+  setPoints(pts = {}, o = {}) {
+    const out = {}, r4 = (v) => Math.round(v * 1e4) / 1e4;
+    for (const [id, d] of Object.entries(pts || {})) {
+      const D = POINTS[id];
+      if (!D || !Array.isArray(d) || !d.every(Number.isFinite)) continue;
+      const v = [D.mid ? 0 : r4(clamp(d[0], -0.3, 0.3)), r4(clamp(d[1], -0.3, 0.3))];
+      if (Math.hypot(v[0], v[1]) > 2e-4) out[id] = v;
+    }
+    if (!this.px0) { this.px0 = this.px; this.head0 = this.head; this.meas0 = this.meas; this.expr0 = this.expression; this._core0 = this._measCore(); this.expression = this.expr0; }
+    const old = this.points || {}, ids = new Set([...Object.keys(old), ...Object.keys(out)]);
+    const changed = [...ids].filter((id) => JSON.stringify(old[id]) !== JSON.stringify(out[id]));
+    this.points = Object.keys(out).length ? out : null;
+    if (!this.points) {
+      this.px = this.px0; this._setHead(this.head0); this.meas = this.meas0;
+    } else {
+      const H = this._pointsHead(this.points);
+      this._setHead(H);
+      this.px = H.map((p, i) => ({ ...this.fromHead(p.x, p.y), z: this.px0[i].z }));
+      const C = this._measCore(), C0 = this._core0, M = { ...this.meas0 };
+      this.expression = this.expr0;
+      for (const [k, v] of Object.entries(C)) {
+        const a = this.meas0[k], b0 = C0[k];
+        if (typeof v === 'number' && typeof a === 'number' && typeof b0 === 'number') M[k] = a + v - b0;
+        else if (Array.isArray(v) && Array.isArray(a)) M[k] = a.map((x, i) => (x != null && v[i] != null && b0?.[i] != null ? x + v[i] - b0[i] : x));
+      }
+      this.meas = M;
+    }
+    this._eyeAsym();
+    this._lipAsym();
+    this._fits = new Map();
+    this._tunedQ = null;
+    let cleared = [];
+    if (!o.keepTune && this.tune) {
+      cleared = [...new Set(changed.flatMap((id) => POINTS[id].feat))].filter((f) => f in this.tune);
+      if (cleared.length) this.setTune(Object.fromEntries(Object.entries(this.tune).filter(([f]) => !cleared.includes(f))));
+    }
+    return cleared;
+  }
+  _ptsKey() { return this.points ? JSON.stringify(this.points) : ''; }
+
+  /** Якорь точки на исходном лице: середина точек at или край овала у высоты oval. */
+  _pointAnchor(id) {
+    const D = POINTS[id], H = this.head0 || this.head;
+    let at = D.at;
+    if (D.oval !== undefined) {
+      const chin = (this.meas0 || this.meas).chin, y = D.oval >= MY ? D.oval : MY + ((D.oval - MY) * (chin - MY)) / (MEAN_M.chin - MY);
+      let best = OVAL_L[0];
+      for (const i of OVAL_L) if (i !== 152 && Math.abs(H[i].y - y) < Math.abs(H[best].y - y)) best = i;
+      at = [best];
+    }
+    const x = at.reduce((s, i) => s + H[i].x, 0) / at.length, y = at.reduce((s, i) => s + H[i].y, 0) / at.length;
+    return { at, x: D.mid ? 0 : x, y };
+  }
+
+  /** Точки головы с правками pts (исходные не меняются). */
+  _pointsHead(pts) {
+    const H0 = this.head0 || this.head, H = H0.map((p) => ({ ...p }));
+    for (const [id, d] of Object.entries(pts || {})) {
+      const D = POINTS[id];
+      if (!D) continue;
+      const A = this._pointAnchor(id);
+      for (const i of D.set) {
+        const p = H0[i], dd = Math.hypot(p.x - A.x, p.y - A.y);
+        const w = A.at.includes(i) ? 1 : dd < D.r ? (1 - (dd / D.r) ** 2) ** 2 : 0;
+        if (!w) continue;
+        const j = MIRROR[i];
+        if (j === i) H[i].y += w * d[1];
+        else { H[i].x += w * d[0]; H[i].y += w * d[1]; H[j].x -= w * d[0]; H[j].y += w * d[1]; }
+      }
+    }
+    return H;
+  }
+
+  /**
+   * Точки и контуры для показа поверх фото, в координатах головы: handles — { id, label, side (1 — левая сторона
+   * персонажа, −1 — правая, 0 — средняя линия), x, y, moved }, lines — ломаные контуров.
+   * @param {Record<string, [number, number]>} [pts] правки (по умолчанию текущие)
+   */
+  pointsView(pts = this.points) {
+    const H = pts === this.points ? this.head : this._pointsHead(pts), handles = [];
+    for (const id of Object.keys(POINTS)) {
+      const D = POINTS[id], A = this._pointAnchor(id), d = pts?.[id] || [0, 0];
+      // якорь сдвинут своей правкой и кистями соседних: берём его текущее положение по точкам
+      const at = (side) => {
+        const idx = side < 0 ? A.at.map((i) => MIRROR[i]) : A.at;
+        return { x: D.mid ? 0 : idx.reduce((s, i) => s + H[i].x, 0) / idx.length, y: idx.reduce((s, i) => s + H[i].y, 0) / idx.length };
+      };
+      for (const side of D.mid ? [0] : [1, -1]) handles.push({ id, label: D.label, side, ...at(side), moved: !!(d[0] || d[1]) });
+    }
+    return { handles, lines: POINT_LINES.map((l) => l.map((i) => ({ x: H[i].x, y: H[i].y }))) };
+  }
+
+  /**
+   * Правки, при которых точка id (сторона side) окажется в (x, y) координат головы; остальные — как в pts.
+   * @returns {Record<string, [number, number]>}
+   */
+  pointsWith(pts, id, side, x, y) {
+    const cur = { ...(pts || {}) }, D = POINTS[id];
+    if (!D) return cur;
+    const H = this._pointsHead(cur), A = this._pointAnchor(id), d = cur[id] || [0, 0];
+    const idx = side < 0 ? A.at.map((i) => MIRROR[i]) : A.at;
+    const nx = idx.reduce((s, i) => s + H[i].x, 0) / idx.length, ny = idx.reduce((s, i) => s + H[i].y, 0) / idx.length;
+    const tx = side < 0 ? -x : x, ax = side < 0 ? -nx : nx;            // правая сторона — зеркально к левой
+    cur[id] = [D.mid ? 0 : d[0] + tx - ax, d[1] + y - ny];
+    return cur;
+  }
   /** Меры с фото с поправками сходства. */
   _tuned() {
     if (!this.tune) return this.meas;
@@ -1611,7 +1780,7 @@ export class Portrait {
   fit(o = {}) {
     const k = o.caricature ?? 1.5, tex = clamp(o.texture ?? 0.9, 0, 1), gender = o.gender === 'male' ? 'male' : 'female';
     const re = clamp(o.realism ?? 0.8, 0, 1), focus = clamp(o.focus ?? FOCUS, 0, 1);
-    const key = `${k}|${tex}|${gender}|${re}|${focus}|${o.lines ?? 0}|${o.bold ?? 0}|${this._corrV || 0}|${this.profile?.v || 0}|${this._tuneKey()}`;
+    const key = `${k}|${tex}|${gender}|${re}|${focus}|${o.lines ?? 0}|${o.bold ?? 0}|${this._corrV || 0}|${this.profile?.v || 0}|${this._tuneKey()}|${this._ptsKey()}`;
     if (this._fits.has(key)) return this._fits.get(key);
     const Q = this._tuned(), Mn = MEAN_M, G = this.gains(k, focus);
     // основа: пресет пола, сдвинутый к реальным пропорциям
@@ -1859,10 +2028,10 @@ export class Portrait {
     const r4 = (v) => (v === null || v === undefined ? null : Math.round(v * 1e4) / 1e4);
     const rc = (c) => (c ? c.map(r4) : null);
     // точки: int16, 1/8 пикселя, относительно центра глаз
-    const c = this.frame.c, lm = new Int16Array(this.px.length * 3);
-    this.px.forEach((p, i) => { lm[i * 3] = Math.round((p.x - c.x) * 8); lm[i * 3 + 1] = Math.round((p.y - c.y) * 8); lm[i * 3 + 2] = Math.round(p.z * 8); });
+    const c = this.frame.c, px0 = this.px0 || this.px, lm = new Int16Array(px0.length * 3);   // исходные точки; правки — в points
+    px0.forEach((p, i) => { lm[i * 3] = Math.round((p.x - c.x) * 8); lm[i * 3 + 1] = Math.round((p.y - c.y) * 8); lm[i * 3 + 2] = Math.round(p.z * 8); });
     const meas = {};
-    for (const [k, v] of Object.entries(this.meas)) meas[k] = Array.isArray(v) ? v.map(r4) : r4(v);
+    for (const [k, v] of Object.entries(this.meas0 || this.meas)) meas[k] = Array.isArray(v) ? v.map(r4) : r4(v);
     const d = {
       format: 'anima-portrait', v: 1,
       origin: [r4(c.x), r4(c.y)], lm: b64(new Uint8Array(lm.buffer)),
@@ -1876,6 +2045,7 @@ export class Portrait {
       profile: this.profile ? { params: this.profile.params, rms: this.profile.rms, side: this.profile.side, warnings: this.profile.warnings } : null,
       tex: null,
       tune: this.tune || null,
+      points: this.points || null,
       corr: this.corr ? JSON.parse(JSON.stringify(this.corr, (k, v) => (typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v))) : null,
       warp: this.warp ? { k: this.warp.k, n: this.warp.n, win: this.warp.win, pts: this.warp.pts.map((p) => p.map(r4)) } : null,
     };
@@ -1935,6 +2105,7 @@ export class Portrait {
     }
     p.corr = d.corr || null;
     p.setTune(d.tune);
+    if (d.points) p.setPoints(d.points, { keepTune: true });     // правки точек (14.7): меры — от исходных
     p.lines = p.linesRaw ? p._linesFromRaw() : null;   // старые файлы — без линий, как были
     p.warp = d.warp || null;
     p._fits = new Map();

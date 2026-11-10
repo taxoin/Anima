@@ -78,6 +78,14 @@ export class LikenessTuner {
     this.tune = { ...v.tune };
   }
 
+  /** Забыть черты (их поправили точками по фото, 14.7): поправка — 0, шаг и счёт выборов — с начала. */
+  forget(features) {
+    for (const f of features) {
+      delete this.tune[f];
+      if (this.state[f]) this.state[f] = { step: this.step0, picks: 0, last: 0, shown: 0 };
+    }
+  }
+
   /** Отменить последний выбор. @returns {boolean} было что отменять */
   undo() {
     const h = this.history.pop();
