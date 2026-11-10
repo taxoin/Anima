@@ -399,6 +399,9 @@ const BASE_CORR = {
   male: { browY: -0.0858, browArch: 0.0281, browTail: 0.0505, browX0: -0.0035, browX1: 0.0092, browTh: -0.0045, noseTip: -0.0419, noseW: 0.0225, mouthHW: -0.017, lipU: -0.0154, lipL: 0.0267, widths: [0, 0.0541, -0.0499, -0.0453, -0.0831, 0.2947] },
 };
 // Разброс мер по 126 портретам набора (tests/portraits, |yaw| < 0.2): [среднее, СКО] — насколько черта необычна (14.1)
+// единицы фото («глаза–рот = 0.55» по точкам MediaPipe) → единицы модели для силуэта причёски (14.5): силуэт черепа на рендере,
+// выровненном так же, — 0.94 модельного (перспектива камеры метрики, точки глаз и рта на модели); dev/hairsil.mjs
+const SIL_K = 0.94;
 const MEAS_POP = { eyeCX: [0.2423, 0.01882], eyeW: [0.2126, 0.0165], eyeH: [0.08617, 0.00755], tilt: [0.08072, 0.04222], browY: [0.1492, 0.02378], browArch: [0.03386, 0.01054], browTail: [-0.02115, 0.02049], browX0: [0.1096, 0.0107], browX1: [0.4449, 0.03059], browTh: [0.03722, 0.00364], noseTip: [-0.257, 0.03162], noseW: [0.1586, 0.01182], noseBr: [0.04441, 0.00328], noseProj: [0.3275, 0.04811], mouthHW: [0.1906, 0.01461], lipU: [0.03484, 0.01016], lipL: [0.06847, 0.01179], chin: [-0.8631, 0.04442], upS: [0.07126, 0.02156], upF: [0.6354, 0.02601], loS: [0.2235, 0.062], loF: [0.6467, 0.3358], chinSq: [0.6641, 0.05152], cheekPr: [1.053, 0.01465], bowX: [0.2912, 0.00959], bowRC: [0.8368, 0.03246] };
 const WIDTHS_POP = [[1, 0], [1.005, 0.07572], [1.033, 0.07463], [1.043, 0.08914], [1.072, 0.1241], [1.034, 0.1857]];
 export const REFINE_MEAS = ['eyeCX', 'eyeW', 'eyeH', 'tilt', 'browY', 'browArch', 'browTail', 'browX0', 'browX1', 'browTh', 'noseTip', 'noseW', 'mouthHW', 'lipU', 'lipL', 'chin'];
@@ -896,7 +899,7 @@ export class Portrait {
 
   _hair() {
     const M = this.hairMask;
-    this.hairStyle = null; this.hairColor = null; this.hairlineY = null; this.hairR = null; this.bang = null;
+    this.hairStyle = null; this.hairColor = null; this.hairlineY = null; this.hairR = null; this.bang = null; this.hairSil = null; this.hairRows = null;
     if (!M) return;
     const W = this.img.width, H = this.img.height;
     const isHair = (x, y) => {
@@ -917,7 +920,9 @@ export class Portrait {
       if (f > 0.22) bottom = y - 0.05; else if (bottom !== null && y < bottom - 0.1) break;
     }
     this.hairBottom = bottom;
-    this.hairStyle = top !== null && top < 0.12 ? 'none' : bottom !== null && bottom < -0.6 ? 'long' : 'short';
+    // макушка без волос, а по бокам длинные волосы ниже подбородка — это убор (шляпа, капюшон), а не лысина: голова не должна
+    // выходить «яйцом» (14.5); без detail: 'full' сам убор не находится, но волосы видны
+    this.hairStyle = bottom !== null && bottom < -0.6 ? 'long' : top !== null && top < 0.12 ? 'none' : 'short';
     // линия роста: первый пиксель волос вверх по средней линии от лба
     const lineAt = (x) => { for (let y = Math.max(0.25, this.head[10].y - 0.15); y < 1.25; y += 0.01) if (isHair(x, y)) return y; return null; };
     this.hairlineY = lineAt(0);
@@ -939,6 +944,7 @@ export class Portrait {
       }
       return rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : null;
     });
+    this._hairSilhouette(isHair);
     const cols = [], Wm = M.w, Hm = M.h;
     for (let y = 0; y < Hm; y += 2) for (let x = 0; x < Wm; x += 2) {
       if (!M.data[y * Wm + x]) continue;
@@ -950,6 +956,47 @@ export class Portrait {
       this.hairColor = robustColor(cols.slice(Math.floor(cols.length * 0.45), Math.floor(cols.length * 0.95)));
       this._hairTone(cols);
     }
+  }
+
+  /**
+   * Силуэт причёски (14.5) — как видит его карикатурист: внешний край маски волос, левая и правая стороны отдельно.
+   *   hairSil — 25 лучей из (0, 0.15) через 10° от −120° (влево) до +120° (вправо), 0° — вверх: последняя точка волос
+   *     (разрывы до 0.08 пропускаются — пробор, блик), медиана по трём соседним лучам; null — луч волос не нашёл.
+   *   hairRows — ширина волос по строкам (y от 0.3 вниз через 0.05): самая дальняя точка волос, связанная с головой,
+   *     влево и вправо; нужна длинным волосам — их силуэт по бокам лица идёт до плеч.
+   */
+  _hairSilhouette(isHair) {
+    const ray = (deg) => {
+      const t = deg * Math.PI / 180, dx = Math.sin(t), dy = Math.cos(t);
+      let last = null, gap = 0;
+      for (let r = 0.4; r < 2.2; r += 0.01) {
+        const v = isHair(dx * r, 0.15 + dy * r);
+        if (v === null) break;
+        if (v) { last = r; gap = 0; } else if (last !== null && (gap += 0.01) > 0.08) break;
+      }
+      return last;
+    };
+    const raw = [];
+    for (let d = -120; d <= 120; d += 10) raw.push(ray(d));
+    const med = raw.map((r, i) => {
+      const w = [raw[i - 1], r, raw[i + 1]].filter((v) => v !== null && v !== undefined);
+      return r === null || w.length < 2 ? r : w.sort((a, b) => a - b)[Math.floor(w.length / 2)];
+    });
+    this.hairSil = med.some((r) => r !== null) ? med.map((r) => (r === null ? null : +r.toFixed(3))) : null;
+    // по строкам: от края головы наружу, пока идут волосы (с допуском разрыва), не дальше 1.5 от середины
+    const rows = { y0: 0.3, step: 0.05, l: [], r: [] };
+    for (let y = 0.3; y > -1.95; y -= 0.05) {
+      for (const [sg, arr] of [[-1, rows.l], [1, rows.r]]) {
+        let last = null, gap = 0, seen = false;
+        for (let x = 0.45; x < 1.5; x += 0.01) {
+          const v = isHair(sg * x, y);
+          if (v === null) break;
+          if (v) { seen = true; last = x; gap = 0; } else if (seen && (gap += 0.01) > 0.06) break;
+        }
+        arr.push(last === null ? null : +last.toFixed(3));
+      }
+    }
+    this.hairRows = rows.l.some((v) => v !== null) || rows.r.some((v) => v !== null) ? rows : null;
   }
 
   /**
@@ -1677,6 +1724,20 @@ export class Portrait {
         return lo;
       };
       ov.hairVol = this.hairR.map((r, i) => (r === null ? 0.04 : clamp(r - skull(i * 20), 0.015, 0.32)));
+      // силуэт (14.5): по сторонам отдельно, без потолка коротких волос; у длинных — ширина по строкам до кончиков
+      if (this.hairSil) ov.hairSil = this.hairSil.map((r, i) => (r === null ? null : +clamp(r / SIL_K - skull(-120 + 10 * i), 0.01, 0.4).toFixed(3)));
+      if (this.hairRows && this.hairStyle === 'short') {
+        // низ коротких волос по бокам: последняя строка сверху вниз, где волосы выходят за край черепа (с запасом 0.05)
+        const low = (A) => { let y = null; for (let i = 0; i < A.length; i++) { const yy = this.hairRows.y0 - i * this.hairRows.step, w = Math.sqrt(Math.max(0, 1 - yy * yy)) * prof(gx, yy); if (A[i] !== null && A[i] / SIL_K > w + 0.05) y = yy; else if (y !== null) break; } return y === null ? null : +y.toFixed(3); };
+        const sd = [low(this.hairRows.l), low(this.hairRows.r)];
+        if (sd.some((v) => v !== null)) ov.hairSides = sd;
+      }
+      if (this.hairRows && this.hairStyle === 'long') {
+        // не дальше 0.3 от черепа у висков (дальше — поля шляпы, фон), книзу волосы могут расходиться шире
+        const R = this.hairRows, cap = (i) => { const y = R.y0 - i * R.step, yy = clamp(y, -0.99, 0.99); return Math.sqrt(1 - yy * yy) * prof(gx, yy) + 0.3 + 0.5 * Math.max(0, -0.3 - y); };
+        const sc = (a) => a.map((v, i) => (v === null ? null : +Math.min(v / SIL_K, cap(i)).toFixed(3)));
+        ov.hairRows = { ...R, l: sc(R.l), r: sc(R.r) };
+      }
     }
     // борода/усы с фото — только для мужской основы (на женских портретах тени у рта дают ложные срабатывания)
     if (this.beardStyle && gender === 'male') {
@@ -1811,7 +1872,7 @@ export class Portrait {
       outfit: this.outfitRaw ? { ...this.outfitRaw, spread: undefined, Cs: rc(this.outfitRaw.Cs), Csh: rc(this.outfitRaw.Csh), Ct: rc(this.outfitRaw.Ct) } : null,
       lidTex: rc(this.lidTex), beard: r4(this.beard), bags: r4(this.bags || 0), linesRaw: this.linesRaw || null, grayscale: !!this.grayscale, glasses: this.glasses || null, beardStyle: this.beardStyle || null, hat: this.hat || null,
       bs: this.bs ? Object.fromEntries(Object.entries(this.bs).filter(([, v]) => v > 0.03).map(([k, v]) => [k, Math.round(v * 100) / 100])) : null,
-      hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY), r: this.hairR ? this.hairR.map(r4) : null, bang: this.bang ? { side: this.bang.side, depth: r4(this.bang.depth) } : null, gray: r4(this.hairGray || 0), grayColor: rc(this.hairGrayColor), vari: r4(this.hairVar) },
+      hair: { style: this.hairStyle, bottom: r4(this.hairBottom), line: r4(this.hairlineY), r: this.hairR ? this.hairR.map(r4) : null, sil: this.hairSil, rows: this.hairRows, bang: this.bang ? { side: this.bang.side, depth: r4(this.bang.depth) } : null, gray: r4(this.hairGray || 0), grayColor: rc(this.hairGrayColor), vari: r4(this.hairVar) },
       profile: this.profile ? { params: this.profile.params, rms: this.profile.rms, side: this.profile.side, warnings: this.profile.warnings } : null,
       tex: null,
       tune: this.tune || null,
@@ -1857,7 +1918,7 @@ export class Portrait {
     p.lipColor = C.lip; p.browColor = C.brow; p.irisColor = C.iris; p.hairColor = C.hair; p.clothColor = C.cloth;
     p.lidTex = d.lidTex; p.beard = d.beard || 0; p.bags = d.bags || 0; p.linesRaw = d.linesRaw || null; p.grayscale = !!d.grayscale; p.bs = d.bs || null; p.glasses = d.glasses || null; p.beardStyle = d.beardStyle || null; p.hat = d.hat || null;
     p.hairStyle = d.hair?.style ?? null; p.hairBottom = d.hair?.bottom ?? null; p.hairlineY = d.hair?.line ?? null;
-    p.hairR = d.hair?.r ?? null; p.bang = d.hair?.bang ?? null;
+    p.hairR = d.hair?.r ?? null; p.bang = d.hair?.bang ?? null; p.hairSil = d.hair?.sil ?? null; p.hairRows = d.hair?.rows ?? null;   // силуэт (14.5): в старых слепках нет — прежняя «симметричная» причёска
     p.teethTone = d.teeth ? { d: d.teeth.d } : null;
     p.outfitRaw = d.outfit || null;
     p.hairGray = d.hair?.gray || 0; p.hairGrayColor = d.hair?.grayColor ?? null; p.hairVar = d.hair?.vari ?? null;

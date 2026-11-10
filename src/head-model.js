@@ -469,6 +469,18 @@ function hairClumpH(a, py, k) {
   return clamp(k, 0, 1) * 0.04 * (s - 0.55) * (0.65 + 0.6 * rnd) * smoothstep(0.97, 0.7, py);
 }
 
+/** Пропуски (null) в ряду — линейно по ближайшим известным соседям; края — ближайшим. Все пропуски — def. */
+function fillGaps(a, def = 0.04) {
+  const idx = a.map((v, i) => (v === null || v === undefined ? -1 : i)).filter((i) => i >= 0);
+  if (!idx.length) return def === null ? null : a.map(() => def);
+  return a.map((v, i) => {
+    if (v !== null && v !== undefined) return v;
+    const lo = idx.filter((j) => j < i).pop(), hi = idx.find((j) => j > i);
+    if (lo === undefined) return a[hi]; if (hi === undefined) return a[lo];
+    return lerp(a[lo], a[hi], (i - lo) / (hi - lo));
+  });
+}
+
 function sphereGrid(W, H, fn, a = 0.42, b = 0.72) {
   const pos = new Float32Array((H + 1) * W * 3);
   const uv = new Float32Array((H + 1) * W * 2);
@@ -2137,18 +2149,38 @@ export class ProceduralHead {
     // линия роста волос как функция долготы (0 = лоб, π = затылок)
     // объём по фото (photo-avatar): толщина волос над силуэтом черепа по углу θ от макушки (0, 20 … 100°, анфас)
     const vol = P.hairVol, HC = 0.15, dome = domeOf(P);
+    // силуэт (14.5): 25 лучей через 10° от −120° до +120° (знак — сторона), пропуски — по соседям
+    const sil = Array.isArray(P.hairSil) && P.hairSil.length === 25 && P.hairSil.some((v) => v !== null) ? fillGaps(P.hairSil) : null;
     const volAt = (x, y) => {
+      if (sil) {
+        const t = clamp((Math.atan2(x, y - HC) / DEG + 120) / 10, 0, 24), i = Math.min(Math.floor(t), 23);
+        return lerp(sil[i], sil[i + 1], t - i);
+      }
       if (!vol) return null;
       const t = clamp(Math.atan2(Math.abs(x), y - HC) / DEG / 20, 0, vol.length - 1), i = Math.min(Math.floor(t), vol.length - 2);
       return lerp(vol[i], vol[i + 1], t - i);
     };
+    // ширина длинных волос по строкам (14.5), по сторонам; сглажена по высоте
+    const HR = P.hairRows, rowsAt = HR && Array.isArray(HR.l) ? (() => {
+      const sm = (a) => { const f = fillGaps(a, null); return f && f.map((v, i) => (v === null ? null : (f[Math.max(0, i - 1)] + 2 * v + f[Math.min(f.length - 1, i + 1)]) / 4)); };
+      const L = sm(HR.l), R = sm(HR.r);
+      return (y, sg) => {
+        const A = sg < 0 ? L : R;
+        if (!A) return null;
+        const t = clamp((HR.y0 - y) / HR.step, 0, A.length - 1), i = Math.min(Math.floor(t), A.length - 2);
+        const a = A[i], b = A[i + 1];
+        return a === null || b === null ? (a ?? b) : lerp(a, b, t - i);
+      };
+    })() : null;
     const bangSide = P.bangSide ?? (long ? -1 : 0), bangDepth = P.bangDepth ?? (long ? 0.1 : 0);
     const lineF = (long ? [0.6, 0.52, 0.34, 0.16, 0.0, -0.3, -0.5, -0.55] : [0.64, 0.57, 0.4, 0.24, 0.08, -0.2, -0.36, -0.4])
       .map((v, i) => v + (P.hairline || 0) * Math.max(0, 1 - i / 4) + (P.hairTemples || 0) * Math.exp(-(((i - 1.6) / 0.8) ** 2)));   // лоб (по фото), залысины
+    const sides = !long && Array.isArray(P.hairSides) ? P.hairSides : null;   // низ коротких волос по бокам (14.5, по фото): пышные спускаются к ушам
     const hairline = (a) => {
       const u = clamp(Math.abs(a) / Math.PI * (lineF.length - 1), 0, lineF.length - 1.001);
       const i = Math.floor(u);
-      return lerp(lineF[i], lineF[i + 1], smoothstep(0, 1, u - i));
+      const y = lerp(lineF[i], lineF[i + 1], smoothstep(0, 1, u - i)), sy = sides?.[a < 0 ? 0 : 1];
+      return sy == null ? y : Math.min(y, lerp(y, clamp(sy, -0.05, 0.4), Math.exp(-(((Math.abs(a) - 1.75) / 0.6) ** 2))));
     };
     const tmp = [0, 0, 0];
     /** Точка оболочки волос по направлению (px, py, pz) единичной сферы; возвращает высоту на голове и линию роста. */
@@ -2163,16 +2195,16 @@ export class ProceduralHead {
       if (!long) H += 0.012 * G(a, tmp[1], 0, 0.6, 0.5, 0.1);               // лёгкий объём надо лбом
       const v = volAt(tmp[0], tmp[1]);
       // силуэт причёски с фото; к вискам и ниже — плавно к обычной толщине (иначе по бокам «поля шляпы»)
-      if (v !== null) H = lerp(H, Math.max(H * 0.6, long ? v : Math.min(v, P.hairVolMax ?? 0.14)), smoothstep(-0.45, 0.3, tmp[1]) * (0.55 + 0.45 * smoothstep(-0.2, 0.5, tmp[1])));
+      if (v !== null) H = lerp(H, Math.max(H * 0.6, long ? v : Math.min(v, P.hairVolMax ?? (sil ? 0.32 : 0.14))), smoothstep(-0.45, 0.3, tmp[1]) * (0.55 + 0.45 * smoothstep(-0.2, 0.5, tmp[1])));
       H *= P.hairThick ?? 1;
       if (P.hairCurl) {                                                       // кудри: «пупырчатый» шум, сильнее у края силуэта
         const nz = Math.sin(tmp[0] * 47 + Math.sin(tmp[1] * 29) * 2.5) + Math.sin(tmp[1] * 43 + tmp[2] * 31) + Math.sin(tmp[2] * 37 + tmp[0] * 19);
         H += P.hairCurl * Math.abs(nz) * 0.6 * smoothstep(-0.2, 0.5, tmp[1]);
       }
       if (P.hat) { const hl = P.hat.y0 ?? HAT_LINE[P.hat.style] ?? 0.45; H = lerp(H, Math.min(H, 0.03), smoothstep(hl - 0.08, hl, tmp[1])); }   // под шапкой волосы примяты
-      // у линии роста волосы сходят на нет, ниже неё поверхность уходит глубоко под кожу
+      // у линии роста волосы сходят на нет, ниже неё поверхность уходит глубоко под кожу; толстая шапка (14.5) — со скруглённым краем, без козырька
       // плоский режим (12.8): погружение круче у самой линии — кожу пересекает не по касательной, кромка без рванины
-      let off = H * (0.3 + 0.7 * smoothstep(yh, yh + 0.16 + 0.3 * clamp(P.hairClump || 0, 0, 1), tmp[1])) - (0.25 + 0.3 * H) * (1 - smoothstep(yh - 0.1, yh + (this.flat ? 0.04 : 0), tmp[1]));
+      let off = H * (0.3 + 0.7 * smoothstep(yh, yh + 0.16 + 0.3 * clamp(P.hairClump || 0, 0, 1) + (sil && !long ? 0.8 * Math.max(0, H - 0.08) : 0), tmp[1])) - (0.25 + 0.3 * H) * (1 - smoothstep(yh - 0.1, yh + (this.flat ? 0.04 : 0), tmp[1]));
       if (P.hairClump && !P.hat) off += hairClumpH(a, py, P.hairClump) * (long ? 1.2 : 1) * smoothstep(yh - 0.03, yh + 0.03, tmp[1]);   // жгуты — ровной толщины до самой кромки
       const nx = px / prof(P.gx, py), ny = py, nz = pz;
       const nl = Math.hypot(nx, ny, nz) || 1;
@@ -2200,7 +2232,12 @@ export class ProceduralHead {
       const flare = smoothstep(-0.2, -1.5, y);
       const front = Math.cos(a) > 0 ? Math.cos(a) : 0;
       const jaw = smoothstep(0.1, -0.7, y) * (1 - smoothstep(-0.9, -1.3, y)) * front;   // у лица пряди ближе к щекам
-      const rx = (0.84 + 0.1 * flare + 0.012 * Math.sin(a * 9 + y * 3) - 0.1 * jaw) * wk;
+      let rx = (0.84 + 0.1 * flare + 0.012 * Math.sin(a * 9 + y * 3) - 0.1 * jaw) * wk;
+      const e = rowsAt?.(Math.min(y, 0.3), Math.sin(a) < 0 ? -1 : 1);   // ширина по фото на этой высоте и стороне (14.5)
+      if (e != null) {                                                       // не ближе к щекам, чем обычный занавес: пряди на краю лица сбивают овал
+        const yy = clamp(y, -0.99, 0.99), sk = Math.sqrt(1 - yy * yy) * prof(P.gx, yy);
+        rx = clamp(e - 0.03, Math.max(0.8, sk + 0.1), 1.45) + 0.012 * Math.sin(a * 9 + y * 3) - 0.1 * jaw * smoothstep(1.05, 0.85, e);
+      }
       const rz = 0.86 + 0.06 * flare + 0.012 * Math.sin(a * 7 - y * 2) - 0.12 * jaw;
       const cl = P.hairClump ? 1 + 1.3 * hairClumpH(a, 0, P.hairClump) * smoothstep(0.42, 0.1, y) : 1;   // пряди занавеса — продолжение прядей оболочки
       out[0] = rx * cl * Math.sin(a); out[1] = y; out[2] = -0.08 + rz * cl * Math.cos(a);

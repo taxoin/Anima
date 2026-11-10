@@ -16,8 +16,10 @@
  *          128 чисел по всему изображению — видит и кожу, и брови, и причёску); idDist — расстояние от рендера
  *          до снимка того же человека (меньше — похожее; разные люди в наборе — медиана 0.81), idRank — его место
  *          среди снимков набора по этому расстоянию.
+ *   hair — третья мерка (14.5): совпадение силуэта причёски с фото — IoU маски волос снимка (сегментатор MediaPipe)
+ *          и точной маски мешей волос рендера, оба анфас и выровнены по глазам и рту.
  * Падает (код 1), если средний cos упал больше чем на 0.03, в пятёрку попадает на 2+ лица меньше, среднее idDist
- * выросло больше чем на 0.02 или по отпечатку в пятёрке на 3+ лица меньше.
+ * выросло больше чем на 0.02, по отпечатку в пятёрке на 3+ лица меньше или IoU причёски упал больше чем на 0.03.
  * MediaPipe — на CPU (PHOTO_ASSETS.delegate): на GPU точки немного другие (меры до 1–2 %), и если GPU молча не поднимется,
  * снимки и рендеры разойдутся. Режим и версия — в базовой линии; при другом режиме сравнение не делается.
  * Лист «фото | голова» — dev/resemblance-sheet.png. Нужны Chrome ($CHROME) и сеть (MediaPipe с CDN).
@@ -128,6 +130,54 @@ if (have.some((p) => !(p.id in idG))) {
 const idIds = have.map((p) => p.id).filter((i) => idG[i]);
 const dist = (a, b) => Math.sqrt(a.reduce((s, x, i) => s + (x - b[i]) ** 2, 0));
 
+// силуэт причёски (14.5): фото и рендер анфас, выровненные по глазам и рту; маска волос фото (сегментатор) и точная маска
+// мешей волос рендера (материалы волос — белым, остальное — чёрным); IoU масок. Причёски нет ни там, ни там — null
+await page.evaluate(() => {
+  window.__hairIoU = async () => {
+    const PA = await import('/src/photo-avatar.js'), THREE = await import('three');
+    const P = head._portrait, size = 240;
+    if (!P?.hairMask) return null;
+    const align = (L, w, h) => {
+      const pt = (i) => ({ x: L[i].x * w, y: L[i].y * h }), mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      const eR = mid(pt(33), pt(133)), eL = mid(pt(362), pt(263)), c = mid(eR, eL), m = mid(pt(13), pt(14));
+      return { c, roll: Math.atan2(eL.y - eR.y, eL.x - eR.x), k: (0.22 * size) / Math.hypot(m.x - c.x, m.y - c.y) };
+    };
+    const bits = (img, A) => {
+      const c = document.createElement('canvas'); c.width = c.height = size;
+      const g = c.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, size, size);
+      g.translate(0.5 * size, 0.5 * size); g.rotate(-A.roll); g.scale(A.k, A.k); g.translate(-A.c.x, -A.c.y); g.drawImage(img, 0, 0);
+      const d = g.getImageData(0, 0, size, size).data, o = new Uint8Array(size * size);
+      for (let i = 0; i < o.length; i++) o[i] = d[i * 4] > 127;
+      return o;
+    };
+    const dp = await PA.detectFace(P.img);
+    if (!dp) return null;
+    const M = P.hairMask, mc = document.createElement('canvas'); mc.width = M.w; mc.height = M.h;
+    const id = mc.getContext('2d').createImageData(M.w, M.h);
+    for (let i = 0; i < M.w * M.h; i++) { const v = M.data[i] ? 255 : 0; id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; }
+    mc.getContext('2d').putImageData(id, 0, 0);
+    const big = document.createElement('canvas'); big.width = P.img.width; big.height = P.img.height; big.getContext('2d').drawImage(mc, 0, 0, big.width, big.height);
+    const A = bits(big, align(dp.L, P.img.width, P.img.height));
+    const rc = head._shotImage({}), dr = await PA.detectFace(rc);
+    if (!dr) return null;
+    const HM = new Set([head.rig.mat?.hair, head.rig.mat?.hairCards].filter(Boolean)), saved = [];
+    const white = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }), black = new THREE.MeshBasicMaterial({ color: 0 });
+    head.rig.object3D.traverse((o) => {
+      if (!o.isMesh || Array.isArray(o.material) || o.material.visible === false || o.material.colorWrite === false) return;
+      saved.push([o, o.material]);
+      o.material = HM.has(o.material) || /^hair/.test(o.name) ? (o.material.alphaMap ? new THREE.MeshBasicMaterial({ color: 0xffffff, alphaMap: o.material.alphaMap, alphaTest: 0.35, side: THREE.DoubleSide }) : white) : black;
+    });
+    const bg = head.scene.background, env = head.scene.environment;
+    head.scene.background = new THREE.Color(0); head.scene.environment = null;
+    const mr = head._shotImage({});
+    saved.forEach(([o, m]) => { o.material = m; }); head.scene.background = bg; head.scene.environment = env;
+    const B = bits(mr, align(dr.L, rc.width, rc.height));
+    let I = 0, U = 0;
+    for (let i = 0; i < A.length; i++) { if (A[i] && B[i]) I++; if (A[i] || B[i]) U++; }
+    return U ? +(I / U).toFixed(3) : null;
+  };
+});
+
 // 2. головы по фото: рендер как в демо → разбор как у фото
 const rows = [], shots = [];
 for (const id of FACES) {
@@ -163,6 +213,19 @@ for (const id of FACES) {
   console.log(`${id} ${gender[id].padEnd(6)}  cos ${row.cos.toFixed(3).padStart(6)}  место ${String(row.rank).padStart(3)}/${ids.length}` +
     (row.idDist ? `   отпечаток ${row.idDist.toFixed(3)}  место ${String(row.idRank).padStart(3)}/${idIds.length}` : '   отпечаток: лицо не найдено'));
 }
+// причёска — отдельным проходом: лишние вызовы распознавания между замерами сдвигают следующие замеры MediaPipe
+for (const row of rows) {
+  if (row.error) continue;
+  row.hair = await page.evaluate(async (src, gender, opts) => {
+    try {
+      head.options.look = {}; head.options.flat = false;
+      head.options.quality = 'lite'; head._applyShadows(); head.setLighting(head.options.lighting);
+      await head.fromPhoto(src, { gender, ...opts });
+      return await window.__hairIoU();
+    } catch { return null; }
+  }, `/dev/portraits/${row.id}.jpg`, gender[row.id], OPTS);
+}
+console.log('причёска (IoU):', rows.filter((r) => !r.error).map((r) => `${r.id.slice(0, 4)} ${r.hair ?? '—'}`).join(', '));
 const ok = rows.filter((r) => !r.error);
 const summary = {
   cos: +(ok.reduce((s, r) => s + r.cos, 0) / ok.length).toFixed(3),
@@ -177,6 +240,10 @@ Object.assign(summary, {
 });
 console.log(`\nсреднее: cos ${summary.cos}, на 1-м месте ${summary.top1}/${ok.length}, в пятёрке ${summary.top5}/${ok.length}, человек похож больше остальных в среднем на ${summary.pct} %`);
 console.log(`отпечаток: расстояние ${summary.idDist}, на 1-м месте ${summary.idTop1}/${okId.length}, в пятёрке ${summary.idTop5}/${okId.length}`);
+// причёска: среднее IoU по всем 24 (нет причёски на рендере при волосах на фото — 0)
+const okH = ok.filter((r) => r.hair !== null && r.hair !== undefined);
+summary.hair = okH.length ? +(okH.reduce((s, r) => s + r.hair, 0) / okH.length).toFixed(3) : null;
+console.log(`причёска: совпадение силуэта с фото (IoU) ${summary.hair} по ${okH.length} лицам`);
 
 // лист «фото | голова»
 const sheet = await page.evaluate(async (shots) => {
@@ -196,7 +263,7 @@ fs.writeFileSync(path.join(ROOT, args.find((a) => a.startsWith('--sheet='))?.sli
 await browser.close();
 server.close();
 
-const result = { date: new Date().toISOString(), opts: OPTS, delegate: DELEGATE, faceApi: FA_VER, summary, faces: Object.fromEntries(ok.map((r) => [r.id, { cos: r.cos, rank: r.rank, idDist: r.idDist, idRank: r.idRank }])) };
+const result = { date: new Date().toISOString(), opts: OPTS, delegate: DELEGATE, faceApi: FA_VER, summary, faces: Object.fromEntries(ok.map((r) => [r.id, { cos: r.cos, rank: r.rank, idDist: r.idDist, idRank: r.idRank, hair: r.hair }])) };
 if (saveBase) { fs.writeFileSync(BASE, JSON.stringify(result, null, 1) + '\n'); console.log(`Базовая линия записана: ${path.relative(ROOT, BASE)}`); process.exit(0); }
 if (!fs.existsSync(BASE)) { console.log('Базовой линии нет: npm run test:resemblance -- --save-baseline'); process.exit(0); }
 const b = JSON.parse(fs.readFileSync(BASE, 'utf8'));
@@ -204,7 +271,9 @@ if ((b.delegate || 'смешанный') !== DELEGATE) { console.log(`Базов
 const worst = ok.map((r) => ({ ...r, d: r.cos - (b.faces[r.id]?.cos ?? r.cos) })).sort((x, y) => x.d - y.d).slice(0, 5);
 console.log(`базовая линия (${b.date.slice(0, 10)}): cos ${b.summary.cos}, в пятёрке ${b.summary.top5}; хуже всего: ` + worst.map((r) => `${r.id} ${r.d >= 0 ? '+' : ''}${r.d.toFixed(2)}`).join(', '));
 if (b.summary.idDist) console.log(`  отпечаток в базовой линии: расстояние ${b.summary.idDist}, в пятёрке ${b.summary.idTop5}`);
+if (b.summary.hair != null) console.log(`  причёска в базовой линии: ${b.summary.hair}`);
 const bad = summary.cos < b.summary.cos - 0.03 || summary.top5 < b.summary.top5 - 1 || summary.failed > (b.summary.failed || 0) ||
-  (b.summary.idDist && (summary.idDist > b.summary.idDist + 0.02 || summary.idTop5 < b.summary.idTop5 - 2 || summary.idFailed > (b.summary.idFailed || 0)));
+  (b.summary.idDist && (summary.idDist > b.summary.idDist + 0.02 || summary.idTop5 < b.summary.idTop5 - 2 || summary.idFailed > (b.summary.idFailed || 0))) ||
+  (b.summary.hair != null && summary.hair < b.summary.hair - 0.03);
 console.log(bad ? '✕ Сходство упало — см. dev/resemblance-sheet.png' : '✓ Сходство не хуже базовой линии');
 process.exit(bad ? 1 : 0);

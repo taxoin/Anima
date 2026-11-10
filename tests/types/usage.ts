@@ -31,6 +31,7 @@ async function main() {
   head.setLook({ lines: { forehead: 0.6, fold: 1 }, lineStyle: 'soft', lineColor: '#3a2418', lineMotion: 0.5 });
   head.setPhotoOptions({ bold: 1 });
   head.setLook({ noseSize: 3, chinSize: 2, dome: 1.3, noseLine: 1 });
+  head.setLook({ hairStyle: 'short', hairSil: Array(25).fill(0.2), hairSides: [0, null] });
   const tuning = await head.tuneLikeness({ size: 256 });
   const vs = await tuning.variants(6, (v, i) => document.body.append(v.image, String(i)));
   tuning.pick(vs[0] ?? null, ['noseW', 'face']);

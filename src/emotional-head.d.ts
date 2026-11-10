@@ -89,6 +89,12 @@ export interface Look {
   hair?: Color;
   hairStyle?: HairStyle;
   hairVol?: number[]; hairCurl?: number; hairThick?: number; hairTemples?: number; hairTail?: number;
+  /** Силуэт причёски (14.5): толщина волос над черепом по 25 лучам анфас через 10° от −120° (влево) до +120° (вправо), 0° — вверх; null — нет данных. Важнее hairVol. */
+  hairSil?: (number | null)[];
+  /** Ширина длинных волос по строкам (14.5): от y0 вниз с шагом step — самая дальняя точка волос влево (l) и вправо (r) от середины. */
+  hairRows?: { y0: number; step: number; l: (number | null)[]; r: (number | null)[] };
+  /** Низ коротких волос по бокам [слева, справа] (y): пышные причёски спускаются к ушам. */
+  hairSides?: [number | null, number | null];
   hairGray?: number; hairGrayColor?: Color; hairStreaks?: number; hairStreakColor?: Color; hairVar?: number;
   hairCards?: boolean; hairAniso?: number; hairSpec2?: number | false;
   browGray?: number;

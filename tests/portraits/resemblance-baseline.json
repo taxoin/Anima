@@ -1,163 +1,188 @@
 {
- "date": "2026-11-09T17:41:24.800Z",
+ "date": "2026-11-10T00:58:38.461Z",
  "opts": {},
  "delegate": "CPU",
  "faceApi": "1.7.15",
  "summary": {
-  "cos": 0.657,
+  "cos": 0.664,
   "top1": 8,
-  "top5": 18,
-  "pct": 94.2,
+  "top5": 17,
+  "pct": 94.6,
   "failed": 0,
-  "idDist": 0.661,
-  "idTop1": 1,
-  "idTop5": 10,
-  "idFailed": 0
+  "idDist": 0.664,
+  "idTop1": 2,
+  "idTop5": 11,
+  "idFailed": 0,
+  "hair": 0.457
  },
  "faces": {
   "004494bc17": {
-   "cos": 0.692,
-   "rank": 2,
-   "idDist": 0.708,
-   "idRank": 18
+   "cos": 0.689,
+   "rank": 3,
+   "idDist": 0.711,
+   "idRank": 19,
+   "hair": 0.607
   },
   "fcd353273c": {
    "cos": 0.698,
    "rank": 3,
    "idDist": 0.575,
-   "idRank": 2
+   "idRank": 2,
+   "hair": 0
   },
   "d38f47ee6a": {
-   "cos": 0.62,
-   "rank": 5,
-   "idDist": 0.706,
-   "idRank": 14
+   "cos": 0.491,
+   "rank": 17,
+   "idDist": 0.735,
+   "idRank": 20,
+   "hair": 0.551
   },
   "b21dd7581b": {
-   "cos": 0.515,
-   "rank": 24,
+   "cos": 0.56,
+   "rank": 19,
    "idDist": 0.689,
-   "idRank": 23
+   "idRank": 18,
+   "hair": 0.238
   },
   "0559c6f953": {
-   "cos": 0.623,
-   "rank": 3,
-   "idDist": 0.681,
-   "idRank": 16
+   "cos": 0.665,
+   "rank": 2,
+   "idDist": 0.702,
+   "idRank": 22,
+   "hair": 0.376
   },
   "b63d3d621e": {
-   "cos": 0.051,
-   "rank": 51,
-   "idDist": 0.617,
-   "idRank": 3
+   "cos": 0.281,
+   "rank": 20,
+   "idDist": 0.624,
+   "idRank": 5,
+   "hair": 0.483
   },
   "e41d5716b8": {
-   "cos": 0.718,
+   "cos": 0.823,
    "rank": 1,
-   "idDist": 0.615,
-   "idRank": 5
+   "idDist": 0.608,
+   "idRank": 5,
+   "hair": 0.677
   },
   "ee358a370c": {
-   "cos": 0.729,
+   "cos": 0.727,
    "rank": 1,
-   "idDist": 0.695,
-   "idRank": 24
+   "idDist": 0.684,
+   "idRank": 18,
+   "hair": 0
   },
   "a36856c69b": {
-   "cos": 0.724,
-   "rank": 2,
-   "idDist": 0.693,
-   "idRank": 6
+   "cos": 0.696,
+   "rank": 3,
+   "idDist": 0.654,
+   "idRank": 3,
+   "hair": 0.221
   },
   "13243f7109": {
-   "cos": 0.742,
-   "rank": 6,
-   "idDist": 0.517,
-   "idRank": 2
+   "cos": 0.75,
+   "rank": 5,
+   "idDist": 0.538,
+   "idRank": 2,
+   "hair": 0.711
   },
   "b55a0e7e14": {
-   "cos": 0.743,
-   "rank": 4,
-   "idDist": 0.676,
-   "idRank": 18
+   "cos": 0.711,
+   "rank": 3,
+   "idDist": 0.686,
+   "idRank": 20,
+   "hair": 0.51
   },
   "7b53f56d2d": {
    "cos": 0.527,
    "rank": 5,
-   "idDist": 0.725,
-   "idRank": 31
+   "idDist": 0.706,
+   "idRank": 28,
+   "hair": 0
   },
   "820a4f262c": {
-   "cos": 0.896,
+   "cos": 0.892,
    "rank": 1,
-   "idDist": 0.675,
-   "idRank": 15
+   "idDist": 0.674,
+   "idRank": 15,
+   "hair": 0.728
   },
   "ac264ef4ac": {
    "cos": 0.758,
-   "rank": 8,
-   "idDist": 0.61,
-   "idRank": 3
+   "rank": 9,
+   "idDist": 0.618,
+   "idRank": 4,
+   "hair": 0.753
   },
   "f9ffbfb5ff": {
-   "cos": 0.116,
+   "cos": 0.114,
    "rank": 57,
-   "idDist": 0.563,
-   "idRank": 3
+   "idDist": 0.564,
+   "idRank": 4,
+   "hair": 0
   },
   "28de559608": {
-   "cos": 0.864,
+   "cos": 0.859,
    "rank": 3,
-   "idDist": 0.593,
-   "idRank": 1
+   "idDist": 0.597,
+   "idRank": 2,
+   "hair": 0.62
   },
   "aac3dc88c5": {
-   "cos": 0.276,
-   "rank": 24,
-   "idDist": 0.608,
-   "idRank": 2
+   "cos": 0.265,
+   "rank": 25,
+   "idDist": 0.61,
+   "idRank": 1,
+   "hair": 0
   },
   "3c7149ebf4": {
-   "cos": 0.75,
+   "cos": 0.675,
    "rank": 1,
-   "idDist": 0.604,
-   "idRank": 2
+   "idDist": 0.617,
+   "idRank": 2,
+   "hair": 0.759
   },
   "ac56d5a36b": {
-   "cos": 0.822,
+   "cos": 0.82,
    "rank": 1,
-   "idDist": 0.803,
-   "idRank": 93
+   "idDist": 0.825,
+   "idRank": 99,
+   "hair": 0.75
   },
   "b23a56519d": {
-   "cos": 0.8,
+   "cos": 0.819,
    "rank": 1,
-   "idDist": 0.732,
-   "idRank": 24
+   "idDist": 0.718,
+   "idRank": 20,
+   "hair": 0.643
   },
   "579e859c5c": {
-   "cos": 0.765,
-   "rank": 4,
-   "idDist": 0.7,
-   "idRank": 15
+   "cos": 0.686,
+   "rank": 14,
+   "idDist": 0.696,
+   "idRank": 13,
+   "hair": 0.647
   },
   "d539a71591": {
-   "cos": 0.671,
+   "cos": 0.72,
    "rank": 1,
-   "idDist": 0.786,
-   "idRank": 68
+   "idDist": 0.787,
+   "idRank": 76,
+   "hair": 0.574
   },
   "0e2c354d22": {
-   "cos": 0.848,
+   "cos": 0.845,
    "rank": 2,
-   "idDist": 0.656,
-   "idRank": 11
+   "idDist": 0.679,
+   "idRank": 15,
+   "hair": 0.395
   },
   "aeb925936b": {
-   "cos": 0.822,
+   "cos": 0.853,
    "rank": 1,
-   "idDist": 0.636,
-   "idRank": 3
+   "idDist": 0.63,
+   "idRank": 1,
+   "hair": 0.716
   }
  }
 }
